@@ -45,6 +45,7 @@ import { ulid } from './ids';
 export type AuditEventType =
   // Sales and money
   | 'sale.created'
+  | 'sale.items_added'
   | 'sale.voided'
   | 'sale.refunded'
   | 'sale.discount_applied'

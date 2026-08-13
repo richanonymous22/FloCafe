@@ -30,14 +30,27 @@
  * That mapping is deliberate and stays for now — renaming the tables is a
  * migration with no behavioural payoff. See docs/PHASE_2A_SALE_FLOW.md.
  *
- * ## Phase 2A scope
+ * ## Scope
  *
- * `createSale` only. It is a behaviour-preserving extraction of
- * `POST /api/orders`, verified against the contract in
- * docs/PHASE_2A_SALE_FLOW.md § 8. Deliberately NOT implemented yet:
- * addItem, removeItem, updateItem, holdSale, resumeSale, finalizeSale,
- * cancelSale, voidSale. Each arrives when a real caller needs it, so the
- * service never grows speculative API.
+ * `createSale` (Phase 2A) and `addSaleItems` (Milestone 2). Both were
+ * behaviour-preserving extractions verified against
+ * docs/PHASE_2A_SALE_FLOW.md § 8 and docs/MILESTONE_2_CORE_ENGINE.md.
+ * Deliberately NOT implemented yet: removeItem, updateItem, holdSale,
+ * resumeSale, finalizeSale, cancelSale, voidSale. Each arrives when a real
+ * caller needs it, so the service never grows speculative API.
+ *
+ * ## Shared line engine
+ *
+ * `createSale` and `addSaleItems` used to carry two near-identical copies of
+ * the per-item loop (product lookup, stock guard, price/quantity validation,
+ * addon subtotal, tax calculation, insert, addon insert, stock decrement).
+ * Both now call the internal `persistSaleLine()` for that work — one business
+ * rule implementation, two callers. What differs between them is how the
+ * results are aggregated: `createSale` sums the per-line results as it goes
+ * (there is nothing else on the sale yet); `addSaleItems` re-derives the
+ * sale's totals from every *active* line in the database afterwards, because
+ * it may be adding items to a sale that already has some — see "BUG #3 FIX"
+ * in the extraction notes.
  */
 
 import {
@@ -54,8 +67,10 @@ import {
   calculateConfiguredChargeTaxes,
   calculateItemTax,
   combineItemAndChargeTaxes,
+  getActiveCountryPack,
   getConfiguredChargeTaxCategories,
 } from '../services/tax';
+import { applyPayableRounding } from '../services/tax-engine';
 import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
@@ -184,9 +199,10 @@ export class SaleError extends Error {
  * Enforce a group's min/max selection and multi-quantity rules for one line's
  * add-ons.
  *
- * Moved verbatim out of routes/orders.ts so the rule lives with the domain and
- * both the migrated create path and the not-yet-migrated add-items path share
- * one copy. routes/orders.ts imports it back.
+ * Moved verbatim out of routes/orders.ts so the rule lives with the domain
+ * instead of the route. Exported because routes/orders.ts still imports it
+ * back for the item-cancel/restore paths that have not moved into
+ * SaleService yet.
  */
 export function validateLineAddonGroupLimits(
   db: ReturnType<typeof getDatabase>,
@@ -301,6 +317,125 @@ function readTenantContext(db: ReturnType<typeof getDatabase>): TenantContext {
   };
 }
 
+// ─── Shared sale-line engine ────────────────────────────────────────────────
+
+interface PersistLineContext {
+  db: ReturnType<typeof getDatabase>;
+  /** `number`/`bigint` from a freshly inserted row's `lastInsertRowid`, or the `string` route param for an existing sale. */
+  orderId: number | bigint | string;
+  tenantInfo: TenantContext;
+  customer: any;
+}
+
+/** What `persistSaleLine` reports back, so both callers can aggregate however they need to. */
+interface PersistedSaleLine {
+  itemId: number | bigint;
+  uid: string;
+  /** Pre-tax line subtotal, after addons and the (currently always-zero) line discount. */
+  subtotal: number;
+  taxAmount: number;
+  taxType: string;
+  taxBreakdown: unknown;
+  taxSnapshotJson: string | null;
+  total: number;
+}
+
+/**
+ * Validate, price, tax and persist ONE sale line: look up the product, guard
+ * stock, resolve price/tax from the catalogue (never the request), insert the
+ * row and its addons, and decrement stock. This is the operation that used to
+ * be duplicated between `createSale` and `POST /orders/:id/items` — see the
+ * module docstring.
+ *
+ * Must run inside the caller's transaction. Throws `SaleError` (no
+ * `statusCode`, matching the inherited 500 mapping — see
+ * docs/PHASE_2A_SALE_FLOW.md § 7 B8) on an invalid line.
+ *
+ * The insert statement is prepared fresh per call rather than once per loop,
+ * trading a little repeated `db.prepare()` for a self-contained, easily
+ * testable function — an order/sale has at most a few dozen lines, not a hot
+ * path where that matters.
+ */
+function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): PersistedSaleLine {
+  const { db, orderId, tenantInfo, customer } = ctx;
+
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(line.product_id) as any;
+  if (!product) {
+    throw new SaleError(`Product ${line.product_id} not found`);
+  }
+
+  if (product.track_inventory && product.stock_quantity < line.quantity) {
+    throw new SaleError(`Insufficient stock for ${product.name}`);
+  }
+
+  // Price always comes from the catalogue, never from the request.
+  const unitPrice = parseFloat(product.price);
+  const quantity = line.quantity;
+  // line.discount_amount is intentionally ignored — discounts are only
+  // applied through the dedicated discount endpoints, which enforce
+  // discount_mode/max_percentage/max_amount/approval (vuln-0002).
+  const itemDiscount = 0;
+
+  if (!quantity || quantity <= 0 || !Number.isFinite(quantity)) {
+    throw new SaleError(`Invalid quantity for ${product.name}: must be a positive number`);
+  }
+  if (unitPrice < 0 || !Number.isFinite(unitPrice)) {
+    throw new SaleError(`Invalid price for ${product.name}: must be a non-negative number`);
+  }
+
+  let itemSubtotal = unitPrice * quantity;
+  if (line.addons && Array.isArray(line.addons)) {
+    for (const addon of line.addons) {
+      if (!addon) continue;
+      if (addon.quantity !== undefined) {
+        if (typeof addon.quantity !== 'number' || !Number.isInteger(addon.quantity) || addon.quantity <= 0) {
+          throw new SaleError(`Invalid add-on quantity for ${addon.name || 'addon'}: must be a positive integer`);
+        }
+      }
+      const addonQty = addon.quantity || 1;
+      itemSubtotal += (addon.price || 0) * addonQty * quantity;
+    }
+  }
+  itemSubtotal = Math.max(0, itemSubtotal - itemDiscount);
+
+  const taxResult = calculateItemTax(tenantInfo, product, itemSubtotal, customer);
+  const itemTaxSnapshotJson = taxResult.tax_snapshot ? JSON.stringify(taxResult.tax_snapshot) : null;
+  const itemTotal = itemSubtotal + (taxResult.tax_type === 'inclusive' ? 0 : taxResult.tax_amount);
+
+  const lineUid = ulid();
+  const itemCreatedAt = now();
+  const insertItemResult = db.prepare(`
+    INSERT INTO order_items (order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
+      subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total, variant_selection,
+      modifier_selection, special_instructions, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+  `).run(
+    orderId, lineUid, product.id, product.name, product.sku, unitPrice, quantity,
+    itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
+    taxResult.tax_type, itemDiscount, itemTotal,
+    JSON.stringify(line.variant_selection || null),
+    JSON.stringify(line.modifier_selection || null),
+    line.special_instructions || null, itemCreatedAt, itemCreatedAt,
+  );
+  insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
+
+  if (product.track_inventory) {
+    db.prepare('UPDATE products SET stock_quantity = stock_quantity - ?, updated_at = ? WHERE id = ?')
+      .run(quantity, now(), product.id);
+  }
+
+  return {
+    itemId: insertItemResult.lastInsertRowid,
+    uid: lineUid,
+    subtotal: itemSubtotal,
+    taxAmount: taxResult.tax_amount,
+    taxType: taxResult.tax_type,
+    taxBreakdown: taxResult.tax_breakdown,
+    taxSnapshotJson: itemTaxSnapshotJson,
+    total: itemTotal,
+  };
+}
+
 // ─── createSale ───────────────────────────────────────────────────────────────
 
 /**
@@ -398,84 +533,21 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       ? db.prepare('SELECT * FROM customers WHERE id = ?').get(input.customerId) as any
       : null;
 
-    const insertItem = db.prepare(`
-      INSERT INTO order_items (order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
-        subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total, variant_selection,
-        modifier_selection, special_instructions, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `);
-
+    // Shared line engine (see the module docstring): the per-item work is
+    // identical to addSaleItems below. Only the aggregation differs — a new
+    // sale has nothing to aggregate but the lines just inserted, so summing
+    // as we go is correct and matches the original inline behaviour exactly.
     for (const line of input.lines) {
-      const product = db.prepare('SELECT * FROM products WHERE id = ?').get(line.product_id) as any;
-      if (!product) {
-        // No statusCode: the inherited route answered 500 here. See B8.
-        throw new SaleError(`Product ${line.product_id} not found`);
+      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer }, line);
+      totalTax += persisted.taxAmount;
+      if (persisted.taxType !== 'inclusive') {
+        exclusiveTax += persisted.taxAmount;
       }
-
-      if (product.track_inventory && product.stock_quantity < line.quantity) {
-        throw new SaleError(`Insufficient stock for ${product.name}`);
+      if (persisted.taxBreakdown) {
+        allTaxBreakdowns.push(persisted.taxBreakdown);
       }
-
-      // Price always comes from the catalogue, never from the request.
-      const unitPrice = parseFloat(product.price);
-      const quantity = line.quantity;
-      // line.discount_amount is intentionally ignored — discounts are only
-      // applied through the dedicated discount endpoints, which enforce
-      // discount_mode/max_percentage/max_amount/approval (vuln-0002).
-      const itemDiscount = 0;
-
-      if (!quantity || quantity <= 0 || !Number.isFinite(quantity)) {
-        throw new SaleError(`Invalid quantity for ${product.name}: must be a positive number`);
-      }
-      if (unitPrice < 0 || !Number.isFinite(unitPrice)) {
-        throw new SaleError(`Invalid price for ${product.name}: must be a non-negative number`);
-      }
-
-      let itemSubtotal = unitPrice * quantity;
-      if (line.addons && Array.isArray(line.addons)) {
-        for (const addon of line.addons) {
-          if (!addon) continue;
-          if (addon.quantity !== undefined) {
-            if (typeof addon.quantity !== 'number' || !Number.isInteger(addon.quantity) || addon.quantity <= 0) {
-              throw new SaleError(`Invalid add-on quantity for ${addon.name || 'addon'}: must be a positive integer`);
-            }
-          }
-          const addonQty = addon.quantity || 1;
-          itemSubtotal += (addon.price || 0) * addonQty * quantity;
-        }
-      }
-      itemSubtotal = Math.max(0, itemSubtotal - itemDiscount);
-
-      const taxResult = calculateItemTax(tenantInfo, product, itemSubtotal, customer);
-
-      totalTax += taxResult.tax_amount;
-      if (taxResult.tax_type !== 'inclusive') {
-        exclusiveTax += taxResult.tax_amount;
-      }
-      if (taxResult.tax_breakdown) {
-        allTaxBreakdowns.push(taxResult.tax_breakdown);
-      }
-      const itemTaxSnapshotJson = taxResult.tax_snapshot ? JSON.stringify(taxResult.tax_snapshot) : null;
-      allTaxSnapshots.push(itemTaxSnapshotJson);
-
-      const itemTotal = itemSubtotal + (taxResult.tax_type === 'inclusive' ? 0 : taxResult.tax_amount);
-      subtotal += itemSubtotal;
-
-      const itemCreatedAt = now();
-      const insertItemResult = insertItem.run(
-        orderId, ulid(), product.id, product.name, product.sku, unitPrice, quantity,
-        itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
-        taxResult.tax_type, itemDiscount, itemTotal,
-        JSON.stringify(line.variant_selection || null),
-        JSON.stringify(line.modifier_selection || null),
-        line.special_instructions || null, itemCreatedAt, itemCreatedAt,
-      );
-      insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
-
-      if (product.track_inventory) {
-        db.prepare('UPDATE products SET stock_quantity = stock_quantity - ?, updated_at = ? WHERE id = ?')
-          .run(quantity, now(), product.id);
-      }
+      allTaxSnapshots.push(persisted.taxSnapshotJson);
+      subtotal += persisted.subtotal;
     }
 
     const chargeTaxes = calculateConfiguredChargeTaxes(tenantInfo, chargeContext, customer);
@@ -528,6 +600,251 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
         total,
         table_id: input.tableId || null,
         customer_id: input.customerId || null,
+      },
+    });
+
+    if (idempotency) {
+      // Stored in the response shape the route replays verbatim.
+      const response = { order: Object.assign({}, sale, { items: lines }) };
+      db.prepare('INSERT INTO order_idempotency (user_id, idempotency_key, request_hash, response_json, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(idempotency.userId, idempotency.key, idempotency.requestHash, JSON.stringify(response), now());
+    }
+
+    return { sale, lines, idempotentReplay: false };
+  });
+}
+
+// ─── addSaleItems ───────────────────────────────────────────────────────────
+
+export interface AddSaleItemsInput {
+  saleId: number | string;
+  lines: SaleLineInput[];
+  /**
+   * Present (even with `value: null`) only when the caller wants to update
+   * the sale-level notes; absent leaves them untouched. A plain optional
+   * string could not distinguish "clear the notes" from "don't mention
+   * notes at all", which the inherited route did via `!== undefined` on the
+   * raw request body — this wrapper reproduces that distinction in a typed
+   * input.
+   */
+  specialInstructions?: { value: string | null };
+  /** For audit attribution only — see the note above `recordAuditEvent` below. Not used for authorization. */
+  actorUserId?: string | null;
+  idempotency?: SaleIdempotency | null;
+}
+
+export interface AddSaleItemsResult {
+  sale: SaleRecord;
+  /** Every current line on the sale, not just the ones just added — matches the response shape the route has always returned. */
+  lines: SaleLineRecord[];
+  idempotentReplay: boolean;
+}
+
+/**
+ * Shape/range checks that do not need the database transaction. Mirrors
+ * `validateCreateSaleInput`'s structure and the inherited route's check order:
+ * items array, then per-line notes/addons, then sale-level notes.
+ */
+function validateAddSaleItemsInput(db: ReturnType<typeof getDatabase>, input: AddSaleItemsInput): void {
+  if (!input.lines || !Array.isArray(input.lines) || input.lines.length === 0) {
+    throw new SaleError('At least one item is required', 400);
+  }
+  try {
+    for (const line of input.lines) {
+      validateItemNotes(db, line.special_instructions);
+      validateLineAddonGroupLimits(db, line.addons);
+    }
+    if (input.specialInstructions !== undefined) {
+      validateOrderNotes(db, input.specialInstructions.value);
+    }
+  } catch (err) {
+    throw new SaleError((err as Error).message, 400);
+  }
+}
+
+/**
+ * Add lines to an existing, still-open sale.
+ *
+ * Behaviour is intentionally identical to the inherited
+ * `POST /api/orders/:id/items` handler. It shares `persistSaleLine` with
+ * `createSale` for the per-line work, but aggregates differently: totals are
+ * re-derived from every ACTIVE line already on the sale (not just the ones
+ * being added), because the sale may already have items and some may have
+ * been cancelled — the inherited "BUG #3 FIX". An existing order-level
+ * discount is preserved and rescaled if it was a percentage ("BUG #12 FIX"),
+ * and an existing unpaid bill is re-synced to the new totals, since adding
+ * items alone would otherwise leave it stale ("BUG #4 FIX").
+ *
+ * Two guard clauses the inherited route ran before acquiring the database
+ * lock — the `bills.split_group_id` check and the waiter-ownership check —
+ * are NOT reproduced here. They stay in the route: the split check is a
+ * simple, self-contained pre-check with no shared logic to consolidate, and
+ * the waiter-ownership check is an authorization decision tied to the HTTP
+ * caller's role, which belongs with `requireRole` at the HTTP layer rather
+ * than in a service with no Express dependency. Both run in the same relative
+ * order as before, so no response code changes for any input.
+ *
+ * `actorUserId` is accepted for audit attribution only (WHO added these
+ * items) — it plays no part in any business or authorization decision here.
+ */
+export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
+  const db = getDatabase();
+  validateAddSaleItemsInput(db, input);
+
+  const idempotency = input.idempotency ?? null;
+  // Read outside the transaction, matching the inherited route exactly —
+  // unlike createSale, which reads tenant context inside its transaction.
+  const tenantInfo = readTenantContext(db);
+
+  return withTxn(() => {
+    // Re-fetch and re-validate under the transaction lock: another request
+    // (e.g. a cashier completing/cancelling the sale) can race the checks
+    // the route already ran before this lock was acquired (#175).
+    const currentOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(input.saleId) as any;
+    if (!currentOrder) {
+      throw new SaleError('Order not found', 404);
+    }
+
+    if (idempotency) {
+      const prior = db.prepare(`
+        SELECT request_hash, response_json
+        FROM order_idempotency
+        WHERE (user_id = ? OR user_id = 'legacy') AND idempotency_key = ?
+        ORDER BY CASE WHEN user_id = ? THEN 0 ELSE 1 END
+        LIMIT 1
+      `).get(idempotency.userId, idempotency.key, idempotency.userId) as
+        { request_hash: string; response_json: string } | undefined;
+      if (prior) {
+        if (prior.request_hash !== idempotency.requestHash) {
+          throw new SaleError('Idempotency-Key was already used for a different order request', 409);
+        }
+        try {
+          const response = JSON.parse(prior.response_json);
+          return {
+            sale: response.order as SaleRecord,
+            lines: (response.order?.items || []) as SaleLineRecord[],
+            idempotentReplay: true,
+          };
+        } catch {
+          throw new SaleError('Stored order response is invalid', 500);
+        }
+      }
+    }
+
+    if (['completed', 'cancelled'].includes(currentOrder.status)) {
+      throw new SaleError('Cannot add items to a completed or cancelled order', 400);
+    }
+
+    const customer = currentOrder.customer_id
+      ? db.prepare('SELECT * FROM customers WHERE id = ?').get(currentOrder.customer_id) as any
+      : null;
+
+    // Shared line engine — see the module docstring and persistSaleLine above.
+    for (const line of input.lines) {
+      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer }, line);
+    }
+
+    // Re-derive totals from every ACTIVE line on the sale, not just the ones
+    // just inserted — the sale may already have items, and some may have
+    // been cancelled since. (Inherited as "BUG #3 FIX".)
+    const activeItems = db.prepare("SELECT * FROM order_items WHERE order_id = ? AND status != 'cancelled'").all(input.saleId) as any[];
+    let subtotal = 0;
+    let totalTax = 0;
+    let exclusiveTax = 0;
+    const allTaxBreakdowns: any[] = [];
+    const allTaxSnapshots: (string | null)[] = [];
+    for (const item of activeItems) {
+      subtotal += item.subtotal;
+      totalTax += item.tax_amount;
+      if (item.tax_type !== 'inclusive') {
+        exclusiveTax += item.tax_amount;
+      }
+      if (item.tax_breakdown) {
+        try {
+          const breakdown = JSON.parse(item.tax_breakdown);
+          if (Array.isArray(breakdown)) allTaxBreakdowns.push(breakdown);
+        } catch { /* malformed legacy breakdown — skip, matching inherited behaviour */ }
+      }
+      allTaxSnapshots.push(item.tax_snapshot || null);
+    }
+
+    // Preserve an existing order-level discount, rescaling a percentage
+    // discount to the new subtotal. (Inherited as "BUG #12 FIX".)
+    const existingDiscountAmount = currentOrder.discount_amount || 0;
+    let newDiscountAmount = existingDiscountAmount;
+    if (existingDiscountAmount > 0 && currentOrder.subtotal > 0) {
+      if (currentOrder.discount_type === 'percentage') {
+        const pct = currentOrder.discount_value || 0;
+        newDiscountAmount = Math.round(subtotal * pct / 100 * 100) / 100;
+      }
+      // amount type: keep the same value
+    }
+
+    const discountedSubtotal = Math.max(0, subtotal - newDiscountAmount);
+    let newTaxAmount = totalTax;
+    let newExclusiveTax = exclusiveTax;
+    let taxRatio = 1;
+    if (newDiscountAmount > 0 && subtotal > 0) {
+      taxRatio = discountedSubtotal / subtotal;
+      newTaxAmount = Math.round(totalTax * taxRatio * 100) / 100;
+      newExclusiveTax = Math.round(exclusiveTax * taxRatio * 100) / 100;
+    }
+
+    const chargeTaxes = calculateConfiguredChargeTaxes(tenantInfo, {
+      ...currentOrder,
+      service_charge: 0,
+    }, customer);
+    const taxRollup = combineItemAndChargeTaxes({
+      itemTaxAmount: newTaxAmount,
+      itemExclusiveTaxAmount: newExclusiveTax,
+      itemBreakdowns: allTaxBreakdowns,
+      itemSnapshots: allTaxSnapshots,
+      itemTaxRatio: taxRatio,
+      chargeTaxes,
+    });
+    const preRoundTotal = discountedSubtotal + taxRollup.exclusiveTaxAmount
+      + (currentOrder.delivery_charge || 0) + (currentOrder.packaging_charge || 0);
+    const total = Number(preRoundTotal.toFixed(2));
+    const roundOff = 0;
+
+    if (input.specialInstructions !== undefined) {
+      db.prepare(`
+        UPDATE orders SET subtotal = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, total = ?, round_off = ?, special_instructions = ?, updated_at = ? WHERE id = ?
+      `).run(subtotal, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, total, roundOff, input.specialInstructions.value || null, now(), input.saleId);
+    } else {
+      db.prepare(`
+        UPDATE orders SET subtotal = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, total = ?, round_off = ?, updated_at = ? WHERE id = ?
+      `).run(subtotal, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, total, roundOff, now(), input.saleId);
+    }
+
+    // Sync the bill if one already exists and is unpaid — add-items alone
+    // doesn't otherwise touch it. (Inherited as "BUG #4 FIX".)
+    const existingBill = db.prepare("SELECT * FROM bills WHERE order_id = ? AND payment_status != 'paid'").get(input.saleId) as any;
+    if (existingBill) {
+      const pack = getActiveCountryPack(tenantInfo.country);
+      const { total: billTotal, adjustment: billRoundOff } = applyPayableRounding(total, pack);
+      const newBillBalance = Math.max(0, billTotal - (existingBill.paid_amount || 0));
+      db.prepare(`UPDATE bills SET total = ?, balance = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, round_off = ?, updated_at = ? WHERE id = ?`)
+        .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
+    }
+
+    const sale = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(input.saleId)) as SaleRecord;
+    const lines = attachEffectiveAddons(
+      db,
+      db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(input.saleId).map(parseItemJson) as any[],
+    ) as SaleLineRecord[];
+
+    recordAuditEvent({
+      type: 'sale.items_added',
+      actor: { userId: input.actorUserId ?? null },
+      entity: { type: 'sale', id: sale.uid || String(input.saleId) },
+      summary: `${input.lines.length} line(s) added to sale ${sale.order_number}`,
+      metadata: {
+        order_id: Number(input.saleId),
+        order_number: sale.order_number,
+        added_line_count: input.lines.length,
+        total_line_count: lines.length,
+        total,
       },
     });
 

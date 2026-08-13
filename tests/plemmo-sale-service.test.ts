@@ -1,10 +1,15 @@
 /**
  * Test: Plemmo Core SaleService (main/core/sale.ts)
  *
- * Phase 2A is a behaviour-preserving extraction, so these tests are written
- * against the contract in docs/PHASE_2A_SALE_FLOW.md § 8 — the ten invariants
- * the refactor must not break — plus the two things the service adds (a ULID
- * on the sale, and a `sale.created` audit event inside the same transaction).
+ * Sections 1-10 cover `createSale` (Phase 2A) — a behaviour-preserving
+ * extraction written against docs/PHASE_2A_SALE_FLOW.md § 8, the ten
+ * invariants the refactor must not break.
+ *
+ * Sections 11+ cover `addSaleItems` (Milestone 2), which shares its per-line
+ * work with `createSale` via the internal `persistSaleLine` — the four
+ * inherited "BUG #N FIX" behaviours (cancelled-line exclusion, discount
+ * rescaling, race-safe re-fetch, bill re-sync) are each covered explicitly,
+ * because they are exactly the kind of behaviour a refactor silently drops.
  *
  * Usage: node tests/run-electron-node-test.cjs tests/plemmo-sale-service.test.ts
  */
@@ -22,10 +27,10 @@ Module._load = function (request: string, parent: unknown, isMain: boolean) {
 };
 
 const { initTestDb, getResults, closeDatabase, assert, assertEqual } = require('./helpers/test-setup');
-const { createSale, SaleError, SALE_CHANNELS } = require('../main/core/sale');
+const { createSale, addSaleItems, SaleError, SALE_CHANNELS } = require('../main/core/sale');
 const { isUlid } = require('../main/core/ids');
 const { listAuditEventsForEntity, resetAuditPlaceCache } = require('../main/core/audit');
-const { now } = require('../main/db');
+const { now, getDatabase } = require('../main/db');
 
 const USER_ID = 'user-cashier-1';
 
@@ -229,8 +234,174 @@ async function main() {
   const otherUser = createSale(baseInput({ idempotency: { ...idem, userId: 'user-other' } }));
   assertEqual(otherUser.idempotentReplay, false, 'idempotency records are scoped per user');
 
-  // ── 10. Service boundary ─────────────────────────────────────────────────
-  console.log('\n10. Service boundary');
+  // ── 11. addSaleItems ─────────────────────────────────────────────────────
+  console.log('\n11. addSaleItems: shared line engine, second caller');
+  const db2 = getDatabase();
+
+  const opened = createSale(baseInput({ lines: [{ product_id: 'prod-coffee', quantity: 1 }] }));
+  assertEqual(opened.sale.subtotal, 2.5, 'the opened sale starts with one line');
+
+  const added = addSaleItems({
+    saleId: opened.sale.id,
+    lines: [{ product_id: 'prod-cake', quantity: 1 }],
+    actorUserId: USER_ID,
+  });
+  assertEqual(added.idempotentReplay, false, 'a fresh add is not a replay');
+  assertEqual(added.lines.length, 2, 'the response includes every line on the sale, not just the new one');
+  assertEqual(added.sale.subtotal, 6.5, '£2.50 (existing) + £4.00 (added) = £6.50');
+  const addedLine = added.lines.find((l: any) => l.product_id === 'prod-cake');
+  assert(!!addedLine, 'the new line is present');
+  assert(isUlid(addedLine.uid), 'the newly added line receives a ULID uid — the shared engine wires it in for both callers');
+  assert(isUlid(opened.sale.uid), 'the sale itself still carries its uid from creation');
+
+  // Multiple items in one call.
+  const multiAdd = addSaleItems({
+    saleId: opened.sale.id,
+    lines: [
+      { product_id: 'prod-coffee', quantity: 1 },
+      { product_id: 'prod-cake', quantity: 2 },
+    ],
+  });
+  assertEqual(multiAdd.lines.length, 4, 'two more lines bring the total to four');
+
+  // An existing sale with items already on it — added-to sale keeps working.
+  const withStock = createSale(baseInput({ lines: [{ product_id: 'prod-stocked', quantity: 2 }] }));
+  const stockBeforeAdd = (db2.prepare("SELECT stock_quantity AS q FROM products WHERE id = 'prod-stocked'").get() as any).q;
+  addSaleItems({ saleId: withStock.sale.id, lines: [{ product_id: 'prod-stocked', quantity: 3 }] });
+  const stockAfterAdd = (db2.prepare("SELECT stock_quantity AS q FROM products WHERE id = 'prod-stocked'").get() as any).q;
+  assertEqual(stockAfterAdd, stockBeforeAdd - 3, 'stock is decremented for items added after creation too — the shared engine, not a second copy');
+
+  // ── 12. addSaleItems: rejection cases ────────────────────────────────────
+  console.log('\n12. addSaleItems: rejection cases');
+  const rejectsAdd = (input: any, expectedStatus: number | undefined, label: string) => {
+    let err: any = null;
+    try { addSaleItems(input); } catch (e) { err = e; }
+    assert(!!err, `${label} throws`);
+    assertEqual(err.statusCode, expectedStatus, `${label} carries the expected status`);
+    return err;
+  };
+  rejectsAdd({ saleId: opened.sale.id, lines: [] }, 400, 'an empty basket');
+  rejectsAdd({ saleId: opened.sale.id, lines: null }, 400, 'a missing basket');
+  rejectsAdd({ saleId: 999999, lines: [{ product_id: 'prod-coffee', quantity: 1 }] }, 404, 'a nonexistent sale');
+  rejectsAdd({ saleId: opened.sale.id, lines: [{ product_id: 'nope', quantity: 1 }] }, undefined, 'an unknown product (matches B8: no statusCode)');
+
+  const completedSale = createSale(baseInput());
+  db2.prepare("UPDATE orders SET status = 'completed' WHERE id = ?").run(completedSale.sale.id);
+  rejectsAdd({ saleId: completedSale.sale.id, lines: [{ product_id: 'prod-coffee', quantity: 1 }] }, 400,
+    'adding items to a completed sale');
+  db2.prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?").run(completedSale.sale.id);
+  rejectsAdd({ saleId: completedSale.sale.id, lines: [{ product_id: 'prod-coffee', quantity: 1 }] }, 400,
+    'adding items to a cancelled sale');
+
+  // ── 13. addSaleItems: rollback ───────────────────────────────────────────
+  console.log('\n13. addSaleItems: a failed add leaves nothing behind');
+  const rollbackTarget = createSale(baseInput({ lines: [{ product_id: 'prod-coffee', quantity: 1 }] }));
+  const itemsBefore = (db2.prepare('SELECT COUNT(*) AS c FROM order_items WHERE order_id = ?').get(rollbackTarget.sale.id) as any).c;
+  const subtotalBefore = (db2.prepare('SELECT subtotal AS s FROM orders WHERE id = ?').get(rollbackTarget.sale.id) as any).s;
+  const auditBefore = (db2.prepare('SELECT COUNT(*) AS c FROM audit_events').get() as any).c;
+  let addFailed = false;
+  try {
+    addSaleItems({
+      saleId: rollbackTarget.sale.id,
+      lines: [
+        { product_id: 'prod-cake', quantity: 1 },
+        { product_id: 'does-not-exist', quantity: 1 },
+      ],
+    });
+  } catch { addFailed = true; }
+  assert(addFailed, 'the add threw');
+  assertEqual((db2.prepare('SELECT COUNT(*) AS c FROM order_items WHERE order_id = ?').get(rollbackTarget.sale.id) as any).c, itemsBefore,
+    'no line survives the rollback, including the one that inserted successfully before the failure');
+  assertEqual((db2.prepare('SELECT subtotal AS s FROM orders WHERE id = ?').get(rollbackTarget.sale.id) as any).s, subtotalBefore,
+    'the sale subtotal is unchanged');
+  assertEqual((db2.prepare('SELECT COUNT(*) AS c FROM audit_events').get() as any).c, auditBefore,
+    'no sale.items_added audit event survives the rollback');
+
+  // ── 14. addSaleItems: discount preservation and bill re-sync ────────────
+  console.log('\n14. addSaleItems: existing discount and bill stay consistent');
+  const discounted = createSale(baseInput({ lines: [{ product_id: 'prod-cake', quantity: 1 }] })); // £4.00
+  db2.prepare(`UPDATE orders SET discount_type = 'percentage', discount_value = 10, discount_amount = 0.4 WHERE id = ?`)
+    .run(discounted.sale.id);
+  const billNumber = `BILL-${discounted.sale.id}`;
+  db2.prepare(`INSERT INTO bills (bill_number, order_id, subtotal, total, balance, payment_status, created_at, updated_at)
+               VALUES (?, ?, 4.00, 3.60, 3.60, 'unpaid', ?, ?)`).run(billNumber, discounted.sale.id, now(), now());
+
+  const discountedAdd = addSaleItems({ saleId: discounted.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }] }); // +£4.00
+  // subtotal 8.00, discount rescaled to 10% = 0.80, discounted subtotal 7.20
+  assertEqual(discountedAdd.sale.subtotal, 8, 'subtotal reflects both lines');
+  assertEqual(discountedAdd.sale.discount_amount, 0.8, 'a percentage discount is rescaled to the new subtotal (BUG #12 FIX)');
+  assertEqual(discountedAdd.sale.total, 7.2, 'the sale total reflects the rescaled discount');
+  const syncedBill = db2.prepare('SELECT * FROM bills WHERE order_id = ?').get(discounted.sale.id) as any;
+  assertEqual(syncedBill.total, 7.2, 'an existing unpaid bill is re-synced to the new total (BUG #4 FIX)');
+  assertEqual(syncedBill.balance, 7.2, 'the bill balance is re-synced too');
+
+  // ── 15. addSaleItems: cancelled items excluded from totals ──────────────
+  console.log('\n15. addSaleItems: cancelled lines are excluded from recalculated totals (BUG #3 FIX)');
+  const withCancelled = createSale(baseInput({
+    lines: [
+      { product_id: 'prod-coffee', quantity: 1 }, // £2.50
+      { product_id: 'prod-cake', quantity: 1 },   // £4.00
+    ],
+  }));
+  db2.prepare(`UPDATE order_items SET status = 'cancelled' WHERE order_id = ? AND product_id = 'prod-cake'`)
+    .run(withCancelled.sale.id);
+  const afterCancelAdd = addSaleItems({ saleId: withCancelled.sale.id, lines: [{ product_id: 'prod-coffee', quantity: 1 }] });
+  // Active: coffee(2.50) + coffee(2.50) = 5.00. The cancelled cake line must not count.
+  assertEqual(afterCancelAdd.sale.subtotal, 5, 'the cancelled line is excluded from the recalculated subtotal');
+
+  // ── 16. addSaleItems: audit ──────────────────────────────────────────────
+  console.log('\n16. addSaleItems: audit');
+  const auditedSale = createSale(baseInput({ lines: [{ product_id: 'prod-coffee', quantity: 1 }] }));
+  addSaleItems({ saleId: auditedSale.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }] }, );
+  const addHistory = listAuditEventsForEntity('sale', auditedSale.sale.uid);
+  assertEqual(addHistory.length, 2, 'sale.created then sale.items_added are both recorded, in order');
+  assertEqual(addHistory[0].event_type, 'sale.created', 'the first event is creation');
+  assertEqual(addHistory[1].event_type, 'sale.items_added', 'the second event is the item addition');
+  assertEqual(addHistory[1].metadata.added_line_count, 1, 'the audit metadata records how many lines were added');
+  assertEqual(addHistory[1].metadata.total_line_count, 2, 'the audit metadata records the resulting total line count');
+
+  // ── 17. addSaleItems: idempotency ────────────────────────────────────────
+  console.log('\n17. addSaleItems: idempotency');
+  const idemSale = createSale(baseInput({ lines: [{ product_id: 'prod-coffee', quantity: 1 }] }));
+  const addIdem = { key: 'add-key-1', requestHash: 'add-hash-1', userId: USER_ID };
+  const firstAdd = addSaleItems({ saleId: idemSale.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }], idempotency: addIdem });
+  assertEqual(firstAdd.idempotentReplay, false, 'the first call adds');
+  const replayAdd = addSaleItems({ saleId: idemSale.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }], idempotency: addIdem });
+  assertEqual(replayAdd.idempotentReplay, true, 'the same key replays instead of adding again');
+  assertEqual(
+    (db2.prepare('SELECT COUNT(*) AS c FROM order_items WHERE order_id = ?').get(idemSale.sale.id) as any).c, 2,
+    'a replay does not insert a second cake line — one from creation, one from the single successful add',
+  );
+  const replayAddHistory = listAuditEventsForEntity('sale', idemSale.sale.uid);
+  assertEqual(replayAddHistory.length, 2, 'a replay does not record a second sale.items_added event');
+
+  // ── 18. addSaleItems: special instructions semantics ─────────────────────
+  console.log('\n18. addSaleItems: special_instructions presence vs absence');
+  const notesSale = createSale(baseInput({ lines: [{ product_id: 'prod-coffee', quantity: 1 }], specialInstructions: 'Extra hot' }));
+  const untouched = addSaleItems({ saleId: notesSale.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }] });
+  assertEqual(untouched.sale.special_instructions, 'Extra hot', 'omitting specialInstructions leaves existing notes untouched');
+  const cleared = addSaleItems({
+    saleId: notesSale.sale.id,
+    lines: [{ product_id: 'prod-coffee', quantity: 1 }],
+    specialInstructions: { value: null },
+  });
+  assertEqual(cleared.sale.special_instructions, null, 'explicitly passing { value: null } clears the notes');
+  const updated = addSaleItems({
+    saleId: notesSale.sale.id,
+    lines: [{ product_id: 'prod-coffee', quantity: 1 }],
+    specialInstructions: { value: 'No sugar' },
+  });
+  assertEqual(updated.sale.special_instructions, 'No sugar', 'explicitly passing a value updates the notes');
+
+  // ── 19. Retail compatibility: a counter sale can still be added to ──────
+  console.log('\n19. A counter sale (no table, no hospitality) supports add-items too');
+  const counterOpen = createSale(baseInput({ channel: 'takeaway' }));
+  assertEqual(counterOpen.sale.table_id, null, 'the sale has no table — the retail shape');
+  const counterAdded = addSaleItems({ saleId: counterOpen.sale.id, lines: [{ product_id: 'prod-cake', quantity: 1 }] });
+  assertEqual(counterAdded.lines.length, 2, 'items can be added to a tableless sale with no hospitality involvement');
+
+  // ── 20. Service boundary ─────────────────────────────────────────────────
+  console.log('\n20. Service boundary');
   const source = fs.readFileSync(path.join(__dirname, '..', 'main', 'core', 'sale.ts'), 'utf8');
   assert(!/from ['"]express['"]/.test(source), 'SaleService does not import Express');
   assert(!/\breq\.|\bres\.status\(/.test(source), 'SaleService never touches a Request or Response');

@@ -118,6 +118,8 @@
   "nav.pos": "Punto de Venta",
   "nav.retail": "Retail",
   "nav.inventory": "Inventario",
+  "nav.purchasing": "Compras",
+  "nav.suppliers": "Proveedores",
   "nav.products": "Productos",
   "nav.settings": "Configuración",
   "nav.support": "Soporte",

@@ -118,6 +118,8 @@
   "nav.pos": "PDV",
   "nav.retail": "Varejo",
   "nav.inventory": "Estoque",
+  "nav.purchasing": "Compras",
+  "nav.suppliers": "Fornecedores",
   "nav.products": "Produtos",
   "nav.settings": "Configurações",
   "nav.support": "Suporte",

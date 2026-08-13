@@ -119,6 +119,8 @@
   "nav.pos": "POS",
   "nav.retail": "Retail",
   "nav.inventory": "Inventory",
+  "nav.purchasing": "Purchasing",
+  "nav.suppliers": "Suppliers",
   "nav.products": "Products",
   "nav.settings": "Settings",
   "nav.support": "Support",

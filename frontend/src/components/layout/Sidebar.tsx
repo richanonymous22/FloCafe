@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Store,
+  Boxes,
   ClipboardList,
   Package,
   Grid3X3,
@@ -43,6 +44,7 @@ import {
 const ALL_NAV_ITEMS = [
   { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
   { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
+  { href: '/inventory', labelKey: 'nav.inventory', icon: Boxes, roles: ['owner', 'manager'], businessTypes: null },
   { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, roles: ['owner'], businessTypes: null },
   { href: '/orders', labelKey: 'nav.orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
   { href: '/products', labelKey: 'nav.products', icon: Package, roles: ['owner', 'manager'], businessTypes: null },

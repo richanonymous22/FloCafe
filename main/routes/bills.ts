@@ -153,22 +153,30 @@ router.get('/order/:orderId', requireRole('owner', 'manager', 'cashier'), (req: 
   }
 });
 
-router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
-  try {
-    const { order_id } = req.body;
+/**
+ * PLEMMO CORE — shared bill-generation engine (Milestone 3). Extracted
+ * verbatim from this route's handler so the new retail checkout path
+ * (main/modules/retail/checkout.ts) can generate a bill for an order
+ * without duplicating this logic or going through HTTP. Behavior-preserving:
+ * same queries, same re-sync-on-unpaid rule, same transaction shape — the
+ * only change is that the order lookup/404 now happens outside the
+ * transaction in both callers instead of inline in this one route.
+ *
+ * Throws a plain `Error` with `.statusCode` set (400/404) for the cases the
+ * route used to answer directly; the route below maps those the same way it
+ * always mapped its internal errors.
+ */
+export function generateBillForOrder(orderId: number | string): { bill: any; isNew: boolean } {
+  const db = getDatabase();
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+  if (!order) {
+    const error: any = new Error('Order not found');
+    error.statusCode = 404;
+    throw error;
+  }
 
-    if (!order_id) {
-      return res.status(400).json({ error: 'Order ID is required' });
-    }
-
-    const db = getDatabase();
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(order_id) as any;
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const result = withTxn(() => {
-      const existingBill = db.prepare('SELECT * FROM bills WHERE order_id = ?').get(order_id) as any;
+  return withTxn(() => {
+      const existingBill = db.prepare('SELECT * FROM bills WHERE order_id = ?').get(orderId) as any;
       if (existingBill) {
         if (existingBill.split_group_id) return { bill: parseRowJson(existingBill), isNew: false };
         // Re-sync bill totals from the order in case discount/adjustments were applied
@@ -241,18 +249,32 @@ router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Reque
           delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)
       `).run(
-        billNumber, order_id, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
+        billNumber, orderId, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
         discountAmount, order.discount_type, order.discount_value, order.discount_reason,
         deliveryCharge, packagingCharge, roundOff, total, 0, total, now(), now()
       );
 
       const newBill = parseRowJson(db.prepare('SELECT * FROM bills WHERE id = ?').get(runResult.lastInsertRowid));
       return { bill: newBill, isNew: true };
-    });
+  });
+}
+
+router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const { order_id } = req.body;
+
+    if (!order_id) {
+      return res.status(400).json({ error: 'Order ID is required' });
+    }
+
+    const result = generateBillForOrder(order_id);
 
     notifyOrderUpdated();
     res.status(result.isNew ? 201 : 200).json({ bill: result.bill });
   } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: error.message });
+    }
     console.error("[API] Internal error:", error);
     res.status(500).json({ error: "Internal server error" });
   }

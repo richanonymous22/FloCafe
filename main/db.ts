@@ -3917,6 +3917,81 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 72,
+    name: 'plemmo_product_variants',
+    up: () => {
+      // PLEMMO CORE — retail's Product → ProductVariant foundation
+      // (main/core/retail.ts). See docs/MILESTONE_3_VERTICALS_AND_RETAIL.md
+      // § Product/Variant schema for the full reasoning.
+      //
+      // A hospitality product (a menu item) never needs a row here — it is
+      // sold directly off `products`, exactly as before this migration. A
+      // retail product that needs distinct SKUs/barcodes/prices per option
+      // (size, colour, storage) gets one `product_variants` row per option.
+      // Nothing about `products` changes shape or meaning; this is purely
+      // additive, so every existing product keeps working unmodified.
+      //
+      // Brand-new table, same reasoning as payments/payment_events/refunds
+      // in v71: ULID directly as the primary key, no legacy integer key to
+      // preserve.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS product_variants (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          name TEXT,
+          sku TEXT,
+          barcode TEXT,
+          price REAL NOT NULL,
+          cost REAL DEFAULT 0,
+          tax_category_id TEXT,
+          is_default INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          sort_order INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
+
+        -- Safe to enforce as a hard, non-partial-only-for-blanks unique
+        -- constraint: this table starts empty, so there is no legacy data to
+        -- conflict with. Still partial on non-blank values, because a
+        -- variant with no SKU/barcode yet (drafted before the merchant has
+        -- printed labels) must not collide with every other blank one.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_sku
+          ON product_variants(sku) WHERE sku IS NOT NULL AND sku != '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_barcode
+          ON product_variants(barcode) WHERE barcode IS NOT NULL AND barcode != '';
+      `);
+
+      // order_items gains two nullable, additive columns:
+      //   product_variant_id — which variant (if any) this line sold, for
+      //     historical/reporting accuracy even if the variant is edited later.
+      //   unit_cost — a snapshot of the product's cost at sale time, so
+      //     gross-margin reporting does not silently drift if a merchant
+      //     edits `products.cost` after the fact (B8). Deliberately not
+      //     wired into any report in this milestone — see the doc's Known
+      //     limitations.
+      // Note: `products.sku`/`products.barcode` are deliberately NOT given a
+      // uniqueness constraint here. Unlike product_variants, that table has
+      // years of real merchant data that may already contain blanks or
+      // duplicates; a blind UNIQUE index would risk breaking the upgrade
+      // path for an install with dirty data (an explicit STOP CONDITION for
+      // this milestone). SKU/barcode uniqueness for bare products is
+      // enforced at the application layer instead — see
+      // main/core/retail.ts's validation.
+      for (const [column, ddl] of [
+        ['product_variant_id', 'ALTER TABLE order_items ADD COLUMN product_variant_id TEXT'],
+        ['unit_cost', 'ALTER TABLE order_items ADD COLUMN unit_cost REAL'],
+      ] as const) {
+        if (!getColumns(db, 'order_items').includes(column)) {
+          db.exec(ddl);
+        }
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

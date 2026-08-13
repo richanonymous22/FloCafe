@@ -586,6 +586,40 @@ export async function printKOT(order: any, items: any[], stationName: string, us
 }
 
 /**
+ * Standard ESC/POS cash-drawer kick pulse (`ESC p m t1 t2`). `pin` selects
+ * which of the two drawer-kick connector pins is pulsed — 0 (pin 2) is the
+ * near-universal default wiring; 1 (pin 5) exists for the rarer alternate
+ * wiring. Same command byte-for-byte across every ESC/POS-compatible
+ * printer this project already talks to, so no new hardware protocol is
+ * introduced — this reuses the exact printer connection `printReceipt`/
+ * `printKOT` already dispatch through.
+ */
+export function buildCashDrawerKick(pin: 0 | 1 = 0): Buffer {
+  return Buffer.from([0x1b, 0x70, pin, 0x19, 0xfa]);
+}
+
+/**
+ * PLEMMO CORE — retail's cash-drawer foundation
+ * (docs/MILESTONE_3_VERTICALS_AND_RETAIL.md § Cash drawer). Deliberately
+ * thin: resolve the same default printer `printReceipt` would use, and send
+ * the same kick pulse a receipt's drawer-open directive already relies on
+ * for hospitality tills. No new printing subsystem, no new hardware
+ * abstraction beyond one function name the domain layer can call.
+ */
+export async function openCashDrawer(targetPrinter?: any): Promise<DispatchResult> {
+  try {
+    const printer = targetPrinter || getPrinterConfig();
+    if (!printer) {
+      return { ok: false, detail: 'No printer configured' };
+    }
+    return await dispatchPrint(printer, buildCashDrawerKick());
+  } catch (error: any) {
+    console.error('[Printer] Cash drawer kick error:', error);
+    return { ok: false, detail: error?.message };
+  }
+}
+
+/**
  * Reports a print failure on both telemetry tiers: an anonymous, aggregate
  * Tier 1 event (specs/floadmin.md § 6.1) and, only where the merchant has
  * given the separate opt-in, a Tier 2 store-attributed diagnostic event

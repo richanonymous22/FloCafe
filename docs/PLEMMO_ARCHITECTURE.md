@@ -75,14 +75,15 @@ Electron main (main/index.ts) — BrowserWindow · autoUpdater · IPC · tray
         │
         ▼
    better-sqlite3 (WAL, synchronous) — main/db.ts
-   PRAGMA user_version, 73 migrations, pre-migration backup, drift detection
+   PRAGMA user_version, 75 migrations, pre-migration backup, drift detection
         │
         ▼
    main/core/   ← PLEMMO CORE (Phase 1 onward)
-        money.ts · ids.ts · audit.ts · hooks.ts · sale.ts · payment.ts · inventory.ts
+        money.ts · ids.ts · audit.ts · hooks.ts · sale.ts · payment.ts · inventory.ts · location.ts
         │
         ├── main/modules/hospitality/   ← Milestone 3: tables, KDS routing
-        └── main/modules/retail/        ← Milestone 3: variants, checkout, reports
+        ├── main/modules/retail/        ← Milestone 3: variants, checkout, reports
+        └── main/modules/purchasing/    ← Milestone 5: suppliers, purchase orders, receiving
 ```
 
 **Where business logic lives today:** the transaction engine (sale creation,
@@ -114,7 +115,8 @@ TypeScript with no Express dependency.
 | `sale.ts` (`SaleService`) | ✅ Built (M2/M3) | `createSale`, `addSaleItems`, shared `persistSaleLine` engine; M3 adds an optional `variant_id` per line |
 | `payment.ts` (`PaymentService`) | ✅ Built (M2/M3) | Adapter registry, `tender`/`voidPayment`/`refundPayment`, legacy dual-write; M3's retail checkout is `tender()`'s first live caller |
 | `hooks.ts` | ✅ Built (M3) | Vertical hook registry — Core calls into it, never into a vertical module directly |
-| `inventory.ts` (`InventoryService`) | ✅ Built (M4) | `recordSale`, `recordReturn`, `adjustStock`, `getBalance`, `getMovementHistory`, `listLowStock` |
+| `inventory.ts` (`InventoryService`) | ✅ Built (M4/M5) | `recordSale`, `recordReturn`, `adjustStock`, `recordReceipt` (M5), `getBalance`, `getMovementHistory`, `listLowStock` |
+| `location.ts` | ✅ Built (M5) | `getCurrentLocationId`/`getCurrentOrganizationId` — the one place that resolves "where is this install" |
 | `PermissionService` | ⬜ Later | Roles → granular permissions |
 
 ### Module boundary (Milestone 3)
@@ -161,9 +163,10 @@ classification.
 | ProductVariant | ✅ New (M3) | `product_variants` (v72) | ULID PK; own price/cost/SKU/barcode; a hospitality product never needs one — see § Product/Variant below |
 | Category | ✅ | `categories` | Has `parent_id` |
 | Customer | ✅ | `customers` | E.164 phone, search |
-| Supplier | ❌ | — | Retail module, deferred past M3 |
-| Inventory | ✅ New (M4) | `inventory_balances` (v73) | Maintained balance, per (product, variant, location); `products.stock_quantity` kept in sync as a compatibility write for variant-less products only |
-| InventoryMovement | ✅ New (M4) | `inventory_movements` (v73) | Immutable ledger — sale/return/adjustment/receipt/opening; see docs/MILESTONE_4_INVENTORY.md |
+| Supplier | ✅ New (M5) | `suppliers` (v75) | Purchasing relationship only — no accounting fields |
+| PurchaseOrder | ✅ New (M5) | `purchase_orders`/`purchase_order_items` (v75) | draft → ordered → partially_received/received; location-aware |
+| Inventory | ✅ New (M4), location-aware (M5) | `inventory_balances` (v73, `location_id` populated from v74) | Maintained balance, per (product, variant, location); `products.stock_quantity` kept in sync as a compatibility write for variant-less products only |
+| InventoryMovement | ✅ New (M4), location-aware (M5) | `inventory_movements` (v73) | Immutable ledger — sale/return/adjustment/receipt/opening; see docs/MILESTONE_4_INVENTORY.md and docs/MILESTONE_5_PURCHASING_LOCATIONS.md |
 | Sale | ✅ | `orders` | The convergent spine; `createSale`/`addSaleItems` built; M3 adds `channel: 'in_store'` for retail, no table |
 | SaleItem | ✅ | `order_items` | Inserted via the shared `persistSaleLine` engine; M3 adds `product_variant_id`/`unit_cost` columns, populated when a line names a variant |
 | Bill | ✅ | `bills` | Payable snapshot; now has `uid`; generation/split not yet in Core |
@@ -353,7 +356,11 @@ Migration v68 seeds the hierarchy from existing settings and writes pointers
 ### ⚠️ Deferred
 
 - **Stamping transactional rows** with `location_id`/`register_id`/`device_id`
-  so they self-identify after upload. Needed before sync.
+  so they self-identify after upload. Needed before sync. Milestone 5 did
+  this for `inventory_movements`/`inventory_balances`/`purchase_orders`
+  (`location_id`, resolved via `main/core/location.ts`); `register_id`/
+  `device_id` and the remaining transactional tables (`orders`, `bills`,
+  `payments`) are still unstamped.
 - **Device pairing, certificates, revocation.** The KDS module already contains
   a working pairing-token + QR + WebSocket-auth-revalidation implementation —
   harvest it rather than inventing a new flow.
@@ -572,7 +579,9 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 - Hospitality module boundary; `ProductVariant`; retail checkout; cash-drawer
   foundation — done (M3)
 - Roles → granular permissions (blocked by the `users.role` CHECK constraint)
-- Inventory movement ledger; suppliers/purchasing; per-variant stock
+- Inventory movement ledger; per-variant stock — done (M4)
+- Suppliers, purchase orders, goods receiving, location-aware inventory — done (M5)
+- Stock transfers between locations; multi-location selection/switching
 - GB VAT tax pack (engine exists, **no GB pack is bundled** — only `generic.json`)
 - Cash sessions, till reconciliation (drawer *kick* exists; shift accounting doesn't)
 - Sync engine, Plemmo Cloud, device pairing, licensing
@@ -603,19 +612,20 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 2 (M2) | Core transaction engine — `SaleService` (`createSale`, `addSaleItems`, shared line engine), `PaymentService` (adapters, persistence, dual-write, refund/void foundation) | ✅ Done |
 | 3 (M3) | Verticals + retail foundation — hospitality hook boundary, `ProductVariant`, retail checkout (`in_store` channel, `tender()`'s first live caller), cash-drawer foundation, basic retail reporting | ✅ Done |
 | 4 (M4) | Inventory engine — movement ledger, variant-level balances, refund/adjustment integration, low-stock, basic inventory UI | ✅ Done |
-| 5 | Suppliers, purchase orders, a real goods-receiving workflow, stock transfers | Next |
-| 6 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
-| 7 | Row stamping + device identity/pairing | |
-| 8 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
-| 9 | Plemmo Cloud + Admin | |
-| 10 | Licensing enforcement | |
-| 11 | Payment provider adapters | |
-| 12 | Advanced retail: phone-shop/IMEI, repairs, trade-ins, multi-location inventory | |
+| 5 (M5) | Purchasing + suppliers + location-aware inventory — `SupplierService`, `PurchaseOrderService`, `ReceivingService`, `inventory_movements`/`inventory_balances` now stamped with the install's real location | ✅ Done |
+| 6 | Stock transfers, multi-location selection/switching, a real goods-receiving workflow beyond the generic foundation | Next |
+| 7 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
+| 8 | Row stamping + device identity/pairing | |
+| 9 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
+| 10 | Plemmo Cloud + Admin | |
+| 11 | Licensing enforcement | |
+| 12 | Payment provider adapters | |
+| 13 | Advanced retail: phone-shop/IMEI, repairs, trade-ins | |
 
-Phases 0–7 yield a product a single-location merchant can trade on. The pilot
-does not wait for the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md` and
-`docs/MILESTONE_4_INVENTORY.md` for the detailed design records of
-Milestones 2 and 4.
+Phases 0–8 yield a product a single-location merchant can trade on. The pilot
+does not wait for the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md`,
+`docs/MILESTONE_4_INVENTORY.md`, and `docs/MILESTONE_5_PURCHASING_LOCATIONS.md`
+for the detailed design records of Milestones 2, 4, and 5.
 
 ---
 
@@ -626,5 +636,6 @@ Milestones 2 and 4.
 - [`MILESTONE_2_CORE_ENGINE.md`](./MILESTONE_2_CORE_ENGINE.md) — the Core transaction engine design record: `SaleService`, `PaymentService`, adapters, the dual-write strategy, deferred work
 - [`MILESTONE_3_VERTICALS_AND_RETAIL.md`](./MILESTONE_3_VERTICALS_AND_RETAIL.md) — the hospitality boundary and retail foundation design record: the hospitality coupling audit, the hook seam, `ProductVariant`, retail checkout, cash drawer, deferred work
 - [`MILESTONE_4_INVENTORY.md`](./MILESTONE_4_INVENTORY.md) — the inventory engine design record: the stock-behavior audit, the movement ledger and balance strategy, the opening-balance migration, sale/refund integration, negative-stock policy, concurrency assumptions, deferred work
+- [`MILESTONE_5_PURCHASING_LOCATIONS.md`](./MILESTONE_5_PURCHASING_LOCATIONS.md) — the purchasing and location-aware inventory design record: the location model audit, suppliers, purchase orders, receiving, idempotency, deferred work
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

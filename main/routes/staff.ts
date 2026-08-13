@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase, now } from '../db';
 import { requireRole, validatePassword, authRateLimit, invalidateUserAuthCache } from '../middleware/security';
+import { grantLocationAccess, revokeLocationAccess, listUserLocations } from '../core/employee-access';
 
 const router = Router();
 
@@ -306,6 +307,24 @@ router.post('/:id/reactivate', requireRole('owner', 'manager'), (req: Request, r
     console.error("[API] Internal error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// PLEMMO CORE — employee location scope foundation (Milestone 6, Part L).
+// Structural only, not enforced anywhere yet — see main/core/employee-access.ts.
+router.get('/:id/locations', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+  res.json({ locations: listUserLocations(String(req.params.id)) });
+});
+
+router.post('/:id/locations', requireRole('owner'), (req: Request, res: Response) => {
+  const body = req.body || {};
+  if (!body.location_id) return res.status(400).json({ error: 'location_id is required' });
+  grantLocationAccess(String(req.params.id), String(body.location_id));
+  res.status(201).json({ locations: listUserLocations(String(req.params.id)) });
+});
+
+router.delete('/:id/locations/:locationId', requireRole('owner'), (req: Request, res: Response) => {
+  revokeLocationAccess(String(req.params.id), String(req.params.locationId));
+  res.json({ locations: listUserLocations(String(req.params.id)) });
 });
 
 export const staffRoutes = router;

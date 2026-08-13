@@ -4352,6 +4352,43 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 78,
+    name: 'plemmo_employee_location_scope',
+    up: () => {
+      // PLEMMO CORE — the minimum structural foundation for location-aware
+      // employee access (Milestone 6, Part L). A join table, not a role or
+      // permission system: which locations a user may operate at, nothing
+      // about what they can do once there (that's still `users.role` +
+      // `requireRole()`, unchanged). Not enforced by any route in this
+      // milestone — see docs/MILESTONE_6_MULTI_LOCATION.md § Employee
+      // location scoping for why ("do not build an entire advanced RBAC
+      // system" — this is deliberately the structural piece only, so a
+      // future milestone can add the enforcement check without another
+      // migration).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_locations (
+          user_id TEXT NOT NULL,
+          location_id TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, location_id),
+          FOREIGN KEY (user_id) REFERENCES users(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_locations_location ON user_locations(location_id);
+      `);
+
+      // Every existing user is granted access to this install's one real
+      // location, so the foundation is populated from day one rather than
+      // starting empty (which would read as "nobody has access anywhere").
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      if (!locationId?.value) return;
+      const users = db.prepare('SELECT id FROM users').all() as { id: string }[];
+      const insert = db.prepare('INSERT OR IGNORE INTO user_locations (user_id, location_id, created_at) VALUES (?, ?, ?)');
+      const timestamp = now();
+      for (const user of users) insert.run(user.id, locationId.value, timestamp);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

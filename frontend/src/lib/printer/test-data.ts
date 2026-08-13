@@ -159,7 +159,7 @@ export function createTestTenant(overrides?: Partial<Tenant>): Tenant {
 }
 
 /**
- * Generate a test customer for WhatsApp sharing
+ * Generate a test customer for receipt/preview fixtures
  */
 export function createTestCustomer(overrides?: Partial<Customer>): Customer {
   return {

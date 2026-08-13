@@ -169,12 +169,6 @@ router.post('/import', requireRole('owner'),
         }
       }
     }
-    const importedWhatsappActivator = importedTables.includes('settings') && Array.isArray(importData.settings)
-      ? importData.settings.find((row) => row?.key === 'whatsapp_activated_by_user_id')?.value
-      : null;
-    if (importedWhatsappActivator && !existingUserIds.has(String(importedWhatsappActivator)) && !credentialedUserIds.has(String(importedWhatsappActivator))) {
-      unresolvedUserIds.add(String(importedWhatsappActivator));
-    }
     if (unresolvedUserIds.size > 0) {
       return res.status(400).json({
         error: 'Import contains rows linked to redacted user accounts that are not present on this install. Set up matching staff accounts first.',

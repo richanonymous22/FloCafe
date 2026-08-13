@@ -11,7 +11,6 @@ import { getJWTSecret } from './routes/auth';
 import { databaseMaintenanceMiddleware, getDbHealth, isDatabaseMaintenanceActive, isKdsEnabled } from './db';
 import { setupKdsWebSocket } from './services/kds';
 import { rateLimit, corsOptions, getUserAuthStatus, isTokenRevoked, isTokenStale } from './middleware/security';
-import { initFromDb as initWhatsAppFromDb } from './services/whatsapp';
 
 let server: http.Server | null = null;
 let app: Express;
@@ -298,14 +297,6 @@ export function startServer(): Promise<void> {
         });
 
         console.log(`[Server] KDS WebSocket running on ws://localhost:${currentPort}/kds`);
-      }
-
-      // main/index.ts (Electron) also calls this; dev-server and pm2 boot
-      // through here instead and would otherwise start with module defaults.
-      try {
-        initWhatsAppFromDb();
-      } catch (error) {
-        console.error('[Server] WhatsApp startup initialization failed:', error);
       }
 
       resolve();

@@ -8,7 +8,6 @@ import { clearJWTSecretCache } from './routes/auth';
 import { getKdsPort } from './kds-server';
 import { authorizeMasterPin, isMasterPinAvailable, isMasterPinSet } from './services/master-pin';
 import { runHealthCheck, applySafeFixes } from './services/schema-health';
-import { getStatus as getWhatsAppStatus } from './services/whatsapp';
 
 // Settings keys the renderer is allowed to write via IPC.
 // Must stay in sync with routes/settings.ts ALLOWED_WILDCARD_KEYS.
@@ -235,15 +234,6 @@ export function registerIpcHandlers(): void {
     }
     });
   });
-
-  // WhatsApp status snapshot for renderer polling on app focus
-  ipcMain.handle('whatsapp-get-status', async () => withDatabaseRequest(async () => {
-    try {
-      return getWhatsAppStatus();
-    } catch (err: any) {
-      return { error: err.message };
-    }
-  }));
 
   // Module-level reference to ensure single instance
   let activeKdsWindow: BrowserWindow | null = null;

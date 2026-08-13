@@ -15,11 +15,11 @@ Module._load = function (request: string, parent: unknown, isMain: boolean) {
 const { resolveStaticPage } = require('../main/server');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-static-routes-'));
 fs.writeFileSync(path.join(fixture, 'index.html'), 'root');
-fs.mkdirSync(path.join(fixture, 'whatsapp'));
-fs.writeFileSync(path.join(fixture, 'whatsapp', 'index.html'), 'whatsapp');
+fs.mkdirSync(path.join(fixture, 'customers'));
+fs.writeFileSync(path.join(fixture, 'customers', 'index.html'), 'customers');
 
-assert.equal(resolveStaticPage(fixture, '/whatsapp'), path.join(fixture, 'whatsapp', 'index.html'));
-assert.equal(resolveStaticPage(fixture, '/whatsapp/'), path.join(fixture, 'whatsapp', 'index.html'));
+assert.equal(resolveStaticPage(fixture, '/customers'), path.join(fixture, 'customers', 'index.html'));
+assert.equal(resolveStaticPage(fixture, '/customers/'), path.join(fixture, 'customers', 'index.html'));
 assert.equal(resolveStaticPage(fixture, '/unknown'), path.join(fixture, 'index.html'));
 assert.equal(resolveStaticPage(fixture, '/../outside'), path.join(fixture, 'index.html'));
 

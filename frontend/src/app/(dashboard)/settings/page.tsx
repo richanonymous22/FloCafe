@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { usePosSettingsStore, type PaperSize, type BillTemplate } from '@/store/pos-settings';
 import type { Language } from '@/lib/i18n';
 import { usePrinterStore, usePrinterStatusSync } from '@/hooks/usePrinter';
-import { Settings, Building2, CreditCard, Monitor, Users, Gift, Printer, Share2, FileText, Lock, Smartphone, RefreshCw, Copy, Check, Wifi, Usb, Trash2, Plus, Star, TestTube2, ChefHat, QrCode, CheckCircle2, Database, Cloud, CloudOff, Zap, Percent, KeyRound, AlertTriangle, Wrench, HardDrive, UploadCloud, Hash, ChevronDown } from 'lucide-react';
+import { Settings, Building2, CreditCard, Monitor, Users, Gift, Printer, FileText, Lock, Smartphone, RefreshCw, Copy, Check, Wifi, Usb, Trash2, Plus, Star, TestTube2, ChefHat, QrCode, CheckCircle2, Database, Cloud, CloudOff, Zap, Percent, KeyRound, AlertTriangle, Wrench, HardDrive, UploadCloud, Hash, ChevronDown } from 'lucide-react';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -19,7 +19,6 @@ import { useConfirm } from '@/hooks/use-confirm';
 import { MasterPinPrompt } from '@/components/settings/MasterPinPrompt';
 import { HealthCheckDialog } from '@/components/settings/HealthCheckDialog';
 import { InitializeDatabaseDialog } from '@/components/settings/InitializeDatabaseDialog';
-import { WhatsAppEnableCard } from '@/components/settings/WhatsAppEnableCard';
 import { TaxConfigurationPanel } from '@/components/settings/TaxConfigurationPanel';
 import { PaymentMethodsSettings } from '@/components/settings/PaymentMethodsSettings';
 import type { HealthCheckReport } from '@/types/electron';
@@ -234,7 +233,6 @@ function KdsDefaultViewCard() {
 export default function SettingsPage() {
   const { currentTenant, user, updateCurrentTenant } = useAuthStore();
   const posSettings = usePosSettingsStore();
-  const whatsappEnabled = posSettings.whatsappEnabled;
   const { printMethod, setPrintMethod, refreshHardwarePrinter } = usePrinterStore();
   usePrinterStatusSync();
   const { t, language, setLanguage } = useI18n();
@@ -1042,7 +1040,6 @@ export default function SettingsPage() {
     printerEnabled: boolean; printerPaperSize: PaperSize;
     printMethod: 'escpos' | 'browser';
     autoPrintKot: boolean; autoPrintBill: boolean;
-    whatsappShareEnabled: boolean;
     printerUseUnicode: boolean;
     printerTrimDecimals: boolean;
     billShowName: boolean; billShowAddress: boolean; billShowPhone: boolean; billShowTaxId: boolean;
@@ -1054,7 +1051,6 @@ export default function SettingsPage() {
     printMethod: printMethod as 'escpos' | 'browser',
     autoPrintKot: posSettings.autoPrintKot,
     autoPrintBill: posSettings.autoPrintBill,
-    whatsappShareEnabled: posSettings.whatsappShareEnabled,
     printerUseUnicode: posSettings.printerUseUnicode,
     printerTrimDecimals: posSettings.printerTrimDecimals,
     billShowName: posSettings.billShowName,
@@ -1074,7 +1070,6 @@ export default function SettingsPage() {
     setPrintMethod(printingForm.printMethod);
     posSettings.setAutoPrintKot(printingForm.autoPrintKot);
     posSettings.setAutoPrintBill(printingForm.autoPrintBill);
-    posSettings.setWhatsappShareEnabled(printingForm.whatsappShareEnabled);
     posSettings.setPrinterUseUnicode(printingForm.printerUseUnicode);
     posSettings.setPrinterTrimDecimals(printingForm.printerTrimDecimals);
     posSettings.setBillShowName(printingForm.billShowName);
@@ -2056,9 +2051,6 @@ export default function SettingsPage() {
             <SettingsNavItem label={t('settings.posWorkflow')} value="pos" active={activeTab} onClick={setActiveTab} />
             <SettingsNavItem label={t('settings.tabKds')} value="kds" active={activeTab} onClick={setActiveTab} />
             <SettingsNavItem label={t('settings.tablesideOrdering')} value="server-app" active={activeTab} onClick={setActiveTab} />
-            {/* WhatsApp opt-in lives under Operations because the receive-bill
-                workflow is what the cashier touches every time a customer pays. */}
-            <SettingsNavItem label={t('settings.tabWhatsapp')} value="whatsapp" active={activeTab} onClick={setActiveTab} />
 
             {/* Customers group */}
             <div className="hidden md:block px-3 pt-4 pb-2 mt-3 mb-1 border-b border-gray-100">
@@ -3588,19 +3580,6 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-100 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <Share2 size={20} className="text-gray-500" />
-                <h2 className="font-semibold text-gray-900">{t('settings.whatsappSharing')}</h2>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-gray-900">{t('settings.enableWhatsappShare')}</p>
-                  <p className="text-sm text-gray-500">{t('settings.enableWhatsappShareHint')}</p>
-                </div>
-                <Toggle value={printingForm.whatsappShareEnabled} onChange={(v) => setPrintingForm((p) => ({ ...p, whatsappShareEnabled: v }))} />
-              </div>
-            </div>
           </div>
 
             <div className="space-y-6">
@@ -4041,25 +4020,6 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-          </div>
-        </TabsContent>
-
-        {/* Integrations tab — cloud + OrderFlow + More Apps */}
-        <TabsContent value="whatsapp">
-          <div className="pb-6 max-w-3xl space-y-6">
-            {!whatsappEnabled ? (
-              <WhatsAppEnableCard />
-            ) : (
-              <div className="bg-white rounded-xl border border-gray-100 p-6 flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-semibold text-gray-900">{t('whatsapp.settings.enabled')}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{t('whatsapp.settings.enabledHint')}</p>
-                </div>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/whatsapp">{t('whatsapp.settings.openConnection')}</Link>
-                </Button>
-              </div>
-            )}
           </div>
         </TabsContent>
 

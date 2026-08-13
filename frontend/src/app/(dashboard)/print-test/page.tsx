@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Printer, FileText, MessageCircle, Download, Usb, Globe } from 'lucide-react';
+import { Printer, FileText, Download, Usb, Globe } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePrinterStore } from '@/hooks/usePrinter';
 import { showPrintWarningsToast } from '@/lib/printer/warnings-toast';
@@ -9,13 +9,12 @@ import { usePosSettingsStore } from '@/store/pos-settings';
 import { printerService } from '@/lib/printer/PrinterService';
 import { createTestBill, createTestOrder, createTestTenant, createTestCustomer } from '@/lib/printer/test-data';
 import { printWebBill, generateBillHtml } from '@/lib/printer/web-print';
-import { shareBillViaWhatsApp, getWhatsAppMessage } from '@/lib/whatsapp-share';
 import { formatCurrencyForTenant, getCountryByCode } from '@/lib/countries';
 import { formatDate } from '@/lib/printer/format-date';
 import { formatTaxComponentLabel, resolveTaxComponents } from '@/lib/printer/tax-components';
 import toast from 'react-hot-toast';
 import { useI18n } from '@/hooks/useI18n';
-type TestMode = 'receipt' | 'tax' | 'kot' | 'web-print' | 'whatsapp';
+type TestMode = 'receipt' | 'tax' | 'kot' | 'web-print';
 type PaperWidth = 58 | 80;
 
 export default function PrintTestPage() {
@@ -92,13 +91,6 @@ export default function PrintTestPage() {
           printWebBill(testBill, testTenant, { paperSize: printerPaperSize, includeTaxId: true });
           toast.success(t('printTest.webPrintDialogOpened'));
           break;
-        case 'whatsapp':
-          shareBillViaWhatsApp(testBill, testCustomer, testTenant, {
-            pointsEarned: 50,
-            walletBalance: 200,
-          });
-          toast.success(t('printTest.whatsappOpened'));
-          break;
       }
     } catch (err) {
       toast.error(t('printTest.failedWithReason', { message: (err as Error).message }));
@@ -126,15 +118,6 @@ export default function PrintTestPage() {
     toast.success('HTML downloaded');
   };
 
-  const handleCopyWhatsappText = async () => {
-    const message = getWhatsAppMessage(testBill, testTenant, {
-      pointsEarned: 50,
-      walletBalance: 200,
-    });
-    await navigator.clipboard.writeText(message);
-    toast.success('WhatsApp message copied to clipboard');
-  };
-
   const testOptions: { value: TestMode; label: string; icon: React.ElementType }[] = [
     { value: 'receipt', label: 'Basic Receipt (Thermal)', icon: Printer },
     { value: 'tax', label: 'Detailed Tax Bill (Thermal)', icon: Printer },
@@ -142,7 +125,6 @@ export default function PrintTestPage() {
     // "Print KOT" action, which must never be reachable in that state (#133).
     ...(kotPrintingEnabled ? [{ value: 'kot' as TestMode, label: 'KOT (Kitchen Ticket)', icon: Printer }] : []),
     { value: 'web-print', label: 'Web Print (Browser)', icon: FileText },
-    { value: 'whatsapp', label: 'WhatsApp Share', icon: MessageCircle },
   ];
 
   return (
@@ -277,16 +259,6 @@ export default function PrintTestPage() {
             >
               <Download size={18} className="mr-2" />
               {t('printTest.downloadHtml')}
-            </Button>
-          )}
-
-          {effectiveTestMode === 'whatsapp' && (
-            <Button
-              onClick={handleCopyWhatsappText}
-              variant="outline"
-              size="lg"
-            >
-              {t('printTest.copyText')}
             </Button>
           )}
         </div>

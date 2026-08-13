@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { CreditCard, Trash2, RotateCcw, Clock, MessageCircle, Printer, XCircle, Lock, Percent, Banknote, Search, Plus, ChevronDown, ChevronRight, UserPlus, User, ShoppingBag, Send, Loader2, Ban, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PaymentModal from '@/components/pos/PaymentModal';
-import { shareBillViaWhatsApp, sendBillViaFlo } from '@/lib/whatsapp-share';
 import { useConfirm } from '@/hooks/use-confirm';
 import type { OrderItem, Table, Product, Customer } from '@/lib/types';
 import type { Order, Bill } from '@/lib/types';
@@ -22,7 +21,6 @@ import { useCartStore } from '@/store/cart';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { useI18n } from '@/hooks/useI18n';
 import { useFormatDate } from '@/hooks/useFormatDate';
-import { useWhatsAppReady } from '@/hooks/useWhatsAppReady';
 import { ORDER_TYPE_LABEL_KEYS } from '@/lib/order-types';
 
 const itemStatusConfig: Record<string, { dot: string; color: string; labelKey: string }> = {
@@ -110,7 +108,6 @@ export default function OrdersPage() {
   const [tables, setTables] = useState<Table[]>([]);
   const [kdsEnabled, setKdsEnabled] = useState(true);
   const { confirm, ConfirmDialog } = useConfirm();
-  const isWhatsAppReady = useWhatsAppReady();
 
   // Consolidated filter state
   const [filters, setFilters] = useState<Filters>({ search: '', table: '', type: '', status: '' });
@@ -132,7 +129,6 @@ export default function OrdersPage() {
   // Print states
   const [generatingBill, setGeneratingBill] = useState<number | null>(null);
   const [printingBillId, setPrintingBillId] = useState<number | null>(null);
-  const [sendingWaOrderId, setSendingWaOrderId] = useState<number | null>(null);
   const [confirmPrintBillId, setConfirmPrintBillId] = useState<number | null>(null);
 
   // Other states
@@ -561,59 +557,6 @@ export default function OrdersPage() {
     }
   };
 
-  const handleWhatsAppShare = (order: Order) => {
-    if (!order.bill) {
-      toast.error(t('orders.billNotFound'));
-      return;
-    }
-    if (!order.customer?.phone) {
-      toast.error(t('orders.customerPhoneMissing'));
-      return;
-    }
-
-    try {
-      shareBillViaWhatsApp(
-        order.bill,
-        { phone: order.customer.phone, country_code: order.customer.country_code },
-        {
-          business_name: currentTenant?.business_name || t('common.businessNameFallback'),
-          currency,
-          country: currentTenant?.country || 'IN',
-        },
-        { pointsEarned: order.bill.points_earned ?? 0 }
-      );
-    } catch {
-      toast.error(t('orders.whatsappFailed'));
-    }
-  };
-
-  const handleSendViaFlo = async (order: Order) => {
-    if (!order.bill) {
-      toast.error(t('orders.billNotFound'));
-      return;
-    }
-    if (!order.customer?.phone) {
-      toast.error(t('whatsapp.send.customerPhoneRequired'));
-      return;
-    }
-    setSendingWaOrderId(order.id);
-    try {
-      await sendBillViaFlo(
-        order.bill,
-        order.customer.phone,
-        {
-          business_name: currentTenant?.business_name || t('common.businessNameFallback'),
-          currency: currentTenant?.currency || 'INR',
-          country: currentTenant?.country || 'IN',
-        },
-        t,
-        { pointsEarned: order.bill.points_earned ?? 0 }
-      );
-    } finally {
-      setSendingWaOrderId(null);
-    }
-  };
-
   const handleApplyDiscount = async () => {
     if (!discountModal) return;
 
@@ -952,16 +895,6 @@ export default function OrdersPage() {
                       <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${payBadge.bg} ${payBadge.text}`}>
                         {t(payBadge.labelKey)}
                       </span>
-                    )}
-                    {paid && order.customer?.phone && (
-                      <button
-                        onClick={() => isWhatsAppReady ? handleSendViaFlo(order) : handleWhatsAppShare(order)}
-                        disabled={sendingWaOrderId === order.id}
-                        className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-70"
-                        title={isWhatsAppReady ? 'Send via Flo' : t('common.shareViaWhatsApp')}
-                      >
-                        {sendingWaOrderId === order.id ? <Loader2 className="size-4 animate-spin" /> : isWhatsAppReady ? <Send size={14} /> : <MessageCircle size={14} />}
-                      </button>
                     )}
                     {order.bill && (
                       <button

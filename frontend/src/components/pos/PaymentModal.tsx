@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, Wallet, ArrowLeftRight, CheckCircle2, Sparkles, User, Percent, Send, ChevronDown } from 'lucide-react';
+import { X, Wallet, ArrowLeftRight, CheckCircle2, Sparkles, User, Percent, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -12,8 +12,6 @@ import { useConfirm } from '@/hooks/use-confirm';
 import { useI18n } from '@/hooks/useI18n';
 import { PAYMENT_METHODS, type CustomPaymentMethod } from '@/lib/payment-methods';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
-import { useWhatsAppReady } from '@/hooks/useWhatsAppReady';
-import { sendBillViaFlo, shareBillViaWhatsApp } from '@/lib/whatsapp-share';
 import { useAuthStore } from '@/store/auth';
 
 interface Props {
@@ -42,13 +40,11 @@ export default function PaymentModal({ bill, currency, onClose, onPaid, onBillUp
   const { confirm, ConfirmDialog } = useConfirm();
   const { t } = useI18n();
   const { currentTenant } = useAuthStore();
-  const isWhatsAppReady = useWhatsAppReady();
   const idempotencyKeyRef = useRef<string | null>(null);
   useEffect(() => {
     idempotencyKeyRef.current = null;
   }, [bill.id]);
   const [justPaid, setJustPaid] = useState(false);
-  const [sendingWa, setSendingWa] = useState(false);
   const [pointsEarned, setPointsEarned] = useState(0);
   const [payments, setPayments] = useState<Payment[]>(
     PAYMENT_METHODS.map((method) => ({ method: method.key, amount: '' })),
@@ -280,43 +276,6 @@ export default function PaymentModal({ bill, currency, onClose, onPaid, onBillUp
       toast.error(axiosErr.response?.data?.error || axiosErr.message || t('pos.paymentFailed'));
     } finally {
       setProcessing(false);
-    }
-  };
-
-  const tenantForShare = {
-    business_name: currentTenant?.business_name || t('common.businessNameFallback'),
-    currency: currentTenant?.currency || 'INR',
-    country: currentTenant?.country || 'IN',
-  };
-
-  const handleSendWhatsApp = async () => {
-    const phone = cartCustomer?.phone;
-    if (!phone) {
-      toast.error(t('whatsapp.send.customerPhoneRequired'));
-      return;
-    }
-    setSendingWa(true);
-    try {
-      await sendBillViaFlo(bill, phone, tenantForShare, t, { pointsEarned });
-    } finally {
-      setSendingWa(false);
-    }
-  };
-
-  const handleShareWhatsApp = () => {
-    if (!cartCustomer?.phone) {
-      toast.error(t('whatsapp.send.customerPhoneRequired'));
-      return;
-    }
-    try {
-      shareBillViaWhatsApp(
-        bill,
-        { phone: cartCustomer.phone, country_code: cartCustomer.country_code },
-        tenantForShare,
-        { pointsEarned }
-      );
-    } catch {
-      toast.error(t('orders.whatsappFailed'));
     }
   };
 
@@ -588,29 +547,6 @@ export default function PaymentModal({ bill, currency, onClose, onPaid, onBillUp
         <div className="px-5 pb-5 border-t border-gray-100 pt-3 space-y-2">
           {justPaid ? (
             <>
-              {cartCustomer?.phone && (
-                isWhatsAppReady ? (
-                  <Button
-                    onClick={handleSendWhatsApp}
-                    disabled={sendingWa}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700"
-                    size="lg"
-                  >
-                    <Send size={16} className="mr-2" />
-                    {sendingWa ? t('pos.processingPayment') : t('pos.sendViaWhatsApp')}
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleShareWhatsApp}
-                    variant="outline"
-                    className="w-full"
-                    size="lg"
-                  >
-                    <Send size={16} className="mr-2" />
-                    {t('common.shareViaWhatsApp')}
-                  </Button>
-                )
-              )}
               <Button onClick={onPaid} variant="outline" className="w-full" size="lg">
                 {t('common.done')}
               </Button>

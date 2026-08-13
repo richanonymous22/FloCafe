@@ -1,8 +1,10 @@
 /**
- * Order notes validation functions.
+ * Order/sale notes validation.
  *
- * Separated from orders.ts so they can be imported by tests without
- * pulling in Electron, Express, or other heavy dependencies.
+ * Lives in core/ because SaleService needs it and Plemmo Core must never
+ * import from routes/ — the dependency arrow runs presentation -> domain ->
+ * persistence, never back. Originally main/routes/orders-validation.ts; it was
+ * already dependency-free (no Electron, no Express), so the move is a rename.
  *
  * Both functions accept a `db` parameter (any object with a `.prepare().get()`
  * interface) to stay dependency-free and testable with node:sqlite or better-sqlite3.

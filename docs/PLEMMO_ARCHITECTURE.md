@@ -99,9 +99,10 @@ TypeScript with no Express dependency.
 | Module | Status | Purpose |
 |---|---|---|
 | `money.ts` | ✅ Built | Integer minor units, currency-aware, deterministic rounding, penny-exact allocation |
+| `notes-validation.ts` | ✅ Built (2A) | Order/line note length rules (moved out of `routes/`) |
 | `ids.ts` | ✅ Built | ULID generation for distributed entities |
 | `audit.ts` | ✅ Built | Append-only who/what/when/where event log |
-| `SaleService` | ⬜ Phase 2 | The shared transaction spine |
+| `sale.ts` (`SaleService`) | ✅ Built (2A) | The shared transaction spine. `createSale` only so far. |
 | `PaymentService` | ⬜ Phase 2 | Tender state machine + adapter seam |
 | `InventoryService` | ⬜ Phase 3 | Movement ledger |
 | `PermissionService` | ⬜ Phase 2 | Roles → granular permissions |
@@ -462,7 +463,8 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 |---|---|---|
 | 0 | Safety & identity — GPL removal, branding, third-party disconnection | ✅ Done |
 | 1 | Foundations — money, identifiers, org hierarchy, audit | ✅ Done |
-| 2 | Domain seam — extract `SaleService`/`PaymentService`; no behaviour change | Next |
+| 2A | Domain seam — `SaleService.createSale`, `POST /api/orders` migrated; no behaviour change | ✅ Done |
+| 2B | Extend the seam — `POST /orders/:id/items`, then `PaymentService` | Next |
 | 3 | Hospitality boundary — namespace + flag; hooks replace inline `if type === 'dine_in'` | |
 | 4 | Retail foundation — variants, retail checkout, SKU/barcode uniqueness, cash drawer | |
 | 5 | Inventory movement ledger | |

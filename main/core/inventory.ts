@@ -70,6 +70,7 @@ interface RecordMovementInput extends InventoryKey {
   referenceId?: string | null;
   unitCost?: number | null;
   actorUserId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -126,13 +127,14 @@ function recordMovement(input: RecordMovementInput): InventoryMovementRecord {
   db.prepare(`
     INSERT INTO inventory_movements
       (id, product_id, product_variant_id, location_id, quantity_delta, movement_type, reason,
-       reference_type, reference_id, unit_cost, actor_user_id, balance_after, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       reference_type, reference_id, unit_cost, actor_user_id, balance_after, metadata, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, input.productId, input.variantId || null, input.locationId || null,
     input.quantityDelta, input.movementType, input.reason || null,
     input.referenceType || null, input.referenceId || null,
-    input.unitCost ?? null, input.actorUserId || null, balanceAfter, createdAt,
+    input.unitCost ?? null, input.actorUserId || null, balanceAfter,
+    input.metadata ? JSON.stringify(input.metadata) : null, createdAt,
   );
 
   return db.prepare('SELECT * FROM inventory_movements WHERE id = ?').get(id) as InventoryMovementRecord;
@@ -194,8 +196,9 @@ export function recordSale(input: RecordSaleInput): InventoryMovementRecord {
 export interface RecordReturnInput extends InventoryKey {
   quantity: number;
   reason?: string | null;
-  /** The `order_items.id` (or uid) the returned quantity is being credited against — used to cap over-refunding stock. */
+  /** The `order_items.id` the returned quantity is being credited against — used to cap over-refunding stock. */
   saleReferenceId: string;
+  /** What actually caused this return (e.g. 'payment_refund' + the refund's id) — shown as the movement's reference in history. */
   referenceType: string;
   referenceId: string;
   actorUserId?: string | null;
@@ -205,10 +208,17 @@ export interface RecordReturnInput extends InventoryKey {
  * Records a return's stock effect (Part H). Caps the total quantity ever
  * returned against one `saleReferenceId` at the quantity that was actually
  * sold on it — computed as (sale movements' quantity) - (prior return
- * movements' quantity) for that same reference, rather than trusting the
+ * movements' quantity) for that same sold line, rather than trusting the
  * caller's claimed "amount sold". Throws rather than silently clamping, so
  * a caller with a real correction to make uses `adjustStock()` instead,
  * which is explicit about being a manual override.
+ *
+ * The movement's own `reference_type`/`reference_id` record what *caused*
+ * the return (a refund, typically — what Part J's history view shows as
+ * "Refund #..."), which is a separate concern from *which sold line* is
+ * being credited back; the latter is tracked via `metadata.soldOrderItemId`
+ * specifically so two different refunds against the same order_item still
+ * cap correctly against each other.
  */
 export function recordReturn(input: RecordReturnInput): InventoryMovementRecord {
   if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
@@ -222,7 +232,7 @@ export function recordReturn(input: RecordReturnInput): InventoryMovementRecord 
     `).get(input.saleReferenceId) as { total: number }).total;
     const alreadyReturned = (db.prepare(`
       SELECT COALESCE(SUM(quantity_delta), 0) as total FROM inventory_movements
-      WHERE movement_type = 'return' AND reference_type = 'order_item_return' AND reference_id = ?
+      WHERE movement_type = 'return' AND json_extract(metadata, '$.soldOrderItemId') = ?
     `).get(input.saleReferenceId) as { total: number }).total;
 
     const returnable = sold - alreadyReturned;
@@ -233,7 +243,8 @@ export function recordReturn(input: RecordReturnInput): InventoryMovementRecord 
     const movement = recordMovement({
       db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
       quantityDelta: input.quantity, movementType: 'return', reason: input.reason,
-      referenceType: 'order_item_return', referenceId: input.saleReferenceId, actorUserId: input.actorUserId,
+      referenceType: input.referenceType, referenceId: input.referenceId, actorUserId: input.actorUserId,
+      metadata: { soldOrderItemId: input.saleReferenceId },
     });
     syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantity);
     return movement;
@@ -333,11 +344,16 @@ export interface LowStockRow {
  */
 export function listLowStock(): LowStockRow[] {
   const db = getDatabase();
+  // A variant-less row (v.id IS NULL) with no balance row yet falls back to
+  // products.stock_quantity — the same lazy-migration fallback getBalance()
+  // uses, so a product created after v73 ran (or whose track_inventory
+  // switched on afterward) shows its real stock here too, not a false 0.
+  // A variant with no balance row genuinely has 0 stock.
   const rows = db.prepare(`
     SELECT
       p.id as productId, p.name as productName,
       v.id as variantId, v.name as variantName,
-      COALESCE(b.quantity, 0) as quantity,
+      COALESCE(b.quantity, CASE WHEN v.id IS NULL THEN p.stock_quantity ELSE 0 END) as quantity,
       COALESCE(v.low_stock_threshold, p.low_stock_threshold) as threshold
     FROM products p
     LEFT JOIN product_variants v ON v.product_id = p.id AND v.is_active = 1

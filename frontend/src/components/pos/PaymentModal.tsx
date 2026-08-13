@@ -12,7 +12,6 @@ import { useConfirm } from '@/hooks/use-confirm';
 import { useI18n } from '@/hooks/useI18n';
 import { PAYMENT_METHODS, type CustomPaymentMethod } from '@/lib/payment-methods';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
-import { useAuthStore } from '@/store/auth';
 
 interface Props {
   bill: Bill;
@@ -39,13 +38,11 @@ export default function PaymentModal({ bill, currency, onClose, onPaid, onBillUp
   const effectiveCustomerId = bill.customer_id || cartCustomerId || null;
   const { confirm, ConfirmDialog } = useConfirm();
   const { t } = useI18n();
-  const { currentTenant } = useAuthStore();
   const idempotencyKeyRef = useRef<string | null>(null);
   useEffect(() => {
     idempotencyKeyRef.current = null;
   }, [bill.id]);
   const [justPaid, setJustPaid] = useState(false);
-  const [pointsEarned, setPointsEarned] = useState(0);
   const [payments, setPayments] = useState<Payment[]>(
     PAYMENT_METHODS.map((method) => ({ method: method.key, amount: '' })),
   );
@@ -264,7 +261,6 @@ export default function PaymentModal({ bill, currency, onClose, onPaid, onBillUp
         }));
       }
       const earned = res.data?.loyaltyPointsEarned > 0 ? res.data.loyaltyPointsEarned : 0;
-      setPointsEarned(earned);
       if (earned > 0) {
         toast.success(t('pos.paymentRecordedWithPoints', { points: earned }));
       } else {

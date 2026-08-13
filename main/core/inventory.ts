@@ -303,6 +303,45 @@ export function adjustStock(input: AdjustStockInput): InventoryMovementRecord {
   });
 }
 
+export interface RecordReceiptInput extends InventoryKey {
+  quantity: number;
+  /** The actual cost this receipt was recorded at — may differ from a purchase order's expected unit_cost (Part G). */
+  unitCost: number;
+  referenceType: string;
+  referenceId: string;
+  actorUserId?: string | null;
+}
+
+/**
+ * Records a goods-receipt's stock effect (Milestone 5, Part F/H). The
+ * purpose-built entry point `ReceivingService` calls, distinct from
+ * `adjustStock()`: a receipt always has a positive quantity and a real
+ * per-unit cost from the actual delivery, and is always tied to a specific
+ * `purchase_order_items` row via `referenceType`/`referenceId` — a manual
+ * adjustment has neither of those guarantees. No quantity cap here (unlike
+ * `recordReturn()`): how much can be received against a PO item is
+ * `ReceivingService`'s concern, since it also has to update
+ * `quantity_received` atomically with this movement.
+ */
+export function recordReceipt(input: RecordReceiptInput): InventoryMovementRecord {
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new InventoryError('Receipt quantity must be a positive number');
+  }
+  if (!Number.isFinite(input.unitCost) || input.unitCost < 0) {
+    throw new InventoryError('Receipt unit cost must be a non-negative number');
+  }
+  const db = getDatabase();
+  return withTxn(() => {
+    const movement = recordMovement({
+      db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
+      quantityDelta: input.quantity, movementType: 'receipt', unitCost: input.unitCost,
+      referenceType: input.referenceType, referenceId: input.referenceId, actorUserId: input.actorUserId,
+    });
+    syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantity);
+    return movement;
+  });
+}
+
 /**
  * Returns the current balance. When no `inventory_balances` row exists yet
  * for a variant-less product — one created after the v73 migration ran, or

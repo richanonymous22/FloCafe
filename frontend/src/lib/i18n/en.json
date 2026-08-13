@@ -121,6 +121,8 @@
   "nav.inventory": "Inventory",
   "nav.purchasing": "Purchasing",
   "nav.suppliers": "Suppliers",
+  "nav.transfers": "Transfers",
+  "nav.locations": "Locations",
   "nav.products": "Products",
   "nav.settings": "Settings",
   "nav.support": "Support",

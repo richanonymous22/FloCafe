@@ -75,19 +75,28 @@ Electron main (main/index.ts) — BrowserWindow · autoUpdater · IPC · tray
         │
         ▼
    better-sqlite3 (WAL, synchronous) — main/db.ts
-   PRAGMA user_version, 70 migrations, pre-migration backup, drift detection
+   PRAGMA user_version, 72 migrations, pre-migration backup, drift detection
         │
         ▼
-   main/core/   ← PLEMMO CORE begins here (new in Phase 1)
-        money.ts · ids.ts · audit.ts
+   main/core/   ← PLEMMO CORE (Phase 1 onward)
+        money.ts · ids.ts · audit.ts · hooks.ts · sale.ts · payment.ts
+        │
+        ├── main/modules/hospitality/   ← Milestone 3: tables, KDS routing
+        └── main/modules/retail/        ← Milestone 3: variants, checkout, reports
 ```
 
-**Where business logic lives today:** inline in Express route handlers
-(`routes/orders.ts`, `routes/bills.ts`). There is no domain layer, no ORM, and
-no repository pattern. The tax engine (`services/tax-engine.ts`) is the one
-genuinely separated, pure component.
+**Where business logic lives today:** the transaction engine (sale creation,
+line items, payments) lives in `main/core/`, called from thin route handlers.
+Everything else — products, customers, staff, settings, reporting — is still
+inline in Express route handlers, as it was before Phase 1. There is no
+domain layer for those yet, no ORM, no repository pattern. The tax engine
+(`services/tax-engine.ts`) is the one other genuinely separated, pure
+component.
 
-This is the primary structural debt and the target of Phase 2.
+Extending Core coverage to the remaining route handlers is not scheduled —
+Plemmo extracts a route into Core when a real second caller needs it (a
+second vertical, a sync engine, a background job), not speculatively. See
+§ 12 Roadmap.
 
 ---
 
@@ -102,10 +111,40 @@ TypeScript with no Express dependency.
 | `notes-validation.ts` | ✅ Built (2A) | Order/line note length rules (moved out of `routes/`) |
 | `ids.ts` | ✅ Built | ULID generation for distributed entities |
 | `audit.ts` | ✅ Built | Append-only who/what/when/where event log |
-| `sale.ts` (`SaleService`) | ✅ Built (M2) | `createSale`, `addSaleItems`, shared `persistSaleLine` engine |
-| `payment.ts` (`PaymentService`) | ✅ Built (M2) | Adapter registry, `tender`/`voidPayment`/`refundPayment`, legacy dual-write |
+| `sale.ts` (`SaleService`) | ✅ Built (M2/M3) | `createSale`, `addSaleItems`, shared `persistSaleLine` engine; M3 adds an optional `variant_id` per line |
+| `payment.ts` (`PaymentService`) | ✅ Built (M2/M3) | Adapter registry, `tender`/`voidPayment`/`refundPayment`, legacy dual-write; M3's retail checkout is `tender()`'s first live caller |
+| `hooks.ts` | ✅ Built (M3) | Vertical hook registry — Core calls into it, never into a vertical module directly |
 | `InventoryService` | ⬜ Later | Movement ledger |
 | `PermissionService` | ⬜ Later | Roles → granular permissions |
+
+### Module boundary (Milestone 3)
+
+```
+main/core/          ← imports nothing vertical-specific. Ever.
+     ▲        ▲
+     │        │
+main/modules/hospitality/     main/modules/retail/
+  hooks.ts (table occupation)   variants.ts, checkout.ts, reports.ts
+```
+
+Core defines hook *interfaces* (`SaleLifecycleHooks` in `hooks.ts`) and calls
+them by name; it never imports a vertical module. Each vertical registers its
+own implementation at app start-up, from the routes composition root
+(`main/routes/index.ts`) — the one place that already owns every
+hospitality-only route (tables, kitchen, KDS) and now also mounts
+`/api/retail`. Hospitality and retail never import each other.
+
+In practice this milestone only needed one Core-side hook
+(`onSaleOpened` → table occupation), because that was the only
+hospitality-specific branch left inside `main/core/sale.ts` after Milestone
+2. Everything else hospitality-specific — KDS notification, kitchen station
+routing, table release on payment/cancel — already lived in
+`main/routes/orders.ts`/`bills.ts`/`kds.ts`, i.e. outside Core to begin with.
+Those were deliberately **not** moved into `main/modules/hospitality/` this
+milestone: they cost real regression risk to relocate and, since they were
+never inside Core, moving them buys no additional architectural safety — see
+`docs/MILESTONE_3_VERTICALS_AND_RETAIL.md` § Hospitality audit for the full
+classification.
 
 ### Entity status
 
@@ -118,15 +157,15 @@ TypeScript with no Express dependency.
 | Employee | ⚠️ Partial | `users` | Sound bcrypt/PIN auth; needs org/location scope |
 | Role | ⚠️ Partial | `users.role` CHECK | 5 hardcoded roles, no `supervisor` |
 | Permission | ❌ | — | `requireRole()` string matching only |
-| Product | ✅ | `products` | Flat; becomes variant parent |
-| ProductVariant | ❌ | — | `order_items.variant_selection` is a dead JSON column |
+| Product | ✅ | `products` | Flat; a variant's parent when it has one |
+| ProductVariant | ✅ New (M3) | `product_variants` (v72) | ULID PK; own price/cost/SKU/barcode; a hospitality product never needs one — see § Product/Variant below |
 | Category | ✅ | `categories` | Has `parent_id` |
 | Customer | ✅ | `customers` | E.164 phone, search |
-| Supplier | ❌ | — | Retail module |
-| Inventory | ⚠️ Weak | `products.stock_quantity` | Mutable scalar, 4 write sites, no history |
-| InventoryMovement | ❌ | — | The foundational retail gap |
-| Sale | ✅ | `orders` | The convergent spine; now has `uid`; `createSale`/`addSaleItems` built |
-| SaleItem | ✅ | `order_items` | Now has `uid`; inserted via the shared `persistSaleLine` engine |
+| Supplier | ❌ | — | Retail module, deferred past M3 |
+| Inventory | ⚠️ Weak | `products.stock_quantity` | Mutable scalar, 4 write sites, no history; variants share the parent product's stock — no per-variant tracking yet |
+| InventoryMovement | ❌ | — | The foundational retail gap, deferred past M3 |
+| Sale | ✅ | `orders` | The convergent spine; `createSale`/`addSaleItems` built; M3 adds `channel: 'in_store'` for retail, no table |
+| SaleItem | ✅ | `order_items` | Inserted via the shared `persistSaleLine` engine; M3 adds `product_variant_id`/`unit_cost` columns, populated when a line names a variant |
 | Bill | ✅ | `bills` | Payable snapshot; now has `uid`; generation/split not yet in Core |
 | Payment | ✅ New (M2) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; legacy `bills.payment_details` JSON still authoritative, dual-written into the new tables — see §8 |
 | Refund | ✅ New (M2) | `refunds` (v71) | Foundation only — `refundPayment()` in `payment.ts`, no inventory return yet |
@@ -136,6 +175,38 @@ TypeScript with no Express dependency.
 | Receipt | ✅ Strong | `printers/thermal.ts` | ESC/POS, profiles, typed failures |
 | AuditEvent | ✅ New | `audit_events` (v70) | |
 | Synchronization | ❌ | — | See §7 |
+
+### Product / Variant (Milestone 3)
+
+`product_variants` (migration v72) is additive and starts empty. A
+hospitality menu item never gets a row here — it stays exactly what it was
+before this milestone: a bare `products` row, sold directly, no variant UI
+ever shown to a restaurant merchant. A retail product that needs distinct
+SKUs/barcodes/prices per option gets one `product_variants` row per option.
+
+```
+Product (products)
+    │
+    └── ProductVariant (product_variants)   ← optional
+            ├── sku, barcode        (own, uniquely constrained)
+            ├── price, cost         (own — can differ from the parent)
+            └── tax_category_id     (column exists; tax still resolves at the
+                                      product level in M3 — see Known limitations)
+```
+
+`order_items` gained two columns: `product_variant_id` (which variant sold,
+for historical accuracy even if the variant is edited later) and `unit_cost`
+(a cost snapshot for future gross-margin reporting, not wired into any report
+yet). `SaleService.persistSaleLine()` resolves price/SKU from the variant
+when a line names one, and from the product otherwise — the exact same
+function hospitality has always called, now vertical-agnostic about where
+its price comes from.
+
+SKU/barcode uniqueness is a hard, partial-unique database constraint on
+`product_variants` (safe — the table starts empty). It is deliberately
+**not** enforced on `products.sku`/`products.barcode` — years of real
+merchant data may already contain blanks or duplicates there, and a blind
+`UNIQUE` index was an explicit stop condition for this milestone.
 
 ---
 
@@ -360,8 +431,9 @@ succeeds).
 SaleService
      │
 PaymentService  (main/core/payment.ts) — state machine + idempotency + persistence
-     │  tender() — the standalone entry point, NOT wired to any route yet
-     │  voidPayment() / refundPayment() — the Part 8 foundation
+     │  tender() — as of M3, called by retail checkout (main/modules/retail/
+     │             checkout.ts); still not wired into any hospitality route
+     │  voidPayment() / refundPayment() — the Part 8 foundation, still unwired
      ▼
 PaymentAdapter (interface: capture)
    ├── CashAdapter          in-process, settles instantly            ✅ built
@@ -386,10 +458,13 @@ expression of that — a future real provider adapter is what gets to say
 checking — one tender for one amount, which is what an adapter-based flow
 naturally is. Wiring it into `POST /bills/:id/payment(s)` in place of
 `applyPaymentBatch` would mean re-implementing that allocation and validation
-logic, which is exactly the "don't rewrite blindly" risk this milestone's own
-rules exist to prevent. `tender()` is real, tested, and ready for a *future*
-caller — a retail checkout, or a later, deliberate migration of the bills.ts
-routes — not for this one.
+logic, which is exactly the "don't rewrite blindly" risk that milestone's own
+rules existed to prevent. `tender()` is real, tested, and now has its first
+live caller — retail checkout (`main/modules/retail/checkout.ts`, M3), which
+needs neither split-tender allocation nor wallet checks for a single-tender
+counter sale. `applyPaymentBatch` remains the only path hospitality's
+multi-line payment UI uses; migrating it onto `tender()` is still deferred —
+see § 12 Roadmap.
 
 One known compromise, recorded rather than hidden: the dual-write stores
 whatever `applyPaymentBatch` computed, and that function computes amounts as
@@ -399,6 +474,13 @@ exactly the class of bug `main/core/money.ts` exists to fix. Fixing it means
 touching `applyPaymentBatch`, so for now the new `payments` table is a
 truthful mirror of the old one, bug included. `tender()` itself is
 exponent-correct from day one.
+
+`tender()` still does not update `bills.paid_amount`/`payment_status` — that
+reconciliation is bespoke to `applyPaymentBatch` and was never reimplemented
+inside `tender()` itself. Retail checkout, as `tender()`'s first caller, does
+that reconciliation itself in `main/modules/retail/checkout.ts` right after
+calling `tender()`, since it is a brand-new path with no legacy gap to
+inherit. Any *other* future caller of `tender()` needs to do the same.
 
 ### Refunds and voids — the Part 8 foundation, not a RefundService
 
@@ -423,7 +505,7 @@ Preserved as-is — this is the strongest inherited asset.
 | Thermal ESC/POS (network / USB / WebUSB) | ✅ Production quality, 10 typed failure classes |
 | Printer profiles + mDNS discovery | ✅ Model registry with aliases, column counts |
 | Barcode scanner (keyboard wedge) | ✅ Retail-ready as written |
-| **Cash drawer** | ❌ Absent — MVP-critical for retail |
+| **Cash drawer** | ✅ Foundation (M3) — `openCashDrawer()` in `printers/thermal.ts`, standard ESC/POS kick pulse through the same connection `printReceipt`/`printKOT` already use |
 | **Customer display** | ❌ Absent |
 | Touchscreen / kiosk mode | ⚠️ Implicit only |
 
@@ -434,6 +516,8 @@ hardcoded (`printers.connection_type` is a `CHECK` constraint today, so adding
 Bluetooth or serial is a migration). Domain emits intents ("open drawer",
 "print receipt"); the peripheral layer executes them. Keeps hardware out of
 domain logic and makes the domain testable without hardware.
+`openCashDrawer()` is a first, narrow step in that direction — one named
+domain call, no registry yet — not the full abstraction.
 
 ---
 
@@ -484,12 +568,13 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 - Stamping transactional rows with location/register/device
 
 **Phase 2+:**
-- `SaleService` / `PaymentService` extraction from route handlers
-- Hospitality module boundary + feature flag
+- `SaleService` / `PaymentService` extraction from route handlers — done (M2)
+- Hospitality module boundary; `ProductVariant`; retail checkout; cash-drawer
+  foundation — done (M3)
 - Roles → granular permissions (blocked by the `users.role` CHECK constraint)
-- Product variants; inventory movement ledger; refunds/returns
+- Inventory movement ledger; suppliers/purchasing; per-variant stock
 - GB VAT tax pack (engine exists, **no GB pack is bundled** — only `generic.json`)
-- Cash drawer, cash sessions, till reconciliation
+- Cash sessions, till reconciliation (drawer *kick* exists; shift accounting doesn't)
 - Sync engine, Plemmo Cloud, device pairing, licensing
 - Payment provider adapters
 - Removal of the upstream cloud client, Google Drive backup, RevFlo surface
@@ -516,15 +601,15 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 0 | Safety & identity — GPL removal, branding, third-party disconnection | ✅ Done |
 | 1 | Foundations — money, identifiers, org hierarchy, audit | ✅ Done |
 | 2 (M2) | Core transaction engine — `SaleService` (`createSale`, `addSaleItems`, shared line engine), `PaymentService` (adapters, persistence, dual-write, refund/void foundation) | ✅ Done |
-| 3 | Hospitality boundary — namespace + flag; hooks replace inline `if type === 'dine_in'` | Next |
-| 4 | Retail foundation — variants, retail checkout, SKU/barcode uniqueness, cash drawer | |
-| 5 | Inventory movement ledger | |
-| 6 | Wire `tender()`/refund into a real route; retire the legacy dual-write once proven | |
-| 7 | Row stamping + device identity/pairing | |
-| 8 | Sync engine | |
-| 9 | Plemmo Cloud + Admin | |
-| 10 | Licensing enforcement | |
-| 11 | Payment provider adapters | |
+| 3 (M3) | Verticals + retail foundation — hospitality hook boundary, `ProductVariant`, retail checkout (`in_store` channel, `tender()`'s first live caller), cash-drawer foundation, basic retail reporting | ✅ Done |
+| 4 | Inventory movement ledger, suppliers, purchasing | Next |
+| 5 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
+| 6 | Row stamping + device identity/pairing | |
+| 7 | Sync engine | |
+| 8 | Plemmo Cloud + Admin | |
+| 9 | Licensing enforcement | |
+| 10 | Payment provider adapters | |
+| 11 | Advanced retail: phone-shop/IMEI, repairs, trade-ins, multi-location inventory | |
 
 Phases 0–6 yield a product a single-location merchant can trade on. The pilot
 does not wait for the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md` for the
@@ -537,5 +622,6 @@ detailed design record of Milestone 2.
 - [`PLEMMO_DEVELOPMENT_RULES.md`](./PLEMMO_DEVELOPMENT_RULES.md) — the rules, and the AI-agent red/amber/green zones
 - [`PHASE_2A_SALE_FLOW.md`](./PHASE_2A_SALE_FLOW.md) — the pre-extraction audit `createSale` was built against
 - [`MILESTONE_2_CORE_ENGINE.md`](./MILESTONE_2_CORE_ENGINE.md) — the Core transaction engine design record: `SaleService`, `PaymentService`, adapters, the dual-write strategy, deferred work
+- [`MILESTONE_3_VERTICALS_AND_RETAIL.md`](./MILESTONE_3_VERTICALS_AND_RETAIL.md) — the hospitality boundary and retail foundation design record: the hospitality coupling audit, the hook seam, `ProductVariant`, retail checkout, cash drawer, deferred work
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

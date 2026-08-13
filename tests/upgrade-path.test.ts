@@ -275,6 +275,46 @@ function main() {
   assert.equal(preservedBill.tax_snapshot, null);
   console.log('   ✓ existing products, orders, bills, and legacy tax breakdowns are preserved');
 
+  // PLEMMO v69 — every pre-existing transactional row must come out of the
+  // upgrade carrying a collision-safe uid. This is the assertion that proves
+  // the backfill works against a REAL legacy database rather than only on a
+  // fresh one, which is where a backfill normally breaks.
+  const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+  for (const table of ['orders', 'order_items', 'bills'] as const) {
+    const total = (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+    const missing = (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE uid IS NULL`).get() as { c: number }).c;
+    assert.equal(missing, 0, `every legacy ${table} row was backfilled with a uid (${total} rows)`);
+    const distinct = (db.prepare(`SELECT COUNT(DISTINCT uid) AS c FROM ${table}`).get() as { c: number }).c;
+    assert.equal(distinct, total, `every legacy ${table} uid is distinct`);
+    const rows = db.prepare(`SELECT uid FROM ${table}`).all() as { uid: string }[];
+    for (const row of rows) {
+      assert.ok(ULID_RE.test(row.uid), `${table}.uid ${row.uid} is a well-formed ULID`);
+    }
+  }
+  // Backfill seeds each ULID's timestamp from the row's own created_at, so a
+  // lexicographic sort on uid must reproduce creation order rather than
+  // clustering every legacy row at migration time.
+  const ordered = db.prepare(`SELECT uid, created_at FROM orders ORDER BY created_at ASC, id ASC`).all() as { uid: string }[];
+  const byUid = ordered.map((r) => r.uid).slice().sort();
+  assert.deepEqual(ordered.map((r) => r.uid), byUid,
+    'backfilled uids sort in the same order as created_at');
+  console.log('   ✓ legacy orders/order_items/bills are backfilled with unique, time-ordered ULIDs (v69)');
+
+  // PLEMMO v68 — an upgraded install gets the same single-tenant hierarchy a
+  // fresh one does, seeded from its existing business name.
+  const upgradedOrg = db.prepare('SELECT * FROM organizations').all() as any[];
+  assert.equal(upgradedOrg.length, 1, 'an upgraded install has exactly one organization');
+  const upgradedDevice = db.prepare('SELECT * FROM devices').all() as any[];
+  assert.equal(upgradedDevice.length, 1, 'an upgraded install has exactly one device');
+  assert.equal(
+    (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as any)?.value,
+    upgradedDevice[0].id,
+    'the device pointer matches the seeded device row after upgrade',
+  );
+  assert.equal((db.prepare('PRAGMA foreign_key_check').all() as any[]).length, 0,
+    'the seeded hierarchy introduces no FK violations into a real legacy database');
+  console.log('   ✓ upgraded installs receive the Plemmo org/location/register/device hierarchy (v68)');
+
   // ── The migrated old install must match the ideal (fresh) schema exactly ─
   const report = runHealthCheck();
   assert.equal(report.findings.length, 0,

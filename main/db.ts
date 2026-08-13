@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled';
+import { ulid } from './core/ids';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -3615,6 +3616,214 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       ] as const) {
         insertIfMissing.run(key, value, changedAt);
       }
+    },
+  },
+  {
+    version: 68,
+    name: 'plemmo_organization_hierarchy',
+    up: () => {
+      // PLEMMO CORE — Organization > Location > Register > Device.
+      //
+      // Purely additive: four new tables and a handful of settings pointers.
+      // No existing table, column or row is touched, so this cannot affect a
+      // single existing hospitality workflow.
+      //
+      // Scope decision (docs/PLEMMO_ARCHITECTURE.md § Multi-tenancy): a till's
+      // local database holds exactly ONE organization, ONE location and ONE
+      // register. It is single-tenant by construction — a shop-floor machine
+      // must be physically incapable of holding another merchant's data.
+      // These tables exist so that (a) the hierarchy is real and queryable
+      // rather than implied by loose `settings` keys, and (b) transactional
+      // rows can later be stamped with location/register/device so they
+      // self-identify once a sync engine uploads them.
+      //
+      // Multi-tenancy proper — many organizations in one database — is a CLOUD
+      // concern and is deliberately NOT modelled here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS organizations (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          country TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS locations (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          code TEXT,
+          address TEXT,
+          phone TEXT,
+          timezone TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS registers (
+          id TEXT PRIMARY KEY,
+          location_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          code TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS devices (
+          id TEXT PRIMARY KEY,
+          register_id TEXT,
+          name TEXT,
+          platform TEXT,
+          app_version TEXT,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'retired', 'revoked')),
+          last_seen_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (register_id) REFERENCES registers(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_locations_organization ON locations(organization_id);
+        CREATE INDEX IF NOT EXISTS idx_registers_location ON registers(location_id);
+        CREATE INDEX IF NOT EXISTS idx_devices_register ON devices(register_id);
+      `);
+
+      // Seed the single local hierarchy from whatever the install already
+      // knows about itself. Existing installs keep their business name; a
+      // brand-new install gets a placeholder that first-run setup overwrites.
+      const readSetting = (key: string): string => {
+        const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+        return row?.value ?? '';
+      };
+      const changedAt = now();
+      const businessName = readSetting('business_name') || 'My Business';
+      const country = readSetting('country') || '';
+
+      const organizationId = ulid();
+      const locationId = ulid();
+      const registerId = ulid();
+      const deviceId = ulid();
+
+      db.prepare(`INSERT INTO organizations (id, name, country, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(organizationId, businessName, country || null, changedAt, changedAt);
+      db.prepare(`
+        INSERT INTO locations (id, organization_id, name, code, address, phone, timezone, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 'MAIN', ?, ?, ?, 1, ?, ?)
+      `).run(
+        locationId, organizationId, businessName,
+        readSetting('business_address') || null,
+        readSetting('business_phone') || null,
+        readSetting('timezone') || null,
+        changedAt, changedAt,
+      );
+      db.prepare(`INSERT INTO registers (id, location_id, name, code, is_active, created_at, updated_at) VALUES (?, ?, 'Register 1', 'R1', 1, ?, ?)`)
+        .run(registerId, locationId, changedAt, changedAt);
+      // The device row is this installation's own identity. Pairing,
+      // authorization and licence binding will hang off it in a later phase;
+      // for now it exists so nothing has to invent one later.
+      db.prepare(`INSERT INTO devices (id, register_id, name, platform, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)`)
+        .run(deviceId, registerId, 'This device', process.platform, changedAt, changedAt);
+
+      // Pointers so "which register am I?" is one cheap settings read rather
+      // than a query that has to assume there is exactly one row.
+      const setPointer = db.prepare(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)`);
+      setPointer.run('plemmo_organization_id', organizationId, changedAt);
+      setPointer.run('plemmo_location_id', locationId, changedAt);
+      setPointer.run('plemmo_register_id', registerId, changedAt);
+      setPointer.run('plemmo_device_id', deviceId, changedAt);
+    },
+  },
+  {
+    version: 69,
+    name: 'plemmo_distributed_identifiers',
+    up: () => {
+      // PLEMMO CORE — collision-safe identity for the transactional tables.
+      //
+      // orders/order_items/bills use INTEGER AUTOINCREMENT keys, which two
+      // offline tills would both allocate from 1. Converting the primary keys
+      // outright would break every foreign key, join, report and the KDS
+      // WebSocket contract in one commit; instead each row gains a ULID `uid`
+      // beside its existing key. Existing code keeps using the integer key and
+      // is completely unaffected; new distributed code (sync, refunds against
+      // a sale created on another till, cloud upload) keys on `uid`.
+      //
+      // See docs/PLEMMO_ARCHITECTURE.md § Identifiers for why this is the
+      // chosen strategy and what the eventual promotion to primary key needs.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        if (!getColumns(db, table).includes('uid')) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
+        }
+      }
+
+      // Backfill in creation order, seeding each ULID's timestamp from the
+      // row's own created_at. That makes the generated identifiers sort in
+      // true historical order rather than all clustering at migration time,
+      // so a lexicographic sort on uid matches a sort on created_at.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        const rows = db.prepare(`SELECT id, created_at FROM ${table} WHERE uid IS NULL ORDER BY created_at ASC, id ASC`)
+          .all() as { id: number; created_at: string | null }[];
+        const update = db.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`);
+        for (const row of rows) {
+          const parsed = row.created_at ? Date.parse(String(row.created_at).replace(' ', 'T') + 'Z') : NaN;
+          const seed = Number.isFinite(parsed) ? parsed : Date.now();
+          update.run(ulid(seed), row.id);
+        }
+      }
+
+      // Unique, not just indexed: a duplicate uid would silently merge two
+      // distinct sales during a future sync, which is the exact failure this
+      // column exists to prevent. Partial (WHERE uid IS NOT NULL) so the
+      // constraint cannot block an insert path that has not been taught to
+      // populate uid yet.
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_uid ON orders(uid) WHERE uid IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_uid ON order_items(uid) WHERE uid IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_uid ON bills(uid) WHERE uid IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 70,
+    name: 'plemmo_audit_events',
+    up: () => {
+      // PLEMMO CORE — minimum viable audit trail: who did what, when, where.
+      //
+      // Deliberately one narrow append-only table rather than an audit
+      // framework. A commercial EPOS has to be able to answer "who authorised
+      // this refund", "who changed this price", "who opened the drawer" — and
+      // the existing codebase only has fragments (tax_config_audit, print_logs,
+      // payment_transaction_ref_conflicts) with no common shape.
+      //
+      // Append-only by convention: nothing in Plemmo should ever UPDATE or
+      // DELETE a row here. Retention/rotation is a later decision and is called
+      // out in docs/PLEMMO_ARCHITECTURE.md § Deferred.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS audit_events (
+          id TEXT PRIMARY KEY,
+          occurred_at TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          actor_user_id TEXT,
+          actor_role TEXT,
+          entity_type TEXT,
+          entity_id TEXT,
+          organization_id TEXT,
+          location_id TEXT,
+          register_id TEXT,
+          device_id TEXT,
+          summary TEXT,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_events_occurred ON audit_events(occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_type_occurred ON audit_events(event_type, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_user_id, occurred_at DESC);
+      `);
     },
   },
 ];

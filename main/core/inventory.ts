@@ -50,7 +50,7 @@ export class InventoryError extends Error {
   }
 }
 
-export type MovementType = 'sale' | 'return' | 'adjustment' | 'receipt' | 'opening';
+export type MovementType = 'sale' | 'return' | 'adjustment' | 'receipt' | 'opening' | 'transfer_out' | 'transfer_in';
 
 export interface InventoryMovementRecord {
   id: string;
@@ -339,6 +339,55 @@ export function recordReceipt(input: RecordReceiptInput): InventoryMovementRecor
     });
     syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantity);
     return movement;
+  });
+}
+
+export interface RecordTransferInput extends InventoryKey {
+  quantity: number;
+  direction: 'out' | 'in';
+  referenceType: string;
+  referenceId: string;
+  actorUserId?: string | null;
+}
+
+/**
+ * Records one side (out or in) of a stock transfer (Milestone 6, Part G/I).
+ * `TransferService.completeTransfer()` calls this twice per line — once for
+ * the source location with `direction: 'out'`, once for the destination
+ * with `direction: 'in'` — inside one `withTxn()`, so both sides (and every
+ * other line in the same transfer) commit or roll back together.
+ *
+ * The `'out'` side enforces the same "cannot take stock negative" policy
+ * every other movement type does (Part J: "cannot transfer more than
+ * source stock"); the `'in'` side has no such ceiling.
+ *
+ * Deliberately does **not** call `syncLegacyStockQuantity()`: a transfer
+ * moves stock *between* two locations, and `products.stock_quantity` is a
+ * single, location-less scalar with no correct value to represent "some at
+ * location A, some at location B" — the same reasoning that already
+ * excludes variants from that compatibility write (a product with
+ * variants/multiple locations has no one number that column could hold).
+ */
+export function recordTransfer(input: RecordTransferInput): InventoryMovementRecord {
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new InventoryError('Transfer quantity must be a positive number');
+  }
+  const db = getDatabase();
+  return withTxn(() => {
+    if (input.direction === 'out') {
+      const current = getBalance(input.productId, input.variantId, input.locationId) ?? 0;
+      if (current < input.quantity) {
+        throw new InventoryError(
+          `Insufficient stock at the source location for ${input.variantId ? `variant ${input.variantId}` : `product ${input.productId}`} (available: ${current}, requested: ${input.quantity})`, 400,
+        );
+      }
+    }
+    return recordMovement({
+      db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
+      quantityDelta: input.direction === 'out' ? -input.quantity : input.quantity,
+      movementType: input.direction === 'out' ? 'transfer_out' : 'transfer_in',
+      referenceType: input.referenceType, referenceId: input.referenceId, actorUserId: input.actorUserId,
+    });
   });
 }
 

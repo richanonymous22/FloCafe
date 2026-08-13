@@ -76,6 +76,7 @@ import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
+import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext } from './context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -576,14 +577,17 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     const orderResult = db.prepare(`
       INSERT INTO orders (order_number, uid, table_id, customer_id, user_id, type, guest_count, special_instructions,
         packaging_charge, delivery_charge, packaging_tax_category_id, delivery_tax_category_id,
-        service_charge_tax_category_id, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        service_charge_tax_category_id, status, created_at, updated_at,
+        organization_id, location_id, register_id, device_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
     `).run(
       orderNumber, saleUid, input.tableId || null, input.customerId || null, input.cashierUserId,
       input.channel, input.guestCount || null, input.specialInstructions || null,
       packagingCharge, deliveryCharge,
       chargeContext.packaging_tax_category_id, chargeContext.delivery_tax_category_id,
       chargeContext.service_charge_tax_category_id, now(), now(),
+      getOrganizationContext()?.id ?? null, getLocationContext()?.id ?? null,
+      getRegisterContext()?.id ?? null, getDeviceContext()?.id ?? null,
     );
     const orderId = orderResult.lastInsertRowid;
 

@@ -80,6 +80,7 @@ import { getDatabase, getSettingValue, now, withTxn } from '../db';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
 import { recordReturn as recordInventoryReturn } from './inventory';
+import { getOrganizationContext, getLocationContext } from './context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -324,8 +325,8 @@ function persistPayment(input: PersistPaymentInput): PaymentRecord {
       id, bill_id, order_id, adapter, method, state,
       amount_minor, currency, refunded_minor, tendered_minor, change_minor,
       provider_reference, actor_user_id, notes, metadata,
-      requested_at, settled_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      requested_at, settled_at, created_at, updated_at, organization_id, location_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, input.billId, input.orderId ?? null, t.adapter, t.method, result.state,
     t.amountMinor, t.currency, t.tenderedMinor ?? null,
@@ -333,6 +334,7 @@ function persistPayment(input: PersistPaymentInput): PaymentRecord {
     result.providerReference ?? null, input.actorUserId ?? null, t.notes ?? null,
     t.metadata || result.metadata ? JSON.stringify({ ...t.metadata, ...result.metadata }) : null,
     requestedAt, settledAt, requestedAt, requestedAt,
+    getOrganizationContext()?.id ?? null, getLocationContext()?.id ?? null,
   );
 
   db.prepare(`

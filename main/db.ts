@@ -3992,6 +3992,125 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 73,
+    name: 'plemmo_inventory_ledger',
+    up: () => {
+      // PLEMMO CORE — inventory movement ledger (main/core/inventory.ts). See
+      // docs/MILESTONE_4_INVENTORY.md for the full design record.
+      //
+      // Two brand-new, empty tables — same reasoning as payments/refunds
+      // (v71) and product_variants (v72): ULID directly as the primary key,
+      // no legacy integer key to preserve. `products.stock_quantity` is NOT
+      // touched, dropped, or stopped being written by this migration — it
+      // remains the compatibility path for every product that has no
+      // variant (i.e. every hospitality product, forever, and any retail
+      // product that never grew variants). See § Migration strategy for
+      // exactly when the ledger becomes the source of truth instead.
+      //
+      // `location_id` exists on both tables so a future multi-location
+      // milestone can scope inventory without another migration — it is
+      // always NULL in this milestone (Part O: design for it, don't build
+      // it). The balance table's uniqueness is expressed with COALESCE so a
+      // NULL variant/location still participates in exactly one balance row
+      // per product, not one row per NULL (SQLite treats NULLs as distinct
+      // in a plain UNIQUE index).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_delta REAL NOT NULL,
+          movement_type TEXT NOT NULL
+            CHECK (movement_type IN ('sale', 'return', 'adjustment', 'receipt', 'opening')),
+          reason TEXT,
+          reference_type TEXT,
+          reference_id TEXT,
+          unit_cost REAL,
+          actor_user_id TEXT,
+          balance_after REAL NOT NULL,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_lookup
+          ON inventory_movements(product_id, product_variant_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_reference
+          ON inventory_movements(reference_type, reference_id);
+
+        -- The maintained balance half of "maintained balance + immutable
+        -- ledger" (Part D) — an O(1) read for the till, updated atomically
+        -- alongside every movement insert inside the same transaction.
+        CREATE TABLE IF NOT EXISTS inventory_balances (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          location_id TEXT,
+          quantity REAL NOT NULL DEFAULT 0,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_balances_unique
+          ON inventory_balances(product_id, COALESCE(product_variant_id, ''), COALESCE(location_id, ''));
+      `);
+
+      // Variant-level low-stock threshold, nullable — falls back to the
+      // parent product's threshold when unset. Additive; every existing
+      // variant (there are none yet on an upgraded install, since
+      // product_variants was only introduced in v72) is unaffected.
+      if (!getColumns(db, 'product_variants').includes('low_stock_threshold')) {
+        db.exec('ALTER TABLE product_variants ADD COLUMN low_stock_threshold REAL');
+      }
+
+      // Opening-balance backfill: every product that currently tracks
+      // inventory gets one 'opening' movement carrying its existing
+      // stock_quantity, plus a matching inventory_balances row. This is what
+      // makes the ledger auditable from day one instead of starting with an
+      // unexplained number — the exact question Part J's history view exists
+      // to answer ("where did this starting quantity come from?").
+      //
+      // Deterministic and idempotent: keyed by reference_type='opening_stock_migration'
+      // + reference_id=product.id, so re-running this migration logic (it
+      // never runs twice via the normal MIGRATIONS pipeline, but the
+      // create-ideal-schema path in tests rebuilds databases from scratch
+      // and this guard keeps that safe too) cannot double-insert.
+      const trackedProducts = db.prepare(
+        "SELECT id, stock_quantity FROM products WHERE track_inventory = 1 AND deleted_at IS NULL"
+      ).all() as { id: string; stock_quantity: number }[];
+
+      const existingOpening = db.prepare(
+        "SELECT reference_id FROM inventory_movements WHERE reference_type = 'opening_stock_migration'"
+      ).all() as { reference_id: string }[];
+      const alreadyMigrated = new Set(existingOpening.map((row) => row.reference_id));
+
+      const insertMovement = db.prepare(`
+        INSERT INTO inventory_movements
+          (id, product_id, product_variant_id, quantity_delta, movement_type, reason,
+           reference_type, reference_id, balance_after, created_at)
+        VALUES (?, ?, NULL, ?, 'opening', 'Opening balance migrated from products.stock_quantity', 'opening_stock_migration', ?, ?, ?)
+      `);
+      const insertBalance = db.prepare(`
+        INSERT INTO inventory_balances (id, product_id, product_variant_id, location_id, quantity, updated_at)
+        VALUES (?, ?, NULL, NULL, ?, ?)
+      `);
+
+      const migrationNow = now();
+      for (const product of trackedProducts) {
+        if (alreadyMigrated.has(product.id)) continue;
+        const quantity = product.stock_quantity || 0;
+        insertMovement.run(ulid(), product.id, quantity, quantity, product.id, migrationNow);
+        insertBalance.run(ulid(), product.id, quantity, migrationNow);
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

@@ -1,0 +1,351 @@
+/**
+ * Plemmo Core — InventoryService.
+ *
+ * A "how many are left, and why" ledger for the sellable unit — a bare
+ * product for hospitality, or a specific variant for retail. Every write
+ * goes through `recordMovement()`, which inserts one immutable
+ * `inventory_movements` row and updates the matching `inventory_balances`
+ * row in the same call, so a till read (`getBalance`) is O(1) while the
+ * full history (`getMovementHistory`) stays fully auditable.
+ *
+ * See docs/MILESTONE_4_INVENTORY.md for the full design record: why the
+ * legacy `products.stock_quantity` compatibility write only happens for
+ * variant-less products, why refund/inventory integration is opt-in per
+ * call rather than automatic, and what is deliberately deferred
+ * (multi-location, transfers, stock counts).
+ *
+ * ## Boundaries
+ *
+ *   - No Express types, no React imports.
+ *   - Every public entry point is self-transacting via `withTxn()`.
+ *     better-sqlite3 nests transactions as SAVEPOINTs automatically, so
+ *     calling `recordSale()` from inside `SaleService`'s already-open
+ *     transaction still commits (or rolls back) as one atomic unit with the
+ *     sale itself — no second transaction mechanism, per this milestone's
+ *     Part Q.
+ */
+
+import { getDatabase, now, withTxn } from '../db';
+import { ulid } from './ids';
+
+export class InventoryError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode = 400) {
+    super(message);
+    this.name = 'InventoryError';
+    this.statusCode = statusCode;
+  }
+}
+
+export type MovementType = 'sale' | 'return' | 'adjustment' | 'receipt' | 'opening';
+
+export interface InventoryMovementRecord {
+  id: string;
+  product_id: string;
+  product_variant_id: string | null;
+  quantity_delta: number;
+  movement_type: MovementType;
+  reason: string | null;
+  reference_type: string | null;
+  reference_id: string | null;
+  unit_cost: number | null;
+  actor_user_id: string | null;
+  balance_after: number;
+  created_at: string;
+  [column: string]: unknown;
+}
+
+interface InventoryKey {
+  productId: string;
+  variantId?: string | null;
+  locationId?: string | null;
+}
+
+interface RecordMovementInput extends InventoryKey {
+  db: ReturnType<typeof getDatabase>;
+  quantityDelta: number;
+  movementType: MovementType;
+  reason?: string | null;
+  referenceType?: string | null;
+  referenceId?: string | null;
+  unitCost?: number | null;
+  actorUserId?: string | null;
+}
+
+/**
+ * Reads the current balance for a key (0 if no row exists yet), applies
+ * `quantityDelta`, and either updates or inserts the balance row. Single
+ * threaded/synchronous by construction (better-sqlite3), so this
+ * read-modify-write has no interleaving race within one process — see
+ * docs/MILESTONE_4_INVENTORY.md § Concurrency for what a future multi-till
+ * milestone needs to revisit.
+ */
+function applyBalanceDelta(db: ReturnType<typeof getDatabase>, key: InventoryKey, delta: number): number {
+  const variantId = key.variantId || null;
+  const locationId = key.locationId || null;
+  const existing = db.prepare(`
+    SELECT id, quantity FROM inventory_balances
+    WHERE product_id = ? AND COALESCE(product_variant_id, '') = COALESCE(?, '') AND COALESCE(location_id, '') = COALESCE(?, '')
+  `).get(key.productId, variantId, locationId) as { id: string; quantity: number } | undefined;
+
+  // The first movement ever recorded against a variant-less product that
+  // has no balance row yet (created after the v73 migration ran, or
+  // track_inventory flipped on afterwards) seeds from the legacy
+  // `products.stock_quantity` rather than starting at 0 — see
+  // `getBalance()`'s docstring for why 0 would silently reject a valid
+  // sale against real, pre-existing stock.
+  const seed = existing ? existing.quantity : seedFromLegacyStock(db, key.productId, variantId);
+  const nextQuantity = seed + delta;
+
+  if (existing) {
+    db.prepare('UPDATE inventory_balances SET quantity = ?, updated_at = ? WHERE id = ?')
+      .run(nextQuantity, now(), existing.id);
+  } else {
+    db.prepare(`
+      INSERT INTO inventory_balances (id, product_id, product_variant_id, location_id, quantity, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(ulid(), key.productId, variantId, locationId, nextQuantity, now());
+  }
+
+  return nextQuantity;
+}
+
+/** A variant always starts at 0 (there is no legacy per-variant scalar to seed from). */
+function seedFromLegacyStock(db: ReturnType<typeof getDatabase>, productId: string, variantId: string | null): number {
+  if (variantId) return 0;
+  const product = db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(productId) as { stock_quantity: number } | undefined;
+  return product?.stock_quantity || 0;
+}
+
+function recordMovement(input: RecordMovementInput): InventoryMovementRecord {
+  const { db } = input;
+  const balanceAfter = applyBalanceDelta(db, input, input.quantityDelta);
+  const id = ulid();
+  const createdAt = now();
+
+  db.prepare(`
+    INSERT INTO inventory_movements
+      (id, product_id, product_variant_id, location_id, quantity_delta, movement_type, reason,
+       reference_type, reference_id, unit_cost, actor_user_id, balance_after, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id, input.productId, input.variantId || null, input.locationId || null,
+    input.quantityDelta, input.movementType, input.reason || null,
+    input.referenceType || null, input.referenceId || null,
+    input.unitCost ?? null, input.actorUserId || null, balanceAfter, createdAt,
+  );
+
+  return db.prepare('SELECT * FROM inventory_movements WHERE id = ?').get(id) as InventoryMovementRecord;
+}
+
+/**
+ * Only variant-less sellable units get the legacy `products.stock_quantity`
+ * compatibility write. A product with variants has no single correct number
+ * to put in that column — three variants have three independent balances —
+ * so `stock_quantity` is left alone for them and the ledger becomes the only
+ * source of truth. This is the exact hospitality/retail split Part C asks
+ * for: a hospitality product (never varianted) keeps behaving exactly as it
+ * did before this milestone, reading `products.stock_quantity` anywhere
+ * that still does so (e.g. `GET /products` list, low-stock filters).
+ */
+function syncLegacyStockQuantity(db: ReturnType<typeof getDatabase>, productId: string, variantId: string | null | undefined, delta: number): void {
+  if (variantId) return;
+  db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
+    .run(delta, now(), productId);
+}
+
+export interface RecordSaleInput extends InventoryKey {
+  quantity: number;
+  unitCost?: number | null;
+  referenceType: string;
+  referenceId: string;
+  actorUserId?: string | null;
+}
+
+/**
+ * Records a sale's stock effect. Preserves the exact policy
+ * `SaleService.persistSaleLine()` already enforced before this milestone:
+ * insufficient tracked stock throws (a sale is prevented), untracked
+ * products (`track_inventory = 0`) are not checked or decremented at all —
+ * this function is simply never called for them (see `sale.ts`). Negative
+ * stock is not possible through this path; see docs/MILESTONE_4_INVENTORY.md
+ * § Negative stock policy for the deferred configurable version.
+ */
+export function recordSale(input: RecordSaleInput): InventoryMovementRecord {
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new InventoryError('Sale quantity must be a positive number');
+  }
+  const db = getDatabase();
+  return withTxn(() => {
+    const current = getBalance(input.productId, input.variantId, input.locationId) ?? 0;
+    if (current < input.quantity) {
+      throw new InventoryError(`Insufficient stock for ${input.variantId ? `variant ${input.variantId}` : `product ${input.productId}`}`, 400);
+    }
+    const movement = recordMovement({
+      db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
+      quantityDelta: -input.quantity, movementType: 'sale', unitCost: input.unitCost,
+      referenceType: input.referenceType, referenceId: input.referenceId, actorUserId: input.actorUserId,
+    });
+    syncLegacyStockQuantity(db, input.productId, input.variantId, -input.quantity);
+    return movement;
+  });
+}
+
+export interface RecordReturnInput extends InventoryKey {
+  quantity: number;
+  reason?: string | null;
+  /** The `order_items.id` (or uid) the returned quantity is being credited against — used to cap over-refunding stock. */
+  saleReferenceId: string;
+  referenceType: string;
+  referenceId: string;
+  actorUserId?: string | null;
+}
+
+/**
+ * Records a return's stock effect (Part H). Caps the total quantity ever
+ * returned against one `saleReferenceId` at the quantity that was actually
+ * sold on it — computed as (sale movements' quantity) - (prior return
+ * movements' quantity) for that same reference, rather than trusting the
+ * caller's claimed "amount sold". Throws rather than silently clamping, so
+ * a caller with a real correction to make uses `adjustStock()` instead,
+ * which is explicit about being a manual override.
+ */
+export function recordReturn(input: RecordReturnInput): InventoryMovementRecord {
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
+    throw new InventoryError('Return quantity must be a positive number');
+  }
+  const db = getDatabase();
+  return withTxn(() => {
+    const sold = (db.prepare(`
+      SELECT COALESCE(SUM(-quantity_delta), 0) as total FROM inventory_movements
+      WHERE movement_type = 'sale' AND reference_type = 'order_item' AND reference_id = ?
+    `).get(input.saleReferenceId) as { total: number }).total;
+    const alreadyReturned = (db.prepare(`
+      SELECT COALESCE(SUM(quantity_delta), 0) as total FROM inventory_movements
+      WHERE movement_type = 'return' AND reference_type = 'order_item_return' AND reference_id = ?
+    `).get(input.saleReferenceId) as { total: number }).total;
+
+    const returnable = sold - alreadyReturned;
+    if (input.quantity > returnable) {
+      throw new InventoryError(`Return quantity (${input.quantity}) exceeds the remaining returnable quantity (${returnable})`, 400);
+    }
+
+    const movement = recordMovement({
+      db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
+      quantityDelta: input.quantity, movementType: 'return', reason: input.reason,
+      referenceType: 'order_item_return', referenceId: input.saleReferenceId, actorUserId: input.actorUserId,
+    });
+    syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantity);
+    return movement;
+  });
+}
+
+export interface AdjustStockInput extends InventoryKey {
+  quantityDelta: number;
+  reason: string;
+  movementType?: 'adjustment' | 'receipt';
+  actorUserId?: string | null;
+}
+
+/**
+ * The generic manual-correction entry point (Part I) — found stock, damage,
+ * a count correction, or a goods receipt. `reason` is required: this
+ * function exists specifically so "stock = 27" never happens without an
+ * explanation attached. `movementType` defaults to `'adjustment'`;
+ * `'receipt'` is available for a positive stock increase whose cause is
+ * "goods arrived", reusing this same function rather than a dedicated
+ * receiving workflow (explicitly out of scope this milestone — Part V).
+ */
+export function adjustStock(input: AdjustStockInput): InventoryMovementRecord {
+  if (!Number.isFinite(input.quantityDelta) || input.quantityDelta === 0) {
+    throw new InventoryError('Adjustment quantity must be a non-zero number');
+  }
+  if (!input.reason || !input.reason.trim()) {
+    throw new InventoryError('An adjustment reason is required');
+  }
+  const db = getDatabase();
+  return withTxn(() => {
+    const current = getBalance(input.productId, input.variantId, input.locationId) ?? 0;
+    if (current + input.quantityDelta < 0) {
+      throw new InventoryError(`Adjustment would take stock negative (current: ${current})`, 400);
+    }
+    const movement = recordMovement({
+      db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
+      quantityDelta: input.quantityDelta, movementType: input.movementType || 'adjustment',
+      reason: input.reason, referenceType: 'manual', actorUserId: input.actorUserId,
+    });
+    syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantityDelta);
+    return movement;
+  });
+}
+
+/**
+ * Returns the current balance. When no `inventory_balances` row exists yet
+ * for a variant-less product — one created after the v73 migration ran, or
+ * whose `track_inventory` was switched on afterward — this falls back to
+ * `products.stock_quantity` rather than reporting 0, so a legitimate sale
+ * against real existing stock is never rejected just because the ledger
+ * hasn't recorded a movement for that product yet. A variant with no
+ * balance row genuinely has 0 stock (there is no legacy per-variant number
+ * to fall back to).
+ */
+export function getBalance(productId: string, variantId?: string | null, locationId?: string | null): number | null {
+  const db = getDatabase();
+  const normalizedVariantId = variantId || null;
+  const row = db.prepare(`
+    SELECT quantity FROM inventory_balances
+    WHERE product_id = ? AND COALESCE(product_variant_id, '') = COALESCE(?, '') AND COALESCE(location_id, '') = COALESCE(?, '')
+  `).get(productId, normalizedVariantId, locationId || null) as { quantity: number } | undefined;
+  if (row) return row.quantity;
+  if (normalizedVariantId) return null;
+  const product = db.prepare('SELECT track_inventory, stock_quantity FROM products WHERE id = ?').get(productId) as { track_inventory: number; stock_quantity: number } | undefined;
+  if (!product || !product.track_inventory) return null;
+  return product.stock_quantity || 0;
+}
+
+export function getMovementHistory(productId: string, variantId?: string | null, limit = 100): InventoryMovementRecord[] {
+  const db = getDatabase();
+  if (variantId) {
+    return db.prepare(`
+      SELECT * FROM inventory_movements WHERE product_id = ? AND product_variant_id = ?
+      ORDER BY created_at DESC, id DESC LIMIT ?
+    `).all(productId, variantId, limit) as InventoryMovementRecord[];
+  }
+  return db.prepare(`
+    SELECT * FROM inventory_movements WHERE product_id = ? AND product_variant_id IS NULL
+    ORDER BY created_at DESC, id DESC LIMIT ?
+  `).all(productId, limit) as InventoryMovementRecord[];
+}
+
+export interface LowStockRow {
+  productId: string;
+  productName: string;
+  variantId: string | null;
+  variantName: string | null;
+  quantity: number;
+  threshold: number;
+}
+
+/**
+ * Variant-level threshold (Part K) falls back to the parent product's when
+ * unset, since `product_variants.low_stock_threshold` is nullable and most
+ * variants will never need their own value.
+ */
+export function listLowStock(): LowStockRow[] {
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT
+      p.id as productId, p.name as productName,
+      v.id as variantId, v.name as variantName,
+      COALESCE(b.quantity, 0) as quantity,
+      COALESCE(v.low_stock_threshold, p.low_stock_threshold) as threshold
+    FROM products p
+    LEFT JOIN product_variants v ON v.product_id = p.id AND v.is_active = 1
+    LEFT JOIN inventory_balances b
+      ON b.product_id = p.id AND COALESCE(b.product_variant_id, '') = COALESCE(v.id, '')
+    WHERE p.track_inventory = 1 AND p.deleted_at IS NULL
+  `).all() as LowStockRow[];
+
+  return rows.filter((row) => row.quantity <= row.threshold);
+}
+

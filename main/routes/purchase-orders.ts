@@ -10,6 +10,7 @@ import {
   getPurchaseOrder, listPurchaseOrders,
 } from '../modules/purchasing/purchase-orders';
 import { receiveGoods } from '../modules/purchasing/receiving';
+import { purchasesBySupplier, outstandingPurchaseOrders, recentGoodsReceived, stockReceivedByDate } from '../modules/purchasing/reports';
 
 const router = Router();
 
@@ -32,6 +33,26 @@ router.get('/', requireRole('owner', 'manager'), (req: Request, res: Response) =
   const status = req.query.status ? String(req.query.status) as any : undefined;
   const supplierId = req.query.supplier_id ? String(req.query.supplier_id) : undefined;
   res.json({ purchaseOrders: listPurchaseOrders({ status, supplierId }) });
+});
+
+// Registered before '/:id' — otherwise Express would match "reports" as an :id.
+router.get('/reports/by-supplier', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
+  res.json({ suppliers: purchasesBySupplier() });
+});
+
+router.get('/reports/outstanding', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
+  res.json({ purchaseOrders: outstandingPurchaseOrders() });
+});
+
+router.get('/reports/recent-receipts', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+  const limit = req.query.limit ? Math.min(200, Math.max(1, Number(req.query.limit))) : 50;
+  res.json({ receipts: recentGoodsReceived(limit) });
+});
+
+router.get('/reports/received-by-date', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+  const to = req.query.to ? String(req.query.to) : new Date().toISOString().slice(0, 10);
+  const from = req.query.from ? String(req.query.from) : to;
+  res.json({ days: stockReceivedByDate(from, to) });
 });
 
 router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response) => {

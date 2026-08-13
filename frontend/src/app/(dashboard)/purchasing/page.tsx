@@ -22,6 +22,8 @@ interface PurchaseOrder {
   id: string; status: string; reference_number: string | null; supplier_id: string;
   subtotal: number; tax: number; total: number; items: POItem[];
 }
+interface SupplierTotal { supplierId: string; supplierName: string; orderCount: number; totalValue: number; }
+interface Receipt { id: string; created_at: string; quantity_delta: number; unit_cost: number; product_name: string; supplier_name: string; reference_number: string | null; }
 
 function errorMessage(err: unknown, fallback: string): string {
   const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
@@ -41,15 +43,36 @@ export default function PurchasingPage() {
   const [receiveQty, setReceiveQty] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [supplierTotals, setSupplierTotals] = useState<SupplierTotal[]>([]);
+  const [recentReceipts, setRecentReceipts] = useState<Receipt[]>([]);
 
   async function loadOrders() {
     const res = await api.get('/purchase-orders');
     setOrders(res.data.purchaseOrders);
   }
 
+  async function loadReports() {
+    const [bySupplierRes, receiptsRes] = await Promise.all([
+      api.get('/purchase-orders/reports/by-supplier'),
+      api.get('/purchase-orders/reports/recent-receipts', { params: { limit: 10 } }),
+    ]);
+    setSupplierTotals(bySupplierRes.data.suppliers);
+    setRecentReceipts(receiptsRes.data.receipts);
+  }
+
   useEffect(() => {
-    Promise.all([api.get('/purchase-orders'), api.get('/suppliers', { params: { active: 'true' } })])
-      .then(([poRes, supRes]) => { setOrders(poRes.data.purchaseOrders); setSuppliers(supRes.data.suppliers); })
+    Promise.all([
+      api.get('/purchase-orders'),
+      api.get('/suppliers', { params: { active: 'true' } }),
+      api.get('/purchase-orders/reports/by-supplier'),
+      api.get('/purchase-orders/reports/recent-receipts', { params: { limit: 10 } }),
+    ])
+      .then(([poRes, supRes, bySupplierRes, receiptsRes]) => {
+        setOrders(poRes.data.purchaseOrders);
+        setSuppliers(supRes.data.suppliers);
+        setSupplierTotals(bySupplierRes.data.suppliers);
+        setRecentReceipts(receiptsRes.data.receipts);
+      })
       .catch((err) => setError(errorMessage(err, 'Could not load purchasing data')));
   }, []);
 
@@ -141,6 +164,7 @@ export default function PurchasingPage() {
       setReceiveQty({ ...receiveQty, [item.id]: '' });
       await openOrder(selected.id);
       await loadOrders();
+      await loadReports();
     } catch (err) {
       setError(errorMessage(err, 'Could not receive goods'));
     } finally {
@@ -254,6 +278,32 @@ export default function PurchasingPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">Purchases by supplier</CardTitle></CardHeader>
+        <CardContent className="space-y-1">
+          {supplierTotals.map((row) => (
+            <div key={row.supplierId} className="flex justify-between text-sm border-b pb-1 last:border-0">
+              <span>{row.supplierName} ({row.orderCount})</span>
+              <span>{row.totalValue.toFixed(2)}</span>
+            </div>
+          ))}
+          {supplierTotals.length === 0 && <p className="text-muted-foreground text-sm">No purchases yet.</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">Recent goods received</CardTitle></CardHeader>
+        <CardContent className="space-y-1">
+          {recentReceipts.map((r) => (
+            <div key={r.id} className="flex justify-between text-sm border-b pb-1 last:border-0">
+              <span>{new Date(r.created_at).toLocaleString()} — {r.product_name} from {r.supplier_name}</span>
+              <span>+{r.quantity_delta} @ {r.unit_cost}</span>
+            </div>
+          ))}
+          {recentReceipts.length === 0 && <p className="text-muted-foreground text-sm">No goods received yet.</p>}
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -4223,6 +4223,135 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 76,
+    name: 'plemmo_location_aware_sales_and_payments',
+    up: () => {
+      // PLEMMO CORE — location/device stamping for sales and payments
+      // (Milestone 6, Part D/E). See docs/MILESTONE_6_MULTI_LOCATION.md.
+      //
+      // Additive columns only. `orders` gets the full chain
+      // (organization/location/register/device) because a sale is the
+      // transactional event a future sync/report genuinely needs to place
+      // physically. `payments` gets only organization_id/location_id —
+      // register_id/device_id add no information a payment doesn't already
+      // have via its order_id join, so they are deliberately not stamped
+      // here (Part E: "add only the minimum required fields").
+      for (const [column, ddl] of [
+        ['organization_id', 'ALTER TABLE orders ADD COLUMN organization_id TEXT'],
+        ['location_id', 'ALTER TABLE orders ADD COLUMN location_id TEXT'],
+        ['register_id', 'ALTER TABLE orders ADD COLUMN register_id TEXT'],
+        ['device_id', 'ALTER TABLE orders ADD COLUMN device_id TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'orders').includes(column)) db.exec(ddl);
+      }
+      for (const [column, ddl] of [
+        ['organization_id', 'ALTER TABLE payments ADD COLUMN organization_id TEXT'],
+        ['location_id', 'ALTER TABLE payments ADD COLUMN location_id TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'payments').includes(column)) db.exec(ddl);
+      }
+
+      // Backfill every existing row to this install's one real context —
+      // safe because, exactly as migration v74 established for inventory,
+      // every row that already exists happened at this one location. New
+      // rows are stamped going forward by SaleService/PaymentService
+      // themselves (main/core/context.ts), not by this migration.
+      const organizationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as { value: string } | undefined;
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      const registerId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_register_id'").get() as { value: string } | undefined;
+      const deviceId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as { value: string } | undefined;
+      if (!organizationId?.value) return; // no organization hierarchy yet — nothing to backfill against.
+
+      db.prepare('UPDATE orders SET organization_id = ?, location_id = ?, register_id = ?, device_id = ? WHERE organization_id IS NULL')
+        .run(organizationId.value, locationId?.value ?? null, registerId?.value ?? null, deviceId?.value ?? null);
+      db.prepare('UPDATE payments SET organization_id = ?, location_id = ? WHERE organization_id IS NULL')
+        .run(organizationId.value, locationId?.value ?? null);
+    },
+  },
+  {
+    version: 77,
+    name: 'plemmo_stock_transfers',
+    up: () => {
+      // PLEMMO CORE — stock transfers between locations (Milestone 6, Part
+      // G). Two brand-new, empty tables, ULID PK per the established
+      // pattern. Deliberately simple states — draft → completed/cancelled,
+      // no in_transit — since no existing transfer workflow needs one
+      // (Part G: "if the existing business model does not require an
+      // in_transit workflow... do not overengineer").
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS stock_transfers (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          from_location_id TEXT NOT NULL,
+          to_location_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'completed', 'cancelled')),
+          reference_number TEXT,
+          notes TEXT,
+          created_by TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT,
+          FOREIGN KEY (from_location_id) REFERENCES locations(id),
+          FOREIGN KEY (to_location_id) REFERENCES locations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_from ON stock_transfers(from_location_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_to ON stock_transfers(to_location_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_status ON stock_transfers(status);
+
+        CREATE TABLE IF NOT EXISTS stock_transfer_items (
+          id TEXT PRIMARY KEY,
+          stock_transfer_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity REAL NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (stock_transfer_id) REFERENCES stock_transfers(id),
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer ON stock_transfer_items(stock_transfer_id);
+      `);
+
+      // inventory_movements.movement_type's CHECK constraint (v73) only
+      // covered what Milestone 4 needed (sale/return/adjustment/receipt/
+      // opening) — that migration's own comment flagged this exact
+      // rebuild as the accepted future cost of adding a movement type
+      // later, since SQLite cannot ALTER a CHECK constraint in place.
+      // Table-rebuild, same dance already used by migration v53
+      // (payment_idempotency/order_idempotency scoping): build the new
+      // shape, copy every row across unchanged, drop the old table,
+      // rename the new one into place, recreate its indexes.
+      db.exec(`
+        CREATE TABLE inventory_movements_v2 (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_delta REAL NOT NULL,
+          movement_type TEXT NOT NULL
+            CHECK (movement_type IN ('sale', 'return', 'adjustment', 'receipt', 'opening', 'transfer_out', 'transfer_in')),
+          reason TEXT,
+          reference_type TEXT,
+          reference_id TEXT,
+          unit_cost REAL,
+          actor_user_id TEXT,
+          balance_after REAL NOT NULL,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+        INSERT INTO inventory_movements_v2 SELECT * FROM inventory_movements;
+        DROP TABLE inventory_movements;
+        ALTER TABLE inventory_movements_v2 RENAME TO inventory_movements;
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_lookup ON inventory_movements(product_id, product_variant_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_reference ON inventory_movements(reference_type, reference_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

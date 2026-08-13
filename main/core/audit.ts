@@ -36,6 +36,7 @@
 
 import { getDatabase, now } from '../db';
 import { ulid } from './ids';
+import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext, resetContextCache } from './context';
 
 /**
  * Dotted `entity.action` names. Kept as a plain string union rather than an
@@ -94,33 +95,24 @@ export interface AuditEventInput {
   occurredAt?: string;
 }
 
-/** Cached location/register/device pointers — these do not change at runtime. */
-let placeCache: { organizationId: string | null; locationId: string | null; registerId: string | null; deviceId: string | null } | null = null;
-
 /**
- * Resolve WHERE this event happened from the settings pointers written by
- * migration v68. Cached because it is read on every audit write and cannot
- * change without a restart.
+ * Resolve WHERE this event happened. Delegates to main/core/context.ts
+ * (Milestone 6) — the one place that resolves and caches the
+ * organization/location/register/device pointers written by migration v68 —
+ * rather than keeping a second, parallel cache of the same four ids.
  */
 function resolvePlace() {
-  if (placeCache) return placeCache;
-  const db = getDatabase();
-  const read = (key: string): string | null => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    return row?.value || null;
+  return {
+    organizationId: getOrganizationContext()?.id ?? null,
+    locationId: getLocationContext()?.id ?? null,
+    registerId: getRegisterContext()?.id ?? null,
+    deviceId: getDeviceContext()?.id ?? null,
   };
-  placeCache = {
-    organizationId: read('plemmo_organization_id'),
-    locationId: read('plemmo_location_id'),
-    registerId: read('plemmo_register_id'),
-    deviceId: read('plemmo_device_id'),
-  };
-  return placeCache;
 }
 
 /** Drop the cached pointers. For tests, and for any future re-pairing flow. */
 export function resetAuditPlaceCache(): void {
-  placeCache = null;
+  resetContextCache();
 }
 
 /**

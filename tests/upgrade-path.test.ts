@@ -161,6 +161,15 @@ function main() {
     SELECT location_id FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
   `).get() as any;
   assert.equal(openingBalanceLocation.location_id, seededLocationId.value, 'the v73 opening balance is backfilled to the real location by v74');
+
+  // PLEMMO v76: every pre-existing order/payment (this fixture's own
+  // legacy order predates any location concept entirely) is backfilled to
+  // this install's one real organization/location, exactly like v74 did
+  // for inventory.
+  const seededOrganizationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as any;
+  const legacyOrderLocation = db.prepare("SELECT organization_id, location_id FROM orders WHERE order_number = 'ORD-LEGACY-TAX'").get() as any;
+  assert.equal(legacyOrderLocation.organization_id, seededOrganizationId.value, 'a pre-existing order is backfilled to the real organization by v76');
+  assert.equal(legacyOrderLocation.location_id, seededLocationId.value, 'a pre-existing order is backfilled to the real location by v76');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'support_ticket_outbox'").get(),
     'support ticket outbox exists after upgrade');
   console.log('   ✓ v40/v41 preserves deliberate settings, flips untouched cloud sync, and creates the support outbox');

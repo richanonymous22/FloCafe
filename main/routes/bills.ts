@@ -23,6 +23,7 @@ import {
 } from '../services/tax';
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
+import { recordAppliedPaymentLine } from '../core/payment';
 
 const router = Router();
 
@@ -681,6 +682,27 @@ function applyPaymentBatch(
   }
   if (!bill.customer_id && effectiveCustomerId) db.prepare('UPDATE bills SET customer_id = ?, updated_at = ? WHERE id = ?').run(effectiveCustomerId, changedAt, billId);
   db.prepare(`UPDATE bills SET paid_amount = ?, balance = ?, payment_status = ?, payment_details = ?, paid_at = CASE WHEN ? = 'paid' THEN ? ELSE paid_at END, updated_at = ? WHERE id = ?`).run(newPaidCents / 100, newBalanceCents / 100, paymentStatus, JSON.stringify(allPayments), paymentStatus, paymentStatus === 'paid' ? changedAt : null, changedAt, billId);
+
+  // PLEMMO CORE — additive dual-write into the new payments/payment_events
+  // model, alongside the bills.payment_details JSON write directly above.
+  // See main/core/payment.ts's module docstring for the full reasoning; in
+  // short, this never throws and can never affect the outcome above it.
+  for (const line of prepared) {
+    recordAppliedPaymentLine({
+      billId, orderId: bill.order_id,
+      line: {
+        method: line.payment.method,
+        paymentMethodId: line.payment.payment_method_id ?? null,
+        amountCents: line.amountCents,
+        tenderedCents: line.tenderedCents ?? null,
+        changeCents: line.changeCents ?? null,
+        transactionId: line.payment.transaction_id ?? null,
+        notes: line.payment.notes ?? null,
+      },
+      actorUserId: idempotencyUserId ?? null,
+    });
+  }
+
   let loyaltyPointsEarned = 0;
   if (paymentStatus === 'paid') {
     const unpaidSibling = db.prepare(`SELECT 1 FROM bills WHERE order_id = ? AND id != ? AND payment_status != 'paid' LIMIT 1`).get(bill.order_id, bill.id);

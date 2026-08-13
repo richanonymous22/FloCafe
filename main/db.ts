@@ -3826,6 +3826,97 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 71,
+    name: 'plemmo_payment_persistence',
+    up: () => {
+      // PLEMMO CORE — payment persistence foundation (main/core/payment.ts).
+      //
+      // Today a tender is a JSON array inside bills.payment_details, written
+      // by applyPaymentBatch() in routes/bills.ts. That is not being replaced
+      // in this migration or this milestone — applyPaymentBatch's idempotency
+      // handling, transaction-ref uniqueness and cent allocation are exactly
+      // the kind of load-bearing logic this project's own development rules
+      // say not to touch without a very good reason. See
+      // docs/MILESTONE_2_CORE_ENGINE.md § Payment persistence for the full
+      // dual-write strategy this migration is the schema half of.
+      //
+      // Brand-new tables, so — unlike orders/order_items/bills, which keep
+      // their integer PK and only grew a bolted-on `uid` column in migration
+      // v69 — these use a ULID directly as the primary key. There is no
+      // legacy integer key to preserve here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payments (
+          id TEXT PRIMARY KEY,
+          bill_id INTEGER NOT NULL,
+          order_id INTEGER,
+          adapter TEXT NOT NULL,
+          method TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'requested'
+            CHECK (state IN ('requested', 'authorized', 'captured', 'settled', 'declined', 'cancelled', 'voided', 'refunded', 'failed')),
+          amount_minor INTEGER NOT NULL,
+          currency TEXT NOT NULL,
+          refunded_minor INTEGER NOT NULL DEFAULT 0,
+          tendered_minor INTEGER,
+          change_minor INTEGER,
+          provider_reference TEXT,
+          actor_user_id TEXT,
+          notes TEXT,
+          metadata TEXT,
+          requested_at TEXT NOT NULL,
+          settled_at TEXT,
+          voided_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (bill_id) REFERENCES bills(id),
+          FOREIGN KEY (order_id) REFERENCES orders(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_payments_bill ON payments(bill_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_state ON payments(state);
+
+        -- Append-only. Nothing in Plemmo should ever UPDATE or DELETE a row here.
+        CREATE TABLE IF NOT EXISTS payment_events (
+          id TEXT PRIMARY KEY,
+          payment_id TEXT NOT NULL,
+          from_state TEXT,
+          to_state TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          actor_user_id TEXT,
+          reason TEXT,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (payment_id) REFERENCES payments(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_payment_events_payment ON payment_events(payment_id, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS refunds (
+          id TEXT PRIMARY KEY,
+          payment_id TEXT NOT NULL,
+          bill_id INTEGER NOT NULL,
+          amount_minor INTEGER NOT NULL,
+          currency TEXT NOT NULL,
+          reason TEXT,
+          state TEXT NOT NULL DEFAULT 'requested'
+            CHECK (state IN ('requested', 'settled', 'failed')),
+          actor_user_id TEXT,
+          provider_reference TEXT,
+          metadata TEXT,
+          requested_at TEXT NOT NULL,
+          settled_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (payment_id) REFERENCES payments(id),
+          FOREIGN KEY (bill_id) REFERENCES bills(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_refunds_payment ON refunds(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_refunds_bill ON refunds(bill_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

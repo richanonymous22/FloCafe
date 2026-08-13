@@ -31,6 +31,7 @@ const { createSale, addSaleItems, SaleError, SALE_CHANNELS } = require('../main/
 const { isUlid } = require('../main/core/ids');
 const { listAuditEventsForEntity, resetAuditPlaceCache } = require('../main/core/audit');
 const { now, getDatabase } = require('../main/db');
+const { registerHospitalityHooks } = require('../main/modules/hospitality/hooks');
 
 const USER_ID = 'user-cashier-1';
 
@@ -64,6 +65,12 @@ async function main() {
 
   const db = initTestDb();
   resetAuditPlaceCache();
+  // A real server wires this at start-up via registerRoutes() (see
+  // main/routes/index.ts). This test drives SaleService directly, without an
+  // Express app, so it registers the hook itself — otherwise "a dine-in sale
+  // occupies its table" would silently do nothing, since Core no longer
+  // knows that rule at all (Milestone 3's hospitality boundary).
+  registerHospitalityHooks();
   seed(db);
 
   // ── 1. Create a sale ─────────────────────────────────────────────────────

@@ -74,20 +74,24 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
+import { runOnSaleOpened } from './hooks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /**
  * How the sale reaches the customer.
  *
- * These are the values the inherited `orders.type` column already accepts, and
- * they are NOT widened here — adding a retail `in_store` channel is a Phase 2B
- * change with its own migration and tests. Kept as a union so a typo fails the
- * build rather than reaching the CHECK-less column.
+ * `dine_in`/`takeaway`/`delivery`/`online` are the values the inherited
+ * `orders.type` column already accepted. `in_store` is new in Milestone 3:
+ * a retail counter sale — no table, no kitchen routing, nothing hospitality
+ * about it. The column itself has no CHECK constraint (kept as a union here
+ * so a typo fails the build instead of reaching the database), so this is a
+ * pure type-level widening — no migration needed. See
+ * docs/MILESTONE_3_VERTICALS_AND_RETAIL.md § Retail checkout.
  */
-export type SaleChannel = 'dine_in' | 'takeaway' | 'delivery' | 'online';
+export type SaleChannel = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'in_store';
 
-export const SALE_CHANNELS: readonly SaleChannel[] = ['dine_in', 'takeaway', 'delivery', 'online'];
+export const SALE_CHANNELS: readonly SaleChannel[] = ['dine_in', 'takeaway', 'delivery', 'online', 'in_store'];
 
 export interface SaleAddonInput {
   id?: string;
@@ -104,6 +108,14 @@ export interface SaleLineInput {
   special_instructions?: string | null;
   variant_selection?: unknown;
   modifier_selection?: unknown;
+  /**
+   * A `product_variants` row id (Milestone 3). Optional and vertical-neutral
+   * at this layer: a hospitality line never sets it and behaves exactly as
+   * before. When set, the variant's own price/SKU are used instead of the
+   * parent product's — see `persistSaleLine`. Unrelated to
+   * `variant_selection`, the pre-existing free-form JSON column.
+   */
+  variant_id?: string | null;
 }
 
 /**
@@ -268,7 +280,7 @@ function validateCreateSaleInput(db: ReturnType<typeof getDatabase>, input: Crea
     throw new SaleError('At least one item is required', 400);
   }
   if (!input.channel || !SALE_CHANNELS.includes(input.channel)) {
-    throw new SaleError('Valid type is required (dine_in, takeaway, delivery, online)', 400);
+    throw new SaleError('Valid type is required (dine_in, takeaway, delivery, online, in_store)', 400);
   }
   if (
     input.guestCount !== undefined && input.guestCount !== null
@@ -368,8 +380,29 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
     throw new SaleError(`Insufficient stock for ${product.name}`);
   }
 
-  // Price always comes from the catalogue, never from the request.
-  const unitPrice = parseFloat(product.price);
+  // Milestone 3: a line may name a specific product_variants row instead of
+  // selling the bare product. Stock still tracks on `products.stock_quantity`
+  // (B11 — no per-variant inventory in this milestone), but price and SKU
+  // come from the variant when one is given. A hospitality line never sets
+  // `variant_id`, so `variant` stays null and every line below behaves
+  // exactly as it did before this field existed.
+  let variant: any = null;
+  if (line.variant_id) {
+    variant = db.prepare('SELECT * FROM product_variants WHERE id = ? AND product_id = ?')
+      .get(line.variant_id, line.product_id) as any;
+    if (!variant) {
+      throw new SaleError(`Variant ${line.variant_id} not found for product ${line.product_id}`);
+    }
+    if (!variant.is_active) {
+      throw new SaleError(`Variant ${line.variant_id} is not active`);
+    }
+  }
+
+  // Price always comes from the catalogue, never from the request — the
+  // catalogue is now "the variant if one was named, else the product".
+  const unitPrice = parseFloat(variant ? variant.price : product.price);
+  const unitCost = parseFloat((variant ? variant.cost : product.cost) ?? 0) || 0;
+  const lineSku = variant ? (variant.sku || product.sku) : product.sku;
   const quantity = line.quantity;
   // line.discount_amount is intentionally ignored — discounts are only
   // applied through the dedicated discount endpoints, which enforce
@@ -407,15 +440,16 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
   const insertItemResult = db.prepare(`
     INSERT INTO order_items (order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
       subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total, variant_selection,
-      modifier_selection, special_instructions, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      modifier_selection, special_instructions, status, created_at, updated_at, product_variant_id, unit_cost)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
   `).run(
-    orderId, lineUid, product.id, product.name, product.sku, unitPrice, quantity,
+    orderId, lineUid, product.id, product.name, lineSku, unitPrice, quantity,
     itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
     taxResult.tax_type, itemDiscount, itemTotal,
     JSON.stringify(line.variant_selection || null),
     JSON.stringify(line.modifier_selection || null),
     line.special_instructions || null, itemCreatedAt, itemCreatedAt,
+    variant ? variant.id : null, unitCost,
   );
   insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
 
@@ -573,11 +607,16 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       taxRollup.snapshotJson, total, roundOff, now(), orderId,
     );
 
-    // The single hospitality-specific branch in sale creation. Everything above
-    // is vertical-agnostic, which is what makes one engine viable for both.
-    if (input.tableId && input.channel === 'dine_in') {
-      db.prepare("UPDATE tables SET status = 'occupied', updated_at = ? WHERE id = ?").run(now(), input.tableId);
-    }
+    // Sale creation itself has no hospitality-specific branch anymore: this
+    // used to be a direct `UPDATE tables ...` here. It now goes through the
+    // Core hook registry (main/core/hooks.ts) so this file has zero
+    // knowledge of what "occupying a table" means — that rule lives in
+    // main/modules/hospitality/hooks.ts. Retail's `in_store` channel simply
+    // has nothing registered against it, so nothing runs. Same transaction,
+    // same failure semantics as before (a hook error still rolls back the
+    // sale) — see the hook file's docstring for why this is not wrapped in
+    // try/catch like the audit/payment side-effects are.
+    runOnSaleOpened({ db, orderId, tableId: input.tableId || null, channel: input.channel, now: now() });
 
     const sale = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId)) as SaleRecord;
     const lines = attachEffectiveAddons(

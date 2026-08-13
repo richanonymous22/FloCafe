@@ -41,6 +41,8 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { cloudSync } from '../services/cloud-sync';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
 import QRCode from 'qrcode';
+import { registerHospitalityHooks } from '../modules/hospitality/hooks';
+import { retailRoutes } from './retail';
 
 // "Cloud POS is not registered" (thrown synchronously by cloud-sync.ts's
 // signedFetch, no network call even attempted) means this store was never
@@ -64,8 +66,14 @@ function mobilePairingErrorMessage(error: any): string {
 }
 
 export function registerRoutes(app: Express): void {
+  // Composition root: this is where a vertical module's lifecycle hooks get
+  // wired into Core (main/core/hooks.ts). Idempotent — safe to call every
+  // time an app is built, including once per test file.
+  registerHospitalityHooks();
+
   // Auth routes
   app.use('/api/auth', authRoutes);
+  app.use('/api/retail', retailRoutes);
 
   // Resource routes
   app.use('/api/categories', categoryRoutes);

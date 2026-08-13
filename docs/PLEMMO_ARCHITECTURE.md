@@ -102,10 +102,10 @@ TypeScript with no Express dependency.
 | `notes-validation.ts` | ✅ Built (2A) | Order/line note length rules (moved out of `routes/`) |
 | `ids.ts` | ✅ Built | ULID generation for distributed entities |
 | `audit.ts` | ✅ Built | Append-only who/what/when/where event log |
-| `sale.ts` (`SaleService`) | ✅ Built (2A) | The shared transaction spine. `createSale` only so far. |
-| `PaymentService` | ⬜ Phase 2 | Tender state machine + adapter seam |
-| `InventoryService` | ⬜ Phase 3 | Movement ledger |
-| `PermissionService` | ⬜ Phase 2 | Roles → granular permissions |
+| `sale.ts` (`SaleService`) | ✅ Built (M2) | `createSale`, `addSaleItems`, shared `persistSaleLine` engine |
+| `payment.ts` (`PaymentService`) | ✅ Built (M2) | Adapter registry, `tender`/`voidPayment`/`refundPayment`, legacy dual-write |
+| `InventoryService` | ⬜ Later | Movement ledger |
+| `PermissionService` | ⬜ Later | Roles → granular permissions |
 
 ### Entity status
 
@@ -125,11 +125,11 @@ TypeScript with no Express dependency.
 | Supplier | ❌ | — | Retail module |
 | Inventory | ⚠️ Weak | `products.stock_quantity` | Mutable scalar, 4 write sites, no history |
 | InventoryMovement | ❌ | — | The foundational retail gap |
-| Sale | ✅ | `orders` | The convergent spine; now has `uid` |
-| SaleItem | ✅ | `order_items` | Now has `uid` |
-| Bill | ✅ | `bills` | Payable snapshot; now has `uid` |
-| Payment | ⚠️ JSON | `bills.payment_details` | Needs promoting to rows |
-| Refund | ❌ | — | Only pre-payment void exists |
+| Sale | ✅ | `orders` | The convergent spine; now has `uid`; `createSale`/`addSaleItems` built |
+| SaleItem | ✅ | `order_items` | Now has `uid`; inserted via the shared `persistSaleLine` engine |
+| Bill | ✅ | `bills` | Payable snapshot; now has `uid`; generation/split not yet in Core |
+| Payment | ✅ New (M2) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; legacy `bills.payment_details` JSON still authoritative, dual-written into the new tables — see §8 |
+| Refund | ✅ New (M2) | `refunds` (v71) | Foundation only — `refundPayment()` in `payment.ts`, no inventory return yet |
 | Tax/VAT | ✅ Strong | `services/tax-engine.ts` | Decimal, pack-driven; **no GB pack yet** |
 | Discount | ⚠️ Fragmented | 3 implementations | Order, line, bill |
 | CashSession | ❌ | — | No shift or drawer accounting |
@@ -222,6 +222,14 @@ should own, and it preserves the licence-clean dependency tree.
 Existing rows were backfilled with each ULID's timestamp seeded from the row's
 own `created_at`, so generated ids sort in true historical order.
 
+`createSale` and `addSaleItems` (both in `sale.ts`) now populate `uid` on
+every sale and sale line they create — the migration made the column
+possible, Milestone 2 made it actually happen on the write path. `payments`,
+`payment_events` and `refunds` (migration v71) are brand-new tables with no
+legacy integer key to preserve, so they use a ULID **directly as the primary
+key**, the same pattern `organizations`/`locations`/`registers`/`devices`/
+`audit_events` already established in Phase 1.
+
 ### Why `uid` beside the key, not a primary-key conversion
 
 Converting `orders.id` outright would break every foreign key, join, report and
@@ -231,8 +239,9 @@ untouched.
 
 | Entity | Strategy |
 |---|---|
-| Sale, SaleItem, Bill | ✅ ULID `uid` beside integer PK |
-| Payment, Refund, InventoryMovement, CashSession | ULID PK when built |
+| Sale, SaleItem, Bill | ✅ ULID `uid` beside integer PK, now populated on write |
+| Payment, Refund | ✅ ULID PK directly (new tables, M2) |
+| InventoryMovement, CashSession | ULID PK when built |
 | Organization, Location, Register, Device | ✅ ULID PK |
 | AuditEvent | ✅ ULID PK |
 | Product, Category, Customer, User | Already TEXT UUID — standardise on ULID going forward |
@@ -327,38 +336,81 @@ scalar cannot converge.
 
 ## 8. Payments
 
-### Today
+### Two payment systems exist side by side, on purpose
 
-Tenders are a JSON array inside `bills.payment_details`. All tender is assumed
-already settled: no authorization state, no capture, no void, no provider
-identity. `payment_methods` (v58) holds configurable *names* only.
+**The legacy path is still the only one anything real uses.** Tenders are a
+JSON array inside `bills.payment_details`, applied by `applyPaymentBatch()` in
+`main/routes/bills.ts` — user-scoped idempotency (`payment_idempotency`),
+transaction-reference uniqueness (`payment_transaction_refs`), integer-cent
+allocation across split tenders, wallet balance checks, cashback. This is
+genuinely good, load-bearing code and **it was not rewritten**.
 
-Three inherited pieces are genuinely good and must be preserved:
-`payment_idempotency` (user-scoped key + request hash), `payment_transaction_refs`
-(uniqueness on `(method, transaction_id)`), and `applyPaymentBatch()`'s
-integer-cent, single-transaction application.
-
-### ⚠️ Deferred: target design (no providers to be implemented yet)
+**A new persistence and adapter layer exists alongside it** (`main/core/payment.ts`,
+migration v71 — `payments` / `payment_events` / `refunds`), built to the target
+design below, and connected to the legacy path by an **additive dual-write**:
+`applyPaymentBatch()` gained one extra call, right after it has already decided
+each tender's final amount, that mirrors the outcome into the new tables. It
+inherits idempotency for free (both of `applyPaymentBatch`'s own replay paths
+return before that call is reached) and can never break a real payment (wrapped,
+logged, swallowed on failure — proven by a test that removes the `payments`
+table out from under a live HTTP payment and confirms the payment still
+succeeds).
 
 ```
-SaleService.tender()
-      ▼
-PaymentService (Core) — state machine + idempotency + persistence
-      requested → authorized → captured → settled
-               ↘ declined  ↘ voided  ↘ refunded
-      ▼
-PaymentAdapter (interface: authorize/capture/void/refund/status)
-   ├── CashAdapter          (in-process, settles instantly)
-   ├── ManualCardAdapter    (record a reference; no integration)
-   └── Teya / Worldpay / SumUp / Shift4 / Elavon — later, one at a time
+SaleService
+     │
+PaymentService  (main/core/payment.ts) — state machine + idempotency + persistence
+     │  tender() — the standalone entry point, NOT wired to any route yet
+     │  voidPayment() / refundPayment() — the Part 8 foundation
+     ▼
+PaymentAdapter (interface: capture)
+   ├── CashAdapter          in-process, settles instantly            ✅ built
+   ├── WalletAdapter        internal loyalty debit, settles instantly ✅ built
+   ├── ManualCardAdapter    cashier attestation, unverified → captured, not settled  ✅ built
+   └── Teya / Worldpay / SumUp / Shift4 / Elavon — later, one at a time, unbuilt
+
+applyPaymentBatch() (main/routes/bills.ts, UNCHANGED)
+   │
+   └─▶ recordAppliedPaymentLine()  — additive dual-write, never throws
 ```
 
-Prerequisites, in order: promote tenders JSON → `payments` table; introduce the
-state machine; extract payment logic out of the Express handler; **ship refunds
-before any provider** (every provider certifies refund/void).
+**The rule this whole layer exists to enforce:** "recorded in the POS database"
+must not automatically mean "the external card payment is definitely settled."
+`ManualCardAdapter` landing on `captured` rather than `settled` is the concrete
+expression of that — a future real provider adapter is what gets to say
+`settled`, once it has actually heard back from a processor.
 
-Migrate by **dual-write then cut over**. Never rewrite `applyPaymentBatch()` in
-place.
+### Why the legacy path was not replaced
+
+`tender()` deliberately does no split-tender allocation and no wallet-balance
+checking — one tender for one amount, which is what an adapter-based flow
+naturally is. Wiring it into `POST /bills/:id/payment(s)` in place of
+`applyPaymentBatch` would mean re-implementing that allocation and validation
+logic, which is exactly the "don't rewrite blindly" risk this milestone's own
+rules exist to prevent. `tender()` is real, tested, and ready for a *future*
+caller — a retail checkout, or a later, deliberate migration of the bills.ts
+routes — not for this one.
+
+One known compromise, recorded rather than hidden: the dual-write stores
+whatever `applyPaymentBatch` computed, and that function computes amounts as
+integer *cents* unconditionally (`paymentAmountCents()`, `* 100` regardless of
+currency exponent) — a real latent bug for JPY/KWD-style currencies, and
+exactly the class of bug `main/core/money.ts` exists to fix. Fixing it means
+touching `applyPaymentBatch`, so for now the new `payments` table is a
+truthful mirror of the old one, bug included. `tender()` itself is
+exponent-correct from day one.
+
+### Refunds and voids — the Part 8 foundation, not a RefundService
+
+`voidPayment()` and `refundPayment()` live in `payment.ts` because they operate
+directly on `payments`. Void is reachable only from `requested`/`captured` —
+a settled cash payment is already in the drawer, so that gets refunded, not
+voided. Refund supports partial amounts via a running `refunded_minor` total
+on the payment row, moving to `refunded` only once fully covered. **Neither
+touches `products.stock_quantity` or any other inventory state** — that
+boundary is deliberate, so a later `RefundService → InventoryService →
+InventoryMovement` chain can compose cleanly without this layer having already
+made an assumption about how stock returns work.
 
 ---
 
@@ -463,12 +515,11 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 |---|---|---|
 | 0 | Safety & identity — GPL removal, branding, third-party disconnection | ✅ Done |
 | 1 | Foundations — money, identifiers, org hierarchy, audit | ✅ Done |
-| 2A | Domain seam — `SaleService.createSale`, `POST /api/orders` migrated; no behaviour change | ✅ Done |
-| 2B | Extend the seam — `POST /orders/:id/items`, then `PaymentService` | Next |
-| 3 | Hospitality boundary — namespace + flag; hooks replace inline `if type === 'dine_in'` | |
+| 2 (M2) | Core transaction engine — `SaleService` (`createSale`, `addSaleItems`, shared line engine), `PaymentService` (adapters, persistence, dual-write, refund/void foundation) | ✅ Done |
+| 3 | Hospitality boundary — namespace + flag; hooks replace inline `if type === 'dine_in'` | Next |
 | 4 | Retail foundation — variants, retail checkout, SKU/barcode uniqueness, cash drawer | |
 | 5 | Inventory movement ledger | |
-| 6 | Refunds/returns + payment lifecycle | |
+| 6 | Wire `tender()`/refund into a real route; retire the legacy dual-write once proven | |
 | 7 | Row stamping + device identity/pairing | |
 | 8 | Sync engine | |
 | 9 | Plemmo Cloud + Admin | |
@@ -476,12 +527,15 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 11 | Payment provider adapters | |
 
 Phases 0–6 yield a product a single-location merchant can trade on. The pilot
-does not wait for the cloud.
+does not wait for the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md` for the
+detailed design record of Milestone 2.
 
 ---
 
 ## See also
 
 - [`PLEMMO_DEVELOPMENT_RULES.md`](./PLEMMO_DEVELOPMENT_RULES.md) — the rules, and the AI-agent red/amber/green zones
+- [`PHASE_2A_SALE_FLOW.md`](./PHASE_2A_SALE_FLOW.md) — the pre-extraction audit `createSale` was built against
+- [`MILESTONE_2_CORE_ENGINE.md`](./MILESTONE_2_CORE_ENGINE.md) — the Core transaction engine design record: `SaleService`, `PaymentService`, adapters, the dual-write strategy, deferred work
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

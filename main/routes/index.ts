@@ -43,6 +43,7 @@ import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
 import QRCode from 'qrcode';
 import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
+import { inventoryRoutes } from './inventory';
 
 // "Cloud POS is not registered" (thrown synchronously by cloud-sync.ts's
 // signedFetch, no network call even attempted) means this store was never
@@ -74,6 +75,7 @@ export function registerRoutes(app: Express): void {
   // Auth routes
   app.use('/api/auth', authRoutes);
   app.use('/api/retail', retailRoutes);
+  app.use('/api/inventory', inventoryRoutes);
 
   // Resource routes
   app.use('/api/categories', categoryRoutes);

@@ -26,6 +26,7 @@ const {
 const { orderRoutes } = require('../main/routes/orders');
 const { billRoutes } = require('../main/routes/bills');
 const { retailRoutes } = require('../main/routes/retail');
+const { inventoryRoutes } = require('../main/routes/inventory');
 const { tableRoutes } = require('../main/routes/tables');
 const { registerHospitalityHooks } = require('../main/modules/hospitality/hooks');
 const { formatReceipt } = require('../main/printers/thermal');
@@ -53,7 +54,7 @@ async function main() {
   seedCategory(db, 'cat-hosp', 'Hospitality Menu');
   seedProduct(db, 'prod-coffee', 'cat-hosp', 'Coffee', 3);
 
-  const app = createApp({ '/api/orders': orderRoutes, '/api/bills': billRoutes, '/api/retail': retailRoutes, '/api/tables': tableRoutes });
+  const app = createApp({ '/api/orders': orderRoutes, '/api/bills': billRoutes, '/api/retail': retailRoutes, '/api/tables': tableRoutes, '/api/inventory': inventoryRoutes });
   const { baseUrl, server } = await startServer(app);
 
   try {
@@ -86,6 +87,15 @@ async function main() {
     const byProductBarcode = await api(baseUrl, '/api/retail/lookup?code=MUG-000-1', { headers: authHeader });
     assertEqual(byProductBarcode.status, 200, 'a bare product barcode also resolves');
     assertEqual(byProductBarcode.data.kind, 'product', 'with no variant attached');
+
+    console.log('\nSeed initial variant stock (Milestone 4: a variant starts at 0, independent of the parent product)');
+    const seedStock = await api(baseUrl, '/api/inventory/adjust', {
+      method: 'POST',
+      body: { product_id: 'prod-shirt', variant_id: variantId, quantity_delta: 10, reason: 'Initial stock count' },
+      headers: authHeader,
+    });
+    assertEqual(seedStock.status, 201, 'the variant can be given opening stock');
+    assertEqual(seedStock.data.movement.movement_type, 'adjustment', 'recorded as an adjustment movement');
 
     console.log('\n6-7-8. Add to cart, tableless sale, cash payment');
     const cashCheckout = await api(baseUrl, '/api/retail/checkout', {

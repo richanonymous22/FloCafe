@@ -75,6 +75,7 @@ import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
+import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -337,6 +338,8 @@ interface PersistLineContext {
   orderId: number | bigint | string;
   tenantInfo: TenantContext;
   customer: any;
+  /** The authenticated cashier, threaded through for inventory movement attribution (Milestone 4). */
+  actorUserId?: string | null;
 }
 
 /** What `persistSaleLine` reports back, so both callers can aggregate however they need to. */
@@ -376,16 +379,11 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
     throw new SaleError(`Product ${line.product_id} not found`);
   }
 
-  if (product.track_inventory && product.stock_quantity < line.quantity) {
-    throw new SaleError(`Insufficient stock for ${product.name}`);
-  }
-
   // Milestone 3: a line may name a specific product_variants row instead of
-  // selling the bare product. Stock still tracks on `products.stock_quantity`
-  // (B11 — no per-variant inventory in this milestone), but price and SKU
-  // come from the variant when one is given. A hospitality line never sets
-  // `variant_id`, so `variant` stays null and every line below behaves
-  // exactly as it did before this field existed.
+  // selling the bare product. Price and SKU come from the variant when one
+  // is given. A hospitality line never sets `variant_id`, so `variant`
+  // stays null and every line below behaves exactly as it did before this
+  // field existed.
   let variant: any = null;
   if (line.variant_id) {
     variant = db.prepare('SELECT * FROM product_variants WHERE id = ? AND product_id = ?')
@@ -395,6 +393,24 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
     }
     if (!variant.is_active) {
       throw new SaleError(`Variant ${line.variant_id} is not active`);
+    }
+  }
+
+  // Milestone 4: stock now lives in the inventory ledger, not a direct read
+  // of `products.stock_quantity` — variant-aware, so Variant A's stock
+  // cannot be confused with Variant B's or the bare product's. This
+  // pre-check is a deliberate, exact-message duplicate of what
+  // `InventoryService.recordSale()` itself would reject with; kept here so
+  // the bare-product, no-variant case throws byte-for-byte the same
+  // `SaleError` (message, no `statusCode` — the inherited 500 mapping) it
+  // always has, rather than the differently-worded error `recordSale()`
+  // throws internally. See docs/MILESTONE_4_INVENTORY.md § Sale integration.
+  if (product.track_inventory) {
+    const available = variant
+      ? (getInventoryBalance(product.id, variant.id) ?? 0)
+      : (getInventoryBalance(product.id) ?? product.stock_quantity ?? 0);
+    if (available < line.quantity) {
+      throw new SaleError(`Insufficient stock for ${product.name}`);
     }
   }
 
@@ -454,8 +470,21 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
   insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
 
   if (product.track_inventory) {
-    db.prepare('UPDATE products SET stock_quantity = stock_quantity - ?, updated_at = ? WHERE id = ?')
-      .run(quantity, now(), product.id);
+    // The pre-check above already validated availability; this call cannot
+    // realistically re-reject (single-threaded, same transaction, nothing
+    // changed in between) but its own guard stays as a defensive backstop.
+    // reference_id ties this movement to the exact order_item row, which is
+    // what lets a later refund (main/core/payment.ts's recordReturn call)
+    // cap itself at "no more than this line actually sold".
+    recordInventorySale({
+      productId: product.id,
+      variantId: variant ? variant.id : null,
+      quantity,
+      unitCost,
+      referenceType: 'order_item',
+      referenceId: String(insertItemResult.lastInsertRowid),
+      actorUserId: ctx.actorUserId || null,
+    });
   }
 
   return {
@@ -572,7 +601,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     // sale has nothing to aggregate but the lines just inserted, so summing
     // as we go is correct and matches the original inline behaviour exactly.
     for (const line of input.lines) {
-      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer }, line);
+      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId }, line);
       totalTax += persisted.taxAmount;
       if (persisted.taxType !== 'inclusive') {
         exclusiveTax += persisted.taxAmount;
@@ -780,7 +809,7 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
 
     // Shared line engine — see the module docstring and persistSaleLine above.
     for (const line of input.lines) {
-      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer }, line);
+      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer, actorUserId: input.actorUserId }, line);
     }
 
     // Re-derive totals from every ACTIVE line on the sale, not just the ones

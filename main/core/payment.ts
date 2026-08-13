@@ -79,6 +79,7 @@
 import { getDatabase, getSettingValue, now, withTxn } from '../db';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
+import { recordReturn as recordInventoryReturn } from './inventory';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -483,6 +484,12 @@ export function voidPayment(input: VoidPaymentInput): VoidPaymentResult {
 
 // ─── refundPayment() ────────────────────────────────────────────────────────
 
+export interface RefundPaymentItemInput {
+  /** An `order_items.id` — the specific line the returned quantity is credited against. */
+  orderItemId: number | string;
+  quantity: number;
+}
+
 export interface RefundPaymentInput {
   paymentId: string;
   /** Already an integer number of minor units. Must not exceed the amount still unrefunded. */
@@ -490,6 +497,17 @@ export interface RefundPaymentInput {
   reason?: string | null;
   actorUserId?: string | null;
   idempotency?: PaymentIdempotency | null;
+  /**
+   * Milestone 4: optional per-line quantities being returned. Omit for a
+   * money-only refund with no stock effect — the exact behavior this
+   * function always had before this milestone. When provided, each line's
+   * quantity is credited back to inventory via
+   * `InventoryService.recordReturn()`, which itself caps the total ever
+   * returned against one order_item at the quantity that line actually
+   * sold — see main/core/inventory.ts and
+   * docs/MILESTONE_4_INVENTORY.md § Refund integration.
+   */
+  items?: RefundPaymentItemInput[] | null;
 }
 
 export interface RefundPaymentResult {
@@ -501,12 +519,14 @@ export interface RefundPaymentResult {
 /**
  * Refund all or part of a settled or captured payment.
  *
- * This is the CORE foundation only — the boundary Part 8 asks for so that a
- * later, dedicated RefundService can compose cleanly with an eventual
- * InventoryService: `RefundService -> InventoryService -> InventoryMovement`.
- * Nothing here touches `products.stock_quantity` or any other inventory
- * state; a refund here is purely a financial record against a payment. Stock
- * return, if any, is the caller's concern until that later milestone.
+ * This is the CORE foundation the Milestone 2 doc's Part 8 asked for so a
+ * later, dedicated RefundService can compose cleanly with InventoryService:
+ * `RefundService -> InventoryService -> InventoryMovement`. As of Milestone
+ * 4, a caller that knows which lines/quantities are being returned can pass
+ * `items` and get that stock effect atomically with the financial refund;
+ * a caller that doesn't (or a pure money adjustment with no matching stock
+ * movement) omits it and nothing about inventory changes — same as before
+ * this milestone.
  */
 export function refundPayment(input: RefundPaymentInput): RefundPaymentResult {
   const db = getDatabase();
@@ -536,6 +556,26 @@ export function refundPayment(input: RefundPaymentInput): RefundPaymentResult {
       INSERT INTO refunds (id, payment_id, bill_id, amount_minor, currency, reason, state, actor_user_id, requested_at, settled_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)
     `).run(refundId, input.paymentId, payment.bill_id, input.amountMinor, payment.currency, input.reason ?? null, input.actorUserId ?? null, changedAt, changedAt, changedAt, changedAt);
+
+    if (input.items && input.items.length > 0) {
+      for (const item of input.items) {
+        const orderItem = db.prepare('SELECT product_id, product_variant_id FROM order_items WHERE id = ?')
+          .get(item.orderItemId) as { product_id: string; product_variant_id: string | null } | undefined;
+        if (!orderItem) {
+          throw new PaymentError(`Order item ${item.orderItemId} not found`, 404);
+        }
+        recordInventoryReturn({
+          productId: orderItem.product_id,
+          variantId: orderItem.product_variant_id,
+          quantity: item.quantity,
+          reason: input.reason,
+          saleReferenceId: String(item.orderItemId),
+          referenceType: 'payment_refund',
+          referenceId: refundId,
+          actorUserId: input.actorUserId,
+        });
+      }
+    }
 
     const newRefundedMinor = payment.refunded_minor + input.amountMinor;
     const fullyRefunded = newRefundedMinor >= payment.amount_minor;

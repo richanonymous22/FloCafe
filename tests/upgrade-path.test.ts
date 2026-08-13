@@ -148,6 +148,19 @@ function main() {
     SELECT quantity FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
   `).get() as any;
   assert.equal(openingBalance.quantity, 42, 'the balance table starts at the same legacy quantity');
+
+  // PLEMMO v74: the location-aware inventory backfill stamps this
+  // v73-created (location_id-less) balance/movement with the install's one
+  // real location, seeded by v68, rather than leaving them permanently
+  // orphaned from every location-aware write this milestone's
+  // InventoryService now makes.
+  const seededLocationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as any;
+  assert.ok(!!seededLocationId?.value, 'v68 seeded a real location for this install');
+  assert.equal(openingMovement.location_id, seededLocationId.value, 'the v73 opening movement is backfilled to the real location by v74');
+  const openingBalanceLocation = db.prepare(`
+    SELECT location_id FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
+  `).get() as any;
+  assert.equal(openingBalanceLocation.location_id, seededLocationId.value, 'the v73 opening balance is backfilled to the real location by v74');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'support_ticket_outbox'").get(),
     'support ticket outbox exists after upgrade');
   console.log('   ✓ v40/v41 preserves deliberate settings, flips untouched cloud sync, and creates the support outbox');

@@ -4111,6 +4111,118 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 74,
+    name: 'plemmo_location_aware_inventory',
+    up: () => {
+      // PLEMMO CORE — location-aware inventory (Milestone 5, Part B). See
+      // docs/MILESTONE_5_PURCHASING_LOCATIONS.md § Location model.
+      //
+      // inventory_balances/inventory_movements already have a `location_id`
+      // column (added in v73, always NULL until now — Part O of Milestone 4
+      // deliberately designed for this without populating it). This
+      // migration does not add a column; it backfills every existing NULL
+      // row to this install's one real location, seeded by v68
+      // (`plemmo_organization_hierarchy`) and pointed to by the
+      // `plemmo_location_id` setting. A fresh install has no inventory rows
+      // yet, so this is a no-op there — the first real write already
+      // resolves its location (see main/core/location.ts).
+      //
+      // This backfill is not cosmetic: InventoryService starts resolving a
+      // caller's unspecified location to this same real location id from
+      // this migration onward. Without backfilling the existing NULL rows
+      // first, the very next sale against an already-tracked product would
+      // create a *second*, disjoint balance row (real location_id) instead
+      // of updating the existing one (NULL location_id) — silently
+      // duplicating stock. Backfilling first is what keeps them the same
+      // row.
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      if (!locationId?.value) return; // no organization hierarchy yet — nothing to backfill against.
+
+      db.prepare('UPDATE inventory_balances SET location_id = ?, updated_at = ? WHERE location_id IS NULL')
+        .run(locationId.value, now());
+      db.prepare('UPDATE inventory_movements SET location_id = ? WHERE location_id IS NULL')
+        .run(locationId.value);
+    },
+  },
+  {
+    version: 75,
+    name: 'plemmo_purchasing',
+    up: () => {
+      // PLEMMO CORE — Supplier → PurchaseOrder → Goods Receiving foundation
+      // (Milestone 5). Three brand-new, empty tables — same reasoning as
+      // every other Plemmo Core table since v71: ULID directly as the
+      // primary key, no legacy integer key to preserve. Receiving itself
+      // has no separate table: a receipt is an `inventory_movements` row
+      // (movement_type = 'receipt', reference_type = 'purchase_order_item')
+      // plus an increment of the item's own `quantity_received` — the
+      // ledger already IS the receiving history (see
+      // docs/MILESTONE_5_PURCHASING_LOCATIONS.md § Receiving architecture).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS suppliers (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          name TEXT NOT NULL,
+          business_name TEXT,
+          contact_person TEXT,
+          phone TEXT,
+          email TEXT,
+          address TEXT,
+          notes TEXT,
+          tax_registration_number TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_suppliers_organization ON suppliers(organization_id);
+
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          supplier_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK (status IN ('draft', 'ordered', 'partially_received', 'received', 'cancelled')),
+          reference_number TEXT,
+          order_date TEXT,
+          expected_date TEXT,
+          notes TEXT,
+          subtotal REAL NOT NULL DEFAULT 0,
+          tax REAL NOT NULL DEFAULT 0,
+          total REAL NOT NULL DEFAULT 0,
+          created_by TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id),
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_location ON purchase_orders(location_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+
+        CREATE TABLE IF NOT EXISTS purchase_order_items (
+          id TEXT PRIMARY KEY,
+          purchase_order_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_ordered REAL NOT NULL,
+          unit_cost REAL NOT NULL,
+          tax REAL NOT NULL DEFAULT 0,
+          line_total REAL NOT NULL,
+          quantity_received REAL NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_order_items_variant ON purchase_order_items(product_id, product_variant_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

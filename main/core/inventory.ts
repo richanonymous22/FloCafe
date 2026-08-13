@@ -27,6 +27,19 @@
 
 import { getDatabase, now, withTxn } from '../db';
 import { ulid } from './ids';
+import { getCurrentLocationId } from './location';
+
+/**
+ * An explicit `locationId` always wins (a future multi-location caller will
+ * pass one); an unspecified one resolves to this install's single physical
+ * location (Milestone 5, Part B) rather than staying `null` — `null` would
+ * mean "not stamped", which is exactly the pre-Milestone-5 state migration
+ * v74 backfills away from. See docs/MILESTONE_5_PURCHASING_LOCATIONS.md
+ * § Location model.
+ */
+function resolveLocationId(explicit: string | null | undefined): string | null {
+  return explicit || getCurrentLocationId();
+}
 
 export class InventoryError extends Error {
   statusCode: number;
@@ -83,7 +96,7 @@ interface RecordMovementInput extends InventoryKey {
  */
 function applyBalanceDelta(db: ReturnType<typeof getDatabase>, key: InventoryKey, delta: number): number {
   const variantId = key.variantId || null;
-  const locationId = key.locationId || null;
+  const locationId = resolveLocationId(key.locationId);
   const existing = db.prepare(`
     SELECT id, quantity FROM inventory_balances
     WHERE product_id = ? AND COALESCE(product_variant_id, '') = COALESCE(?, '') AND COALESCE(location_id, '') = COALESCE(?, '')
@@ -130,7 +143,7 @@ function recordMovement(input: RecordMovementInput): InventoryMovementRecord {
        reference_type, reference_id, unit_cost, actor_user_id, balance_after, metadata, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    id, input.productId, input.variantId || null, input.locationId || null,
+    id, input.productId, input.variantId || null, resolveLocationId(input.locationId),
     input.quantityDelta, input.movementType, input.reason || null,
     input.referenceType || null, input.referenceId || null,
     input.unitCost ?? null, input.actorUserId || null, balanceAfter,
@@ -306,7 +319,7 @@ export function getBalance(productId: string, variantId?: string | null, locatio
   const row = db.prepare(`
     SELECT quantity FROM inventory_balances
     WHERE product_id = ? AND COALESCE(product_variant_id, '') = COALESCE(?, '') AND COALESCE(location_id, '') = COALESCE(?, '')
-  `).get(productId, normalizedVariantId, locationId || null) as { quantity: number } | undefined;
+  `).get(productId, normalizedVariantId, resolveLocationId(locationId)) as { quantity: number } | undefined;
   if (row) return row.quantity;
   if (normalizedVariantId) return null;
   const product = db.prepare('SELECT track_inventory, stock_quantity FROM products WHERE id = ?').get(productId) as { track_inventory: number; stock_quantity: number } | undefined;

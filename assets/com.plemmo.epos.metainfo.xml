@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.flo.desktop</id>
-  <name>Flo Cafe</name>
-  <summary>Free, open-source POS for cafes and restaurants</summary>
-  <developer id="com.flo">
-    <name>FreeOpenSourcePOS</name>
+  <id>com.plemmo.epos</id>
+  <name>Plemmo EPOS</name>
+  <summary>Offline-first EPOS for hospitality and retail</summary>
+  <developer id="com.plemmo">
+    <name>Plemmo</name>
   </developer>
 
   <metadata_license>CC0-1.0</metadata_license>
@@ -12,9 +12,11 @@
 
   <description>
     <p>
-      Flo Cafe is a free, open-source, offline-first Point of Sale system built
-      for cafes, restaurants, cloud kitchens, and food businesses. It runs
-      entirely on your own machine with no internet required.
+      Plemmo EPOS is an offline-first Point of Sale platform for both
+      hospitality businesses (restaurants, cafes, takeaways) and retail
+      businesses (shops, electronics, grocery). It runs entirely on your own
+      machine with no internet required. Derived from the FloCafe project
+      under the MIT licence.
     </p>
     <p>Features include:</p>
     <ul>
@@ -22,22 +24,15 @@
       <li>Kitchen Display System (KDS) with real-time updates</li>
       <li>Thermal receipt printing via ESC/POS (USB and network)</li>
       <li>Table management and staff roles</li>
-      <li>GST-compliant invoicing and sales reports</li>
+      <li>Tax-compliant invoicing and sales reports</li>
       <li>Works offline — no subscriptions or cloud dependency</li>
     </ul>
   </description>
 
-  <launchable type="desktop-id">flocafe.desktop</launchable>
+  <launchable type="desktop-id">plemmo-epos.desktop</launchable>
 
-  <url type="homepage">https://github.com/FreeOpenSourcePOS/FloCafe</url>
-  <url type="bugtracker">https://github.com/FreeOpenSourcePOS/FloCafe/issues</url>
-
-  <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/FreeOpenSourcePOS/FloCafe/main/screenshot.png</image>
-      <caption>Point of Sale interface</caption>
-    </screenshot>
-  </screenshots>
+  <url type="homepage">https://github.com/richanonymous22/FloCafe</url>
+  <url type="bugtracker">https://github.com/richanonymous22/FloCafe/issues</url>
 
   <content_rating type="oars-1.1" />
 
@@ -67,6 +62,9 @@
   <keywords>
     <keyword>pos</keyword>
     <keyword>point of sale</keyword>
+    <keyword>epos</keyword>
+    <keyword>retail</keyword>
+    <keyword>shop</keyword>
     <keyword>restaurant</keyword>
     <keyword>cafe</keyword>
     <keyword>billing</keyword>

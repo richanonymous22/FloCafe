@@ -11,6 +11,7 @@ import { Settings, Building2, CreditCard, Monitor, Users, Gift, Printer, FileTex
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { BRAND_REPOSITORY_URL, BRAND_WEBSITE_URL } from '@/lib/brand';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { COUNTRIES, countryName } from '@/lib/countries';
@@ -4290,20 +4291,27 @@ export default function SettingsPage() {
         <TabsContent value="about">
           <div className="pb-6 max-w-3xl space-y-6">
             <div className="bg-white rounded-xl border border-gray-100 p-6">
-              <h2 className="font-semibold text-gray-900 mb-4">{t('settings.aboutFloCafe')}</h2>
+              <h2 className="font-semibold text-gray-900 mb-4">{t('settings.aboutApp')}</h2>
               <p className="text-sm text-gray-600 mb-6">
                 {t('settings.aboutDescription')}
               </p>
-              <div className="space-y-3">
-                <a href="https://github.com/FreeOpenSourcePOS/FloCafe" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-brand hover:underline">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
-                  GitHub Repository
-                </a>
-                <a href="https://flopos.com/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-brand hover:underline">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-                  App Website
-                </a>
-              </div>
+              {/* Links are hidden when unset — see frontend/src/lib/brand.ts. */}
+              {(BRAND_REPOSITORY_URL || BRAND_WEBSITE_URL) && (
+                <div className="space-y-3">
+                  {BRAND_REPOSITORY_URL && (
+                    <a href={BRAND_REPOSITORY_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-brand hover:underline">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+                      Source Repository
+                    </a>
+                  )}
+                  {BRAND_WEBSITE_URL && (
+                    <a href={BRAND_WEBSITE_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-brand hover:underline">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                      App Website
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* More Apps — moved here from the old Integrations tab */}

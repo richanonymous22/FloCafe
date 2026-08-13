@@ -84,8 +84,8 @@ const isMasBuild =
   process.env.MAS_BUILD === '1' ||
   (process as NodeJS.Process & { mas?: boolean }).mas === true;
 
-const RECEIPT_BRANDING_NAME = 'Powered by FloPOS';
-const RECEIPT_BRANDING_URL = 'https://flopos.com';
+const RECEIPT_BRANDING_NAME = 'Powered by Plemmo EPOS';
+const RECEIPT_BRANDING_URL = '';
 
 export interface PrinterInfo {
   name: string;
@@ -793,8 +793,10 @@ function normalizeReceiptTemplate(template?: string): 'classic' | 'compact' | 'd
 }
 
 function appendPoweredByFooter(lines: string[]): void {
-  lines.push('{CENTER}{FONT_B}' + RECEIPT_BRANDING_NAME + '{/FONT_B}{/CENTER}');
-  lines.push('{CENTER}{FONT_B}' + RECEIPT_BRANDING_URL + '{/FONT_B}{/CENTER}');
+  // Empty branding values are skipped rather than emitted as blank lines.
+  // Mirrors frontend/src/lib/printer/branding.ts.
+  if (RECEIPT_BRANDING_NAME) lines.push('{CENTER}{FONT_B}' + RECEIPT_BRANDING_NAME + '{/FONT_B}{/CENTER}');
+  if (RECEIPT_BRANDING_URL) lines.push('{CENTER}{FONT_B}' + RECEIPT_BRANDING_URL + '{/FONT_B}{/CENTER}');
 }
 
 function formatCompactReceipt(order: any, bill: any, biz: any, cols: number = 48, useUnicode: boolean = false, isReprint: boolean = false, cutMode: PrinterCutMode = 'full', warnings?: PrintWarning[]): Buffer {

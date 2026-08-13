@@ -3562,6 +3562,61 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       insert.run('bill_footer_message', '', now());
     },
   },
+  {
+    version: 67,
+    name: 'plemmo_disconnect_upstream_services',
+    up: () => {
+      // PLEMMO FORK — Phase 0.
+      //
+      // Upstream FloCafe ships with cloud coordination, anonymous telemetry
+      // and store diagnostics pointed at its own hosted services
+      // (blue.flopos.com / telemetry.flopos.com), all enabled by default, and
+      // migration v40 actively re-enabled cloud_sync_enabled on upgrade.
+      // Under the v2 zero-touch registration flow this means a booting install
+      // registers itself — business name, contact, address — with a third
+      // party with no human step.
+      //
+      // Plemmo is a separate commercial product with no relationship to that
+      // service, so every outbound channel to it is switched off here. This is
+      // non-destructive and fully reversible: no rows are deleted, no schema
+      // changes, and an operator can re-enable any of these from Settings.
+      // The endpoint constants are left in place on purpose (see
+      // docs/PLEMMO_ARCHITECTURE.md § Deferred) — flipping the switches is
+      // what makes them inert, and inventing placeholder URLs would only
+      // produce confusing connection failures.
+      //
+      // Consent recorded for a FloCafe endpoint is not consent for a Plemmo
+      // one, so previously-granted telemetry/diagnostics consent is cleared
+      // rather than carried over.
+      const changedAt = now();
+      const setFlag = db.prepare(`
+        UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND value != ?
+      `);
+      for (const [key, value] of [
+        ['cloud_sync_enabled', '0'],
+        ['cloud_orders_enabled', '0'],
+        ['cloud_reports_enabled', '0'],
+        ['cloud_command_polling_enabled', '0'],
+        ['anonymous_data_consent', 'false'],
+        ['telemetry_enabled', 'false'],
+        ['diagnostics_consent', 'false'],
+      ] as const) {
+        setFlag.run(value, changedAt, key, value);
+      }
+      // Ensure the keys exist even on an install that somehow lacks them, so
+      // the "off" state is explicit rather than relying on a read fallback.
+      const insertIfMissing = db.prepare(`
+        INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+      `);
+      for (const [key, value] of [
+        ['cloud_sync_enabled', '0'],
+        ['telemetry_enabled', 'false'],
+        ['diagnostics_consent', 'false'],
+      ] as const) {
+        insertIfMissing.run(key, value, changedAt);
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {
@@ -4238,11 +4293,17 @@ function seedCloudSyncDefaults(): void {
   const serverUrl = getSettingValue('cloud_server_url');
   if (!serverUrl) upsertSetting('cloud_server_url', DEFAULT_CLOUD_SERVER_URL);
 
-  // Mirrors FloAdmin's own `stores` table defaults (sync + reports on, orders off —
-  // see specs/floadmin.md § api surface). Harmless pre-claim: every send path in
-  // cloud-sync.ts is gated on api_key being present, which only exists after a
-  // human claims the store on FloAdmin, so nothing transmits before then.
-  insertSettingIfMissing('cloud_sync_enabled', '1');
+  // PLEMMO FORK: upstream defaulted this on, and the v2 zero-touch flow means
+  // cloudSync.start() -> attemptAutoRegister() fires on every boot whenever
+  // cloud_sync_enabled === '1' — i.e. a fresh install POSTs its business name,
+  // contact details and address to blue.flopos.com before any human opts in.
+  // (The old comment here claimed nothing transmits pre-claim; that stopped
+  // being true when v2 removed the claim step.) Plemmo must not register
+  // merchants with a third party's service, so this now defaults OFF. The
+  // cloud_server_url constant is deliberately left pointing at the upstream
+  // value rather than replaced with an invented Plemmo URL — the switch above
+  // is what makes it inert. See docs/PLEMMO_ARCHITECTURE.md § Deferred.
+  insertSettingIfMissing('cloud_sync_enabled', '0');
   insertSettingIfMissing('cloud_orders_enabled', '0');
   insertSettingIfMissing('cloud_reports_enabled', '1');
   insertSettingIfMissing('cloud_command_polling_enabled', '1');
@@ -4291,15 +4352,17 @@ function seedInstallDefaults(): void {
   insert('setup_profile', '');
   insert('cloud_server_url', DEFAULT_CLOUD_SERVER_URL);
   insert('cloud_connected', 'false');
-  insert('cloud_sync_enabled', '1');
+  // PLEMMO FORK: all third-party coordination defaults off (see
+  // seedCloudSyncDefaults above for the reasoning).
+  insert('cloud_sync_enabled', '0');
   insert('cloud_orders_enabled', '0');
-  insert('cloud_reports_enabled', '1');
-  insert('cloud_command_polling_enabled', '1');
+  insert('cloud_reports_enabled', '0');
+  insert('cloud_command_polling_enabled', '0');
   insert('cloud_registration_status', 'unregistered');
-  insert('anonymous_data_consent', 'true');
-  insert('telemetry_enabled', 'true');
+  insert('anonymous_data_consent', 'false');
+  insert('telemetry_enabled', 'false');
   insert('telemetry_scope', 'usage_stats,country,app_version,platform,session_duration,feature_usage,error_diagnostics');
-  insert('diagnostics_consent', 'true');
+  insert('diagnostics_consent', 'false');
   insert('kds_enabled', 'true');
   insert('server_app_enabled', 'true');
   insert('kot_printing_enabled', 'true');

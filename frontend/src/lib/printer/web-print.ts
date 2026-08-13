@@ -220,7 +220,7 @@ export function generateBillHtml(
     <div class="footer">
       ${footerNote ? `<p>${escapeHtml(footerNote)}</p>` : '<p>Thank you for your visit!</p>'}
       ${hasTax ? '<p>Tax included where applicable</p>' : ''}
-      <p class="powered-by">${escapeHtml(RECEIPT_BRANDING_NAME)}<br>${escapeHtml(RECEIPT_BRANDING_URL)}</p>
+      ${(RECEIPT_BRANDING_NAME || RECEIPT_BRANDING_URL) ? `<p class="powered-by">${escapeHtml(RECEIPT_BRANDING_NAME)}${RECEIPT_BRANDING_NAME && RECEIPT_BRANDING_URL ? '<br>' : ''}${escapeHtml(RECEIPT_BRANDING_URL)}</p>` : ''}
     </div>
   </div>
 

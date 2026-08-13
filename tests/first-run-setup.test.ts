@@ -178,10 +178,10 @@ assert.equal(getCurrentSchemaVersion(), MIGRATIONS[MIGRATIONS.length - 1].versio
     assert.equal(setting('billing_type'), 'prepaid');
     assert.equal(setting('tables_required'), 'false');
     assert.equal(setting('onboarding_completed'), 'true');
-    assert.equal(setting('anonymous_data_consent'), 'true', 'setup ignores a client-supplied consent field');
-    assert.equal(setting('telemetry_enabled'), 'true', 'telemetry is on by default after setup');
+    assert.equal(setting('anonymous_data_consent'), 'false', 'setup ignores a client-supplied consent field');
+    assert.equal(setting('telemetry_enabled'), 'false', 'PLEMMO: telemetry is off by default after setup (no Plemmo endpoint to consent to)');
     assert.equal(setting('telemetry_scope'), 'usage_stats,country,app_version,platform,session_duration,feature_usage,error_diagnostics');
-    assert.equal(setting('diagnostics_consent'), 'true', 'store diagnostics are on by default for a new install');
+    assert.equal(setting('diagnostics_consent'), 'false', 'PLEMMO: store diagnostics are off by default for a new install');
     assert.equal(profileRefreshes, 1, 'setup immediately refreshes the completed store profile in FloAdmin');
     assert.equal(count('categories'), 2, 'express setup seeds minimal categories');
     assert.equal(count('products'), 4, 'express setup seeds minimal products');
@@ -205,12 +205,14 @@ assert.equal(getCurrentSchemaVersion(), MIGRATIONS[MIGRATIONS.length - 1].versio
     assert.equal(count('users'), 1, 'setup cannot create a second owner');
     console.log('   ✓ setup endpoint is disabled after the first user exists');
 
-    // Cloud v2 coordination is automatic for new installs.
-    // '1', not 'true' — cloud-sync.ts reads this key with a strict '1' check
-    // everywhere, matching FloAdmin's own `stores` table.
-    assert.equal(setting('cloud_sync_enabled'), '1', 'cloud coordination is enabled automatically on v2 setup');
-    assert.equal(setting('cloud_server_url'), 'https://blue.flopos.com', 'cloud server URL keeps the default');
-    console.log('   ✓ setup endpoint enables cloud coordination automatically');
+    // PLEMMO FORK: upstream enabled cloud coordination automatically, which
+    // registered the install with a third-party service on first boot. Plemmo
+    // starts disconnected until Plemmo Cloud exists.
+    // '0', not 'false' — cloud-sync.ts reads this key with a strict '1' check
+    // everywhere, so '0' is the off value.
+    assert.equal(setting('cloud_sync_enabled'), '0', 'PLEMMO: cloud coordination is OFF by default; no third-party auto-registration');
+    assert.equal(setting('cloud_server_url'), 'https://blue.flopos.com', 'cloud server URL constant is left intact (inert while sync is off)');
+    console.log('   ✓ setup endpoint leaves cloud coordination disabled');
   } finally {
     cloudSync.refreshRegistrationProfile = originalRefreshRegistrationProfile;
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -34,7 +34,12 @@ const REVFLO_APP: AppEntry = {
   tagline: 'See live sales, daily summaries, and reports for your store from your phone.',
   iosUrl: null,
   androidUrl: null,
-  landingUrl: 'https://flopos.com',
+  // PLEMMO FORK: was 'https://flopos.com' — a QR/link promoting the upstream
+  // vendor's companion app from inside Plemmo's Settings. Nulled so no QR
+  // code or outbound link to that vendor is generated. This whole surface is
+  // tied to the (now disabled) cloud pairing flow and is scheduled for removal
+  // with the rest of the upstream cloud client — see docs/PLEMMO_ARCHITECTURE.md.
+  landingUrl: null,
 };
 
 async function toAppResponse(app: AppEntry) {

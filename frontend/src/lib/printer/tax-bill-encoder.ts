@@ -48,15 +48,13 @@ export interface TaxBillOptions {
 const CHARS: Record<58 | 80, number> = { 58: 42, 80: 48 };
 
 function printPoweredByFooter(enc: ReceiptPrinterEncoder): void {
-  enc
-    .align('center')
-    .size('small')
-    .text(RECEIPT_BRANDING_NAME)
-    .newline()
-    .text(RECEIPT_BRANDING_URL)
-    .newline()
-    .size('normal')
-    .align('left');
+  // Empty branding values are skipped rather than printed as blank lines —
+  // see branding.ts. Both empty means no footer at all.
+  if (!RECEIPT_BRANDING_NAME && !RECEIPT_BRANDING_URL) return;
+  enc.align('center').size('small');
+  if (RECEIPT_BRANDING_NAME) enc.text(RECEIPT_BRANDING_NAME).newline();
+  if (RECEIPT_BRANDING_URL) enc.text(RECEIPT_BRANDING_URL).newline();
+  enc.size('normal').align('left');
 }
 
 /**

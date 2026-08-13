@@ -14,6 +14,12 @@ import { app } from 'electron';
 import log from 'electron-log';
 import { ensureTelemetryAnonId, isTelemetryEnabled, getSettingValue, parseDbTimestamp, upsertTelemetryLastPing } from '../db';
 
+// PLEMMO FORK: upstream FloCafe telemetry endpoint. Retained (not replaced
+// with an invented Plemmo URL) because the delivery code and its tests are
+// still useful infrastructure and will be repointed when Plemmo has an
+// endpoint of its own. It is inert on Plemmo installs: telemetry_enabled and
+// anonymous_data_consent both default to 'false' and migration v67 clears any
+// previously-granted consent. See docs/PLEMMO_ARCHITECTURE.md § Deferred.
 export const TELEMETRY_URL = 'https://telemetry.flopos.com/collect';
 
 const REQUEST_TIMEOUT_MS = 8_000;

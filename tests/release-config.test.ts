@@ -121,7 +121,7 @@ function run() {
   assert.ok(
     fs.existsSync(path.join(__dirname, '../scripts/update-metainfo.js')),
     'scripts/update-metainfo.js must exist — it is invoked by the release job to keep ' +
-    'assets/com.flo.desktop.metainfo.xml current.'
+    'assets/com.plemmo.epos.metainfo.xml current.'
   );
   const metainfoUpdater = fs.readFileSync(path.join(__dirname, '../scripts/update-metainfo.js'), 'utf8');
   assert.ok(

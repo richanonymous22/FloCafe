@@ -114,8 +114,11 @@ function main() {
   console.log('   ✓ an old (pre-migration-array) install migrates through to the latest schema without crashing');
 
   const db = getDatabase();
-  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_sync_enabled'").get().value, '1',
-    'seed-written cloud sync defaults are flipped on during upgrade');
+  // PLEMMO FORK: migration v40 (upstream) flipped this on during upgrade;
+  // migration v67 (Plemmo) turns it back off so an upgraded database never
+  // starts talking to the upstream vendor's service.
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_sync_enabled'").get().value, '0',
+    'PLEMMO v67 leaves cloud sync disabled after upgrading an existing install');
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key = 'cloud_pending_store_id'").get().count, 0,
     'pending registration state is removed during upgrade');
   assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_orders_enabled'").get().value, '0',

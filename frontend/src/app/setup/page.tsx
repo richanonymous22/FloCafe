@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
+import { BRAND_TERMS_URL, BRAND_PRIVACY_URL, BRAND_DISCLAIMER_URL } from '@/lib/brand';
 import { useAuthStore } from '@/store/auth';
 import { usePosSettingsStore } from '@/store/pos-settings';
 import { Button } from '@/components/ui/button';
@@ -29,7 +30,24 @@ const SERVICE_MODELS: Array<{ value: ServiceModel }> = [
 
 // Mirrors main/services/cloud-sync.ts DEFAULT_CLOUD_SERVER_URL — kept in sync
 // manually since the frontend can't import backend TS modules directly.
+// Upstream FloCafe endpoint. Retained only so an operator who explicitly opts
+// into cloud coordination gets a syntactically valid default; Plemmo installs
+// ship with cloud sync OFF (see main/db.ts migration v67) so this is inert.
+// Replace when Plemmo Cloud exists.
 const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
+
+/**
+ * Renders a legal document link, or plain text when no URL is configured.
+ * A dead or third-party legal link is worse than no link — see lib/brand.ts.
+ */
+function LegalLink({ href, children }: { href: string; children: React.ReactNode }) {
+  if (!href) return <span className="font-medium text-foreground">{children}</span>;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+      {children}
+    </a>
+  );
+}
 
 export default function SetupPage() {
   const { logout } = useAuthStore();
@@ -522,17 +540,11 @@ export default function SetupPage() {
                     />
                     <span>
                       {t('setup.termsIntro')}{' '}
-                      <a href="https://flopos.com/terms" target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                        {t('setup.terms')}
-                      </a>
+                      <LegalLink href={BRAND_TERMS_URL}>{t('setup.terms')}</LegalLink>
                       ,{' '}
-                      <a href="https://flopos.com/privacy" target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                        {t('setup.privacy')}
-                      </a>
+                      <LegalLink href={BRAND_PRIVACY_URL}>{t('setup.privacy')}</LegalLink>
                       , and{' '}
-                      <a href="https://flopos.com/disclaimer" target="_blank" rel="noopener noreferrer" className="text-primary underline">
-                        {t('setup.disclaimer')}
-                      </a>
+                      <LegalLink href={BRAND_DISCLAIMER_URL}>{t('setup.disclaimer')}</LegalLink>
                       .
                     </span>
                   </label>

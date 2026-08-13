@@ -4106,7 +4106,7 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       for (const product of trackedProducts) {
         if (alreadyMigrated.has(product.id)) continue;
         const quantity = product.stock_quantity || 0;
-        insertMovement.run(ulid(), product.id, quantity, quantity, product.id, migrationNow);
+        insertMovement.run(ulid(), product.id, quantity, product.id, quantity, migrationNow);
         insertBalance.run(ulid(), product.id, quantity, migrationNow);
       }
     },

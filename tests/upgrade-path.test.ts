@@ -74,6 +74,14 @@ fixtureDb.prepare(`
   INSERT INTO bills (bill_number, order_id, subtotal, tax_amount, total, paid_at, created_at, updated_at)
   VALUES ('INV-ISO-TS', ?, 10, 0, 10, '2026-07-01T11:30:00.000Z', '2026-07-01T11:00:00.000Z', '2026-07-01T11:30:00.000Z')
 `).run(isoOrder.lastInsertRowid);
+// A real, pre-v73 tracked-stock product — none of the fixture's stock
+// products happen to have track_inventory=1, so the inventory ledger
+// migration (v73)'s opening-balance backfill needs one injected here to be
+// exercised meaningfully. See the "opening balance" assertions below.
+fixtureDb.prepare(`
+  INSERT INTO products (id, category_id, name, price, track_inventory, stock_quantity, is_active, sort_order, created_at, updated_at)
+  VALUES ('prod-legacy-stock', NULL, 'Legacy Tracked Widget', 9.99, 1, 42, 1, 0, '2026-07-01T10:00:00.000Z', '2026-07-01T10:00:00.000Z')
+`).run();
 fixtureDb.close();
 
 const mockApp = {
@@ -125,6 +133,21 @@ function main() {
     'explicitly edited settings remain unchanged during upgrade');
   assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'taxes_enabled'").get().value, 'false',
     'taxes remain off until the merchant enables them');
+
+  // PLEMMO v73: the inventory ledger's opening-balance backfill against a
+  // real legacy tracked-stock product (injected above, since none of the
+  // fixture's own products happen to track inventory).
+  const openingMovement = db.prepare(`
+    SELECT * FROM inventory_movements
+    WHERE reference_type = 'opening_stock_migration' AND reference_id = 'prod-legacy-stock'
+  `).get() as any;
+  assert.ok(!!openingMovement, 'v73 creates an opening movement for a pre-existing tracked-stock product');
+  assert.equal(openingMovement.movement_type, 'opening', 'the migration-created movement is typed opening');
+  assert.equal(openingMovement.quantity_delta, 42, 'the opening movement carries the exact legacy stock_quantity');
+  const openingBalance = db.prepare(`
+    SELECT quantity FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
+  `).get() as any;
+  assert.equal(openingBalance.quantity, 42, 'the balance table starts at the same legacy quantity');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'support_ticket_outbox'").get(),
     'support ticket outbox exists after upgrade');
   console.log('   ✓ v40/v41 preserves deliberate settings, flips untouched cloud sync, and creates the support outbox');
@@ -234,7 +257,8 @@ function main() {
   );
   console.log('   ✓ old installs receive generic tax behavior without replacing legacy tax data');
 
-  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM products').get() as any).count, 10);
+  // 10 from the fixture + 1 injected above (prod-legacy-stock, for the v73 opening-balance assertions).
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM products').get() as any).count, 11);
   // A product originating in this pre-tax-engine fixture can still carry the
   // old tax_type/tax_rate columns after Phase 1, but those columns are not
   // authoritative for new calculations — tax is opt-in through an explicitly

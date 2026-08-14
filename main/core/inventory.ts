@@ -28,6 +28,7 @@
 import { getDatabase, now, withTxn } from '../db';
 import { ulid } from './ids';
 import { getCurrentLocationId, getCurrentOrganizationId } from './location';
+import { appendInventoryMovementEvent } from './sync/inventory-events';
 
 /**
  * An explicit `locationId` always wins (a future multi-location caller will
@@ -70,6 +71,8 @@ export type MovementType = 'sale' | 'return' | 'adjustment' | 'receipt' | 'openi
 
 export interface InventoryMovementRecord {
   id: string;
+  organization_id: string | null;
+  location_id: string | null;
   product_id: string;
   product_variant_id: string | null;
   quantity_delta: number;
@@ -80,6 +83,7 @@ export interface InventoryMovementRecord {
   unit_cost: number | null;
   actor_user_id: string | null;
   balance_after: number;
+  metadata: string | null;
   created_at: string;
   [column: string]: unknown;
 }
@@ -168,7 +172,17 @@ function recordMovement(input: RecordMovementInput): InventoryMovementRecord {
     input.metadata ? JSON.stringify(input.metadata) : null, createdAt,
   );
 
-  return db.prepare('SELECT * FROM inventory_movements WHERE id = ?').get(id) as InventoryMovementRecord;
+  const movement = db.prepare('SELECT * FROM inventory_movements WHERE id = ?').get(id) as InventoryMovementRecord;
+
+  // SYNC-A: append the durable sync event for this movement in the SAME
+  // transaction (recordMovement always runs inside the caller's withTxn).
+  // The movement, its balance update, and this event commit or roll back as
+  // one atomic unit — a movement can never commit while its sync event is
+  // missing, and this never issues a network request. See
+  // docs/SYNC_A_LOCAL_FOUNDATION.md.
+  appendInventoryMovementEvent(db, movement);
+
+  return movement;
 }
 
 /**

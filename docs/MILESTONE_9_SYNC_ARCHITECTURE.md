@@ -14,6 +14,32 @@ builds on.
 
 ---
 
+## 0. Status update — decisions resolved after review (read this first)
+
+This original design was reviewed adversarially in
+[`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md), which found
+real errors, and the foundation repairs were then implemented in
+[`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md). The design history below is
+left intact; this table records where it was superseded. **PREVIOUS DESIGN →
+REVIEW FINDING → FINAL DECISION:**
+
+| Topic | Original design (below) | 9A review finding | Final decision (SYNC-0) |
+|---|---|---|---|
+| Inventory oversell | "allow negative stock, extending existing policy" (§10) | **Wrong** — the code hard-rejects oversell everywhere; there is no soft-warning policy to extend | Local hard-enforcement unchanged; the cloud will *detect and flag* cross-till deficits later, never weaken the local rule |
+| Sale data model | event-source `orders`/`order_items`/`bills` (§2, §10) | **Overengineered** — contradicts "don't rewrite SaleService" | Retracted. Canonical rows kept authoritative; a future outbox wraps them |
+| Payment authority | "dual-write is the biggest blocker" (§22 #1) | **Understated** — the dual-write swallowed errors and was untested; neither store was complete | Dual-write made authoritative + atomic; legacy `payment_details` backfilled; retained as compatibility bridge |
+| `products.stock_quantity` | classified SYNCED (§2) | **Would double-count** against `inventory_movements` | Excluded from product sync; stock syncs only via movements |
+| Transfers | atomic two-sided "recommendation" (§13) | Structurally single-database; needs a real decision | Data model prepared for future two-phase `DRAFT→SHIPPED→RECEIVED`; local atomic behavior unchanged for now |
+| Device auth | bearer vs asymmetric left open (§17) | Needs a decision | Rotatable bearer now, asymmetric later; `device_credentials` foundation built (public key only) |
+| Cursor/inbox boundary | "advance cursor before apply" (§6.2) | Underspecified, could lose events | Hard rule: inbox-insert + cursor-advance in ONE transaction; apply separate |
+
+The load-bearing prerequisites the design called for (§22) — uid promotion,
+tombstones, organization stamping, device-credential schema — are all built
+and tested in SYNC-0. The sync **engine** (outbox/inbox/cloud) remains
+unbuilt, as intended.
+
+---
+
 ## 1. Executive summary
 
 Plemmo already has almost everything a sync engine needs to consume, and

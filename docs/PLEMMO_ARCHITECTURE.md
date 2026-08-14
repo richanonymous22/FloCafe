@@ -124,6 +124,7 @@ TypeScript with no Express dependency.
 | `location-reports.ts` | ✅ Built (M6) | Sales/inventory/purchases by location, transfers, adjustments |
 | `authorization.ts` (`AuthorizationService`) | ✅ Built (M7), canonical (M8) | `hasPermission`, `hasLocationAccess`, `can`, `requireCan` — role→permission table plus `user_locations` enforcement; exports the canonical `Role`/`ALL_ROLES` every `requireRole()` call site now type-checks against |
 | `features.ts` (`FeatureService`) | ✅ Built (M7) | `isEnabled`, `requireEnabled`, `grantFeature`/`revokeFeature`, `applyPreset`, `setCustomFeatures` — per-organization feature entitlements |
+| `device-credentials.ts` | ✅ Built (SYNC-0) | `recordDeviceCredential`/`getActiveDeviceCredential`/`revokeDeviceCredential` — public-key + lifecycle only; no private key ever stored. Domain foundation for future device-authenticated sync |
 
 ### Module boundary (Milestone 3)
 
@@ -177,7 +178,7 @@ classification.
 | Sale | ✅ | `orders` | The convergent spine; `createSale`/`addSaleItems` built; M3 adds `channel: 'in_store'` for retail, no table; M6 stamps organization/location/register/device |
 | SaleItem | ✅ | `order_items` | Inserted via the shared `persistSaleLine` engine; M3 adds `product_variant_id`/`unit_cost` columns, populated when a line names a variant |
 | Bill | ✅ | `bills` | Payable snapshot; now has `uid`; generation/split not yet in Core |
-| Payment | ✅ New (M2) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; legacy `bills.payment_details` JSON still authoritative, dual-written into the new tables — see §8; M6 stamps organization/location |
+| Payment | ✅ New (M2), authoritative (SYNC-0) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; **now the authoritative, complete payment model** — the hospitality dual-write is atomic (no longer error-swallowing) and legacy `payment_details` is backfilled (v80) and kept only as a compatibility bridge; `bill_uid`/`order_uid` global refs added (SYNC-0); M6 stamps organization/location |
 | StockTransfer | ✅ New (M6) | `stock_transfers`/`stock_transfer_items` (v77) | draft → completed/cancelled; atomic transfer_out + transfer_in |
 | Refund | ✅ New (M2) | `refunds` (v71) | Foundation only — `refundPayment()` in `payment.ts`, no inventory return yet |
 | Tax/VAT | ✅ Strong | `services/tax-engine.ts` | Decimal, pack-driven; **no GB pack yet** |
@@ -630,7 +631,10 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 6 (M6) | Multi-location + device context + stock transfers — typed `context.ts`, `orders`/`payments` location stamping, `TransferService`, employee location-scope foundation, location-scoped reports | ✅ Done |
 | 7 (M7) | Access control + feature entitlements — `user_locations` enforcement on client-facing routes, `AuthorizationService` (role→permission model alongside `requireRole()`), `FeatureService` (`Organization → FeatureEntitlement[] → Feature`), presets, custom configuration, backend enforcement on business-critical routes | ✅ Done |
 | 8 (M8) | Authorization hardening — full `requireRole()` audit (212 call sites, 28 files), canonical `requirePermission()` gate on 42 business-critical routes (sales/inventory/purchasing/staff/locations/reports), device-location enforcement on sale creation, spoofing-resistance tests, `requireRole()` type-checked against `AuthorizationService`'s own `Role` union | ✅ Done |
-| 9 | Multi-location selection/switching UI; a real goods-receiving workflow beyond the generic foundation; transfer reversal; a dedicated refund/void HTTP surface for `PaymentService`'s `refundPayment()`/`voidPayment()` | Next |
+| 9 (design) | Offline sync architecture — [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) design, [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) adversarial review | ✅ Done (design) |
+| SYNC-0 | Foundation repair before sync — authoritative payments (v80), load-bearing uids (v81), child-row tombstones (v82), inventory organization identity (v83), device-credential foundation (v84). [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) | ✅ Done |
+| SYNC-A+ | The sync engine itself (outbox/inbox/cloud) — not started | Next |
+| (later) | Multi-location selection/switching UI; two-phase transfers; a dedicated refund/void HTTP surface for `PaymentService` | |
 | 10 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
 | 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
 | 12 | Plemmo Cloud + Admin | |
@@ -660,5 +664,7 @@ Milestones 2, 4, 5, 6, 7, and 8.
 - [`MILESTONE_6_MULTI_LOCATION.md`](./MILESTONE_6_MULTI_LOCATION.md) — the multi-location design record: the device/location context audit, sale/payment stamping, stock transfers and their atomicity, employee location scope, future sync implications, deferred work
 - [`MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md`](./MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md) — the access-control and feature-entitlement design record: `AuthorizationService`, location enforcement, the permission model, `FeatureService`, presets, custom configuration, backend enforcement, security considerations, deferred work
 - [`MILESTONE_8_AUTHORIZATION.md`](./MILESTONE_8_AUTHORIZATION.md) — the authorization hardening design record: the full `requireRole()` audit, the canonical `requirePermission()` gate, which routes were migrated and why, the security review of client-supplied context, remaining gaps
+- [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) / [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) — the offline-sync architecture design and its adversarial review
+- [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) / [`SYNC_0_PAYMENT_MIGRATION.md`](./SYNC_0_PAYMENT_MIGRATION.md) — the pre-sync foundation repairs (authoritative payments, load-bearing uids, tombstones, sync identity, device credentials) and the payment migration in detail
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

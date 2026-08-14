@@ -4495,6 +4495,252 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 80,
+    name: 'sync_0_payment_foundation',
+    up: () => {
+      // SYNC-0 Part A — make payments/payment_events the authoritative,
+      // COMPLETE payment model. Additive only. See
+      // docs/SYNC_0_PAYMENT_MIGRATION.md for the full before/after.
+      //
+      // (1) Global identity columns (Part A6/B2): a payment/refund can be
+      // linked to its bill/order by a collision-safe uid, not just the
+      // local integer FK that two devices would both allocate from 1.
+      for (const [column, ddl] of [
+        ['bill_uid', 'ALTER TABLE payments ADD COLUMN bill_uid TEXT'],
+        ['order_uid', 'ALTER TABLE payments ADD COLUMN order_uid TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'payments').includes(column)) db.exec(ddl);
+      }
+      for (const [column, ddl] of [
+        ['bill_uid', 'ALTER TABLE refunds ADD COLUMN bill_uid TEXT'],
+        ['order_uid', 'ALTER TABLE refunds ADD COLUMN order_uid TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'refunds').includes(column)) db.exec(ddl);
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_payments_bill_uid ON payments(bill_uid);
+        CREATE INDEX IF NOT EXISTS idx_payments_order_uid ON payments(order_uid);
+        CREATE INDEX IF NOT EXISTS idx_refunds_bill_uid ON refunds(bill_uid);
+      `);
+
+      // (2) Backfill uids on existing payment/refund rows from the local FKs.
+      db.exec(`
+        UPDATE payments SET bill_uid = (SELECT uid FROM bills WHERE bills.id = payments.bill_id)
+          WHERE bill_uid IS NULL AND bill_id IS NOT NULL;
+        UPDATE payments SET order_uid = (SELECT uid FROM orders WHERE orders.id = payments.order_id)
+          WHERE order_uid IS NULL AND order_id IS NOT NULL;
+        UPDATE refunds SET bill_uid = (SELECT uid FROM bills WHERE bills.id = refunds.bill_id)
+          WHERE bill_uid IS NULL AND bill_id IS NOT NULL;
+        UPDATE refunds SET order_uid = (SELECT p.order_uid FROM payments p WHERE p.id = refunds.payment_id)
+          WHERE order_uid IS NULL;
+      `);
+
+      // (3) Backfill legacy bills.payment_details → payments/payment_events.
+      // Only bills with ZERO existing payment rows are touched: a bill that
+      // already has payments (retail via tender(), or a hospitality bill whose
+      // dual-write already ran) is assumed mirrored and left as-is. That makes
+      // this idempotent and duplicate-safe (a second run sees the rows it
+      // created and skips). Malformed/ambiguous legacy lines are skipped, never
+      // guessed (Part A4/K). Two documented fidelity assumptions, both matching
+      // how the legacy data was originally created:
+      //   - amounts are 2-decimal (Math.round(amount*100)) — the same
+      //     unconditional *100 applyPaymentBatch used to produce them;
+      //   - currency is this install's current 'currency' setting — bills never
+      //     stored a per-row currency, so no truer value is recoverable.
+      const currency = ((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value || 'INR').toUpperCase();
+      const billsWithDetails = db.prepare(`
+        SELECT b.id AS bill_id, b.uid AS bill_uid, b.order_id AS order_id, b.payment_details AS payment_details,
+               b.updated_at AS updated_at, b.created_at AS created_at,
+               o.uid AS order_uid, o.organization_id AS organization_id, o.location_id AS location_id
+        FROM bills b LEFT JOIN orders o ON o.id = b.order_id
+        WHERE b.payment_details IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.bill_id = b.id)
+      `).all() as Array<{
+        bill_id: number; bill_uid: string | null; order_id: number | null; payment_details: string;
+        updated_at: string | null; created_at: string | null;
+        order_uid: string | null; organization_id: string | null; location_id: string | null;
+      }>;
+
+      const insertPayment = db.prepare(`
+        INSERT INTO payments (
+          id, bill_id, order_id, bill_uid, order_uid, adapter, method, state,
+          amount_minor, currency, refunded_minor, tendered_minor, change_minor,
+          provider_reference, actor_user_id, notes, metadata,
+          requested_at, settled_at, created_at, updated_at, organization_id, location_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertEvent = db.prepare(`
+        INSERT INTO payment_events (id, payment_id, from_state, to_state, occurred_at, actor_user_id, metadata, created_at)
+        VALUES (?, ?, NULL, ?, ?, NULL, NULL, ?)
+      `);
+
+      let backfilledBills = 0;
+      let backfilledLines = 0;
+      let skippedLines = 0;
+      for (const bill of billsWithDetails) {
+        let parsed: unknown;
+        try { parsed = JSON.parse(bill.payment_details); } catch { continue; }
+        const lines = Array.isArray(parsed) ? parsed : [parsed];
+        let anyLine = false;
+        for (const raw of lines) {
+          const line = raw as Record<string, unknown>;
+          const method = typeof line.method === 'string' && line.method.trim() ? line.method.trim() : null;
+          const amount = Number(line.amount);
+          // Skip anything we cannot faithfully represent: a line with no
+          // method, or no positive amount (a zero/negative line is not a
+          // captured payment and legacy refunds are not reconstructed here).
+          if (!method || !Number.isFinite(amount) || amount <= 0) { skippedLines += 1; continue; }
+          const adapter = method === 'cash' ? 'cash' : method === 'wallet' ? 'wallet' : 'manual_card';
+          const state = adapter === 'manual_card' ? 'captured' : 'settled';
+          const amountMinor = Math.round(amount * 100);
+          const tendered = Number(line.tendered_amount);
+          const change = Number(line.change_amount);
+          const tenderedMinor = adapter === 'cash' && Number.isFinite(tendered) ? Math.round(tendered * 100) : null;
+          const changeMinor = adapter === 'cash' && Number.isFinite(change) ? Math.round(change * 100) : null;
+          const providerRef = typeof line.transaction_id === 'string' ? line.transaction_id : null;
+          const noteText = typeof line.notes === 'string' ? line.notes : null;
+          const tsRaw = typeof line.timestamp === 'string' ? line.timestamp : (bill.updated_at || bill.created_at || now());
+          const parsedMs = Date.parse(String(tsRaw).replace(' ', 'T') + (String(tsRaw).includes('T') || String(tsRaw).endsWith('Z') ? '' : 'Z'));
+          const seedMs = Number.isFinite(parsedMs) ? parsedMs : Date.now();
+          const paymentId = ulid(seedMs);
+          const at = String(tsRaw);
+          const settledAt = state === 'settled' ? at : null;
+          insertPayment.run(
+            paymentId, bill.bill_id, bill.order_id, bill.bill_uid, bill.order_uid, adapter, method, state,
+            amountMinor, currency, tenderedMinor, changeMinor, providerRef, noteText,
+            at, settledAt, at, at, bill.organization_id, bill.location_id,
+          );
+          insertEvent.run(ulid(seedMs), paymentId, state, at, at);
+          backfilledLines += 1;
+          anyLine = true;
+        }
+        if (anyLine) backfilledBills += 1;
+      }
+      if (backfilledBills > 0 || skippedLines > 0) {
+        console.log(`[DB] v80 payment backfill: ${backfilledBills} bill(s), ${backfilledLines} line(s) reconstructed, ${skippedLines} line(s) skipped as unrepresentable`);
+      }
+    },
+  },
+  {
+    version: 81,
+    name: 'sync_0_load_bearing_uids',
+    up: () => {
+      // SYNC-0 Part B — make orders/order_items/bills `uid` truly
+      // load-bearing. Migration v69 added the column and backfilled the rows
+      // that existed then, but three insert paths were later found creating
+      // rows with a NULL uid (a bill via POST /bills/generate, a split-check
+      // bill, and a void-adjustment order_item). Those code paths are fixed
+      // going forward (SYNC-0 Part B); this migration backfills any NULL uid
+      // those paths already produced on an existing install, seeding each
+      // ULID from the row's own created_at so it still sorts historically —
+      // the same approach v69 used.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        const rows = db.prepare(`SELECT id, created_at FROM ${table} WHERE uid IS NULL ORDER BY created_at ASC, id ASC`)
+          .all() as Array<{ id: number; created_at: string | null }>;
+        if (rows.length === 0) continue;
+        const update = db.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`);
+        for (const row of rows) {
+          const parsed = row.created_at ? Date.parse(String(row.created_at).replace(' ', 'T') + 'Z') : NaN;
+          update.run(ulid(Number.isFinite(parsed) ? parsed : Date.now()), row.id);
+        }
+        console.log(`[DB] v81 uid backfill: ${rows.length} ${table} row(s)`);
+      }
+      // The partial unique indexes from v69 (idx_*_uid WHERE uid IS NOT NULL)
+      // still guard against duplicate uids; nothing to recreate here.
+    },
+  },
+  {
+    version: 82,
+    name: 'sync_0_child_row_tombstones',
+    up: () => {
+      // SYNC-0 Part C — replace the two hard DELETEs on sync-relevant child
+      // rows (draft PO line removal, draft transfer line removal) with a
+      // `deleted_at` tombstone. A hard delete of a row another device may
+      // reference cannot be represented as a sync fact; a tombstone can.
+      // Additive column only; all active queries are updated in the same
+      // change to treat `deleted_at IS NOT NULL` rows as absent, so current
+      // draft-editing behavior is unchanged.
+      for (const table of ['purchase_order_items', 'stock_transfer_items'] as const) {
+        if (!getColumns(db, table).includes('deleted_at')) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN deleted_at TEXT`);
+        }
+      }
+    },
+  },
+  {
+    version: 83,
+    name: 'sync_0_sync_identity_backfill',
+    up: () => {
+      // SYNC-0 Part D — every record that will eventually cross the sync
+      // boundary must be unambiguously attributable to an organization and,
+      // where meaningful, a location.
+      //
+      // inventory_movements.organization_id was never populated by
+      // recordMovement (only location_id was). It is now stamped going
+      // forward (main/core/inventory.ts) and backfilled here from each
+      // movement's own location — a location belongs to exactly one
+      // organization, so this is a real derivation, not a guess. Movements
+      // with no location fall back to the install's single organization
+      // pointer. inventory_balances is deliberately NOT given an
+      // organization column: it is a DERIVED projection keyed by
+      // (product, variant, location) and is never itself a sync fact — its
+      // organization is always resolvable via the location, and adding a
+      // column would risk a second, divergent balance key (Part D1).
+      db.exec(`
+        UPDATE inventory_movements
+        SET organization_id = (SELECT l.organization_id FROM locations l WHERE l.id = inventory_movements.location_id)
+        WHERE organization_id IS NULL AND location_id IS NOT NULL
+      `);
+      const orgPointer = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as { value?: string } | undefined)?.value;
+      if (orgPointer) {
+        db.exec(`UPDATE inventory_movements SET organization_id = '${orgPointer.replace(/'/g, "''")}' WHERE organization_id IS NULL`);
+        // Defensively backfill any purchase order whose organization/location
+        // was left unstamped (e.g. created before the org pointer was seeded).
+        const locPointer = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value?: string } | undefined)?.value ?? null;
+        db.prepare('UPDATE purchase_orders SET organization_id = ? WHERE organization_id IS NULL').run(orgPointer);
+        if (locPointer) db.prepare('UPDATE purchase_orders SET location_id = ? WHERE location_id IS NULL').run(locPointer);
+        db.prepare('UPDATE stock_transfers SET organization_id = ? WHERE organization_id IS NULL').run(orgPointer);
+      }
+    },
+  },
+  {
+    version: 84,
+    name: 'sync_0_device_credentials',
+    up: () => {
+      // SYNC-0 Part E — domain foundation for device-authenticated sync.
+      //
+      // Stores only the PUBLIC half of a device's credential plus its
+      // lifecycle metadata. The private key is generated on the device and
+      // held in OS-protected storage (Windows DPAPI / macOS Keychain) — it is
+      // NEVER written to this or any application table. This table does not
+      // enroll or authenticate anything yet; it is the schema a future
+      // enrollment flow and sync transport will populate. No cloud, no
+      // network, no middleware is created here (Part E, Part J).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS device_credentials (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          credential_type TEXT NOT NULL DEFAULT 'device_keypair'
+            CHECK (credential_type IN ('device_keypair', 'rotatable_bearer')),
+          public_key TEXT,
+          credential_identifier TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'active', 'rotated', 'revoked')),
+          issued_at TEXT,
+          expires_at TEXT,
+          rotated_at TEXT,
+          revoked_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_credentials_device ON device_credentials(device_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_device_credentials_identifier
+          ON device_credentials(credential_identifier) WHERE credential_identifier IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

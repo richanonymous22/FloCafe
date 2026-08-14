@@ -20,7 +20,7 @@ export function outstandingPurchaseOrders(): any[] {
   const db = getDatabase();
   return db.prepare(`
     SELECT po.*, s.name as supplier_name,
-      (SELECT COALESCE(SUM(quantity_ordered - quantity_received), 0) FROM purchase_order_items WHERE purchase_order_id = po.id) as remaining_quantity
+      (SELECT COALESCE(SUM(quantity_ordered - quantity_received), 0) FROM purchase_order_items WHERE purchase_order_id = po.id AND deleted_at IS NULL) as remaining_quantity
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.status IN ('ordered', 'partially_received')

@@ -106,7 +106,11 @@ export function removeTransferItem(transferId: string, itemId: string): void {
     const transfer = db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(transferId) as any;
     if (!transfer) throw new TransferError(`Transfer ${transferId} not found`, 404);
     requireDraft(transfer);
-    const result = db.prepare('DELETE FROM stock_transfer_items WHERE id = ? AND stock_transfer_id = ?').run(itemId, transferId);
+    // SYNC-0 Part C: tombstone, not hard delete (mirrors purchase-order line
+    // removal) — the row stays for a future sync engine, absent from every
+    // active query.
+    const result = db.prepare('UPDATE stock_transfer_items SET deleted_at = ? WHERE id = ? AND stock_transfer_id = ? AND deleted_at IS NULL')
+      .run(now(), itemId, transferId);
     if (result.changes === 0) throw new TransferError(`Transfer item ${itemId} not found`, 404);
   });
 }
@@ -127,7 +131,7 @@ export function completeTransfer(transferId: string, actorUserId?: string | null
     if (transfer.status !== 'draft') {
       throw new TransferError(`Only a draft transfer can be completed (current status: ${transfer.status})`, 400);
     }
-    const items = db.prepare('SELECT * FROM stock_transfer_items WHERE stock_transfer_id = ?').all(transferId) as any[];
+    const items = db.prepare('SELECT * FROM stock_transfer_items WHERE stock_transfer_id = ? AND deleted_at IS NULL').all(transferId) as any[];
     if (items.length === 0) {
       throw new TransferError('A transfer needs at least one item before it can be completed');
     }
@@ -164,7 +168,7 @@ export function getTransfer(id: string): any {
   const db = getDatabase();
   const transfer = db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(id);
   if (!transfer) return null;
-  const items = db.prepare('SELECT * FROM stock_transfer_items WHERE stock_transfer_id = ? ORDER BY created_at ASC').all(id);
+  const items = db.prepare('SELECT * FROM stock_transfer_items WHERE stock_transfer_id = ? AND deleted_at IS NULL ORDER BY created_at ASC').all(id);
   return { ...(transfer as object), items };
 }
 

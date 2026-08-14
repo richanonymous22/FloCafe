@@ -35,7 +35,7 @@ export interface CreatePurchaseOrderInput {
 function recalculateTotals(db: ReturnType<typeof getDatabase>, purchaseOrderId: string): void {
   const totals = db.prepare(`
     SELECT COALESCE(SUM(quantity_ordered * unit_cost), 0) as subtotal, COALESCE(SUM(tax), 0) as tax
-    FROM purchase_order_items WHERE purchase_order_id = ?
+    FROM purchase_order_items WHERE purchase_order_id = ? AND deleted_at IS NULL
   `).get(purchaseOrderId) as { subtotal: number; tax: number };
   const total = totals.subtotal + totals.tax;
   db.prepare('UPDATE purchase_orders SET subtotal = ?, tax = ?, total = ?, updated_at = ? WHERE id = ?')
@@ -121,7 +121,7 @@ export function updateItem(purchaseOrderId: string, itemId: string, input: Parti
     if (!po) throw new PurchaseOrderError(`Purchase order ${purchaseOrderId} not found`, 404);
     requireDraft(po);
 
-    const item = db.prepare('SELECT * FROM purchase_order_items WHERE id = ? AND purchase_order_id = ?').get(itemId, purchaseOrderId) as any;
+    const item = db.prepare('SELECT * FROM purchase_order_items WHERE id = ? AND purchase_order_id = ? AND deleted_at IS NULL').get(itemId, purchaseOrderId) as any;
     if (!item) throw new PurchaseOrderError(`Purchase order item ${itemId} not found`, 404);
 
     const quantityOrdered = input.quantityOrdered !== undefined ? input.quantityOrdered : item.quantity_ordered;
@@ -149,7 +149,11 @@ export function removeItem(purchaseOrderId: string, itemId: string): void {
     const po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(purchaseOrderId) as any;
     if (!po) throw new PurchaseOrderError(`Purchase order ${purchaseOrderId} not found`, 404);
     requireDraft(po);
-    const result = db.prepare('DELETE FROM purchase_order_items WHERE id = ? AND purchase_order_id = ?').run(itemId, purchaseOrderId);
+    // SYNC-0 Part C: tombstone, not hard delete — the row stays for a future
+    // sync engine to propagate the removal, but is absent from every active
+    // query (which all filter `deleted_at IS NULL`).
+    const result = db.prepare('UPDATE purchase_order_items SET deleted_at = ?, updated_at = ? WHERE id = ? AND purchase_order_id = ? AND deleted_at IS NULL')
+      .run(now(), now(), itemId, purchaseOrderId);
     if (result.changes === 0) throw new PurchaseOrderError(`Purchase order item ${itemId} not found`, 404);
     recalculateTotals(db, purchaseOrderId);
   });
@@ -162,7 +166,7 @@ export function markOrdered(purchaseOrderId: string): any {
   if (po.status !== 'draft') {
     throw new PurchaseOrderError(`Only a draft purchase order can be marked ordered (current status: ${po.status})`, 400);
   }
-  const itemCount = (db.prepare('SELECT COUNT(*) as c FROM purchase_order_items WHERE purchase_order_id = ?').get(purchaseOrderId) as { c: number }).c;
+  const itemCount = (db.prepare('SELECT COUNT(*) as c FROM purchase_order_items WHERE purchase_order_id = ? AND deleted_at IS NULL').get(purchaseOrderId) as { c: number }).c;
   if (itemCount === 0) {
     throw new PurchaseOrderError('A purchase order needs at least one item before it can be ordered');
   }
@@ -185,7 +189,7 @@ export function getPurchaseOrder(id: string): any {
   const db = getDatabase();
   const po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(id);
   if (!po) return null;
-  const items = db.prepare('SELECT * FROM purchase_order_items WHERE purchase_order_id = ? ORDER BY created_at ASC').all(id);
+  const items = db.prepare('SELECT * FROM purchase_order_items WHERE purchase_order_id = ? AND deleted_at IS NULL ORDER BY created_at ASC').all(id);
   return { ...(po as object), items };
 }
 

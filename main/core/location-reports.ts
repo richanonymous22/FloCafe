@@ -48,7 +48,7 @@ export function transfersReport(limit = 50): any[] {
   const db = getDatabase();
   return db.prepare(`
     SELECT t.*, fl.name as from_location_name, tl.name as to_location_name,
-      (SELECT COALESCE(SUM(quantity), 0) FROM stock_transfer_items WHERE stock_transfer_id = t.id) as total_quantity
+      (SELECT COALESCE(SUM(quantity), 0) FROM stock_transfer_items WHERE stock_transfer_id = t.id AND deleted_at IS NULL) as total_quantity
     FROM stock_transfers t
     JOIN locations fl ON fl.id = t.from_location_id
     JOIN locations tl ON tl.id = t.to_location_id

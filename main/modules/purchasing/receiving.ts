@@ -98,7 +98,7 @@ export function receiveGoods(input: ReceiveGoodsInput): ReceiveGoodsResult {
         .run(line.quantity, now(), item.id);
     }
 
-    const items = db.prepare('SELECT quantity_ordered, quantity_received FROM purchase_order_items WHERE purchase_order_id = ?')
+    const items = db.prepare('SELECT quantity_ordered, quantity_received FROM purchase_order_items WHERE purchase_order_id = ? AND deleted_at IS NULL')
       .all(input.purchaseOrderId) as { quantity_ordered: number; quantity_received: number }[];
     const fullyReceived = items.every((i) => i.quantity_received >= i.quantity_ordered);
     const anyReceived = items.some((i) => i.quantity_received > 0);

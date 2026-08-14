@@ -4771,6 +4771,101 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 86,
+    name: 'sync_a_local_foundation',
+    up: () => {
+      // SYNC-A — the local synchronization foundation. Three durable local
+      // tables; NO cloud, NO network, NO transport is created here. See
+      // docs/SYNC_A_LOCAL_FOUNDATION.md.
+      //
+      // sync_outbox: one append-only sync EVENT per business fact. `uid` is
+      // the event's own identity (a ULID), distinct from `entity_uid` (the
+      // business fact's identity, e.g. inventory_movements.id — see Part H).
+      // `sequence` is a per-device monotonic counter for deterministic upload
+      // ordering and gap detection (Part G). The (entity_type, entity_uid)
+      // unique index is the local idempotency guard: a given business fact
+      // can produce at most one outbox event. The (device_id, status,
+      // sequence) index answers the future worker's core query — "the next N
+      // pending events for this device, in order" (Part N).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          uid             TEXT PRIMARY KEY,
+          device_id       TEXT NOT NULL,
+          sequence        INTEGER NOT NULL,
+          entity_type     TEXT NOT NULL,
+          entity_uid      TEXT NOT NULL,
+          operation       TEXT NOT NULL DEFAULT 'create'
+            CHECK (operation IN ('create', 'update', 'append')),
+          payload         TEXT NOT NULL,
+          organization_id TEXT,
+          location_id     TEXT,
+          status          TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'uploading', 'acked', 'failed')),
+          attempt_count   INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at TEXT,
+          last_error      TEXT,
+          created_at      TEXT NOT NULL,
+          acked_at        TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_device_sequence ON sync_outbox(device_id, sequence);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(entity_type, entity_uid);
+        CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(device_id, status, sequence);
+
+        -- sync_inbox: the durable local shape for future cloud-to-local
+        -- events. Storage foundation only in SYNC-A; download is not
+        -- functional yet (Part D/K). uid is the cloud-assigned event id (the
+        -- download-side idempotency key). cursor records which download
+        -- cursor an event arrived under, so the future apply loop can advance
+        -- the cursor atomically with inserting the batch (the boundary
+        -- documented in the SYNC-A doc, enforced when download is built).
+        CREATE TABLE IF NOT EXISTS sync_inbox (
+          uid          TEXT PRIMARY KEY,
+          entity_type  TEXT NOT NULL,
+          entity_uid   TEXT NOT NULL,
+          operation    TEXT NOT NULL DEFAULT 'create',
+          payload      TEXT NOT NULL,
+          cursor       TEXT,
+          status       TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'applied', 'skipped', 'failed')),
+          received_at  TEXT NOT NULL,
+          applied_at   TEXT,
+          last_error   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_inbox_status ON sync_inbox(status, received_at);
+
+        -- sync_state: this device's sync bookkeeping. Keyed by device_id so a
+        -- restart knows exactly where it was, and so the per-device sequence
+        -- counter (device_sequence) is naturally independent per device. A
+        -- normal single-install install has exactly one row.
+        CREATE TABLE IF NOT EXISTS sync_state (
+          device_id              TEXT PRIMARY KEY,
+          device_sequence        INTEGER NOT NULL DEFAULT 0,
+          last_uploaded_sequence INTEGER NOT NULL DEFAULT 0,
+          last_upload_at         TEXT,
+          last_download_cursor   TEXT,
+          last_download_at       TEXT,
+          failure_count          INTEGER NOT NULL DEFAULT 0,
+          last_error             TEXT,
+          last_error_at          TEXT,
+          protocol_version       TEXT NOT NULL DEFAULT '1',
+          created_at             TEXT NOT NULL,
+          updated_at             TEXT NOT NULL
+        );
+      `);
+
+      // Seed this device's sync_state row so a restart immediately sees its
+      // bookkeeping. Best-effort from the device pointer; if it is absent the
+      // row is created lazily on the first outbox append instead.
+      const deviceId = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as { value?: string } | undefined)?.value;
+      if (deviceId) {
+        db.prepare(`
+          INSERT OR IGNORE INTO sync_state (device_id, created_at, updated_at)
+          VALUES (?, ?, ?)
+        `).run(deviceId, now(), now());
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

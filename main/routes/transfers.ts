@@ -6,6 +6,7 @@
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
 import { requireLocationAccess } from '../middleware/location-access';
+import { requireFeature } from '../middleware/feature-access';
 import {
   createTransfer, addTransferItem, removeTransferItem, completeTransfer, cancelTransfer,
   getTransfer, listTransfers,
@@ -41,7 +42,7 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
   res.json({ transfer });
 });
 
-router.post('/', requireRole('owner', 'manager'),
+router.post('/', requireRole('owner', 'manager'), requireFeature('retail.transfers'),
   requireLocationAccess((req) => (req.body || {}).from_location_id),
   requireLocationAccess((req) => (req.body || {}).to_location_id),
   (req: Request, res: Response) => {

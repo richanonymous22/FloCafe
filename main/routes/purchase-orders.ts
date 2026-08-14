@@ -6,6 +6,7 @@
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
 import { requireLocationAccess } from '../middleware/location-access';
+import { requireFeature } from '../middleware/feature-access';
 import {
   createPurchaseOrder, addItem, updateItem, removeItem, markOrdered, cancelPurchaseOrder,
   getPurchaseOrder, listPurchaseOrders,
@@ -64,7 +65,7 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
   res.json({ purchaseOrder: po });
 });
 
-router.post('/', requireRole('owner', 'manager'),
+router.post('/', requireRole('owner', 'manager'), requireFeature('retail.purchasing'),
   requireLocationAccess((req) => (req.body || {}).location_id || getCurrentLocationId()),
   (req: Request, res: Response) => {
   handle(res, () => {

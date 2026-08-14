@@ -8,6 +8,7 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
+import { requireFeature } from '../middleware/feature-access';
 import {
   createVariant, listVariantsForProduct, updateVariant, deactivateVariant, lookupByCode,
 } from '../modules/retail/variants';
@@ -97,7 +98,7 @@ router.get('/lookup', requireRole('owner', 'manager', 'cashier'), (req: Request,
   res.json(result);
 });
 
-router.post('/checkout', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.post('/checkout', requireRole('owner', 'manager', 'cashier'), requireFeature('retail.catalog'), (req: Request, res: Response) => {
   try {
     const body = req.body || {};
     const user = (req as any).user;

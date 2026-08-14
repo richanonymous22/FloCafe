@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDatabase, now, parseRowJson, withTxn } from '../db';
 import { randomUUID } from 'crypto';
 import { requireRole } from '../middleware/security';
+import { requireFeature } from '../middleware/feature-access';
 import { notifyKdsUpdate } from '../services/kds';
 import { cloudSync } from '../services/cloud-sync';
 
@@ -89,7 +90,7 @@ router.get('/:id', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/', requireRole('owner', 'manager'), requireFeature('hospitality.tables'), (req: Request, res: Response) => {
   try {
     // Accept `number` (schema column) or `name` (legacy frontend field)
     const { number, name, capacity, floor, section, position_x, position_y, kitchen_station_id } = req.body;

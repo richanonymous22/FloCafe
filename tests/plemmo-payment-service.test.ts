@@ -339,18 +339,26 @@ async function main() {
     assertEqual(listPaymentsForBill(bill4.data.bill.id).length, 1,
       'the dual-write inherits idempotency from applyPaymentBatch\'s own replay path — a network retry does not produce a duplicate row');
 
-    console.log('\n16. A dual-write failure cannot break a real payment');
-    // Rename the new table out from under the dual-write hook, then confirm
-    // the legacy payment still succeeds — this is the "never breaks a real
-    // payment" guarantee, proven end-to-end through the real HTTP route.
+    console.log('\n16. SYNC-0: the dual-write is now authoritative — a payment either lands in BOTH models or NEITHER');
+    // SYNC-0 (Part A3) deliberately REVERSES the pre-SYNC behavior this test
+    // used to assert. Before SYNC-0 the dual-write swallowed all errors, so a
+    // payment could commit to bills.payment_details while its payment_event
+    // was silently lost — the Milestone 9A review's biggest sync blocker. The
+    // authoritative model must never be silently incomplete: if the payments
+    // table cannot record the payment, the ENTIRE payment (including the
+    // legacy payment_details write) rolls back. Proven end-to-end by renaming
+    // the table out from under the hook and confirming the payment fails
+    // atomically and the bill stays unpaid.
     db2.exec('ALTER TABLE payments RENAME TO payments_hidden_for_test');
     const order5 = await api(baseUrl, '/api/orders', {
       method: 'POST', body: { type: 'takeaway', items: [{ product_id: 'prod-dw', quantity: 1 }] }, headers: authHeader,
     });
     const bill5 = await api(baseUrl, '/api/bills/generate', { method: 'POST', body: { order_id: order5.data.order.id }, headers: authHeader });
     const pay5 = await api(baseUrl, `/api/bills/${bill5.data.bill.id}/payment`, { method: 'POST', body: { method: 'cash', amount: bill5.data.bill.total }, headers: authHeader });
-    assertEqual(pay5.status, 200, 'the legacy payment still succeeds even when the new payments table is unavailable');
-    assertEqual(pay5.data.bill.payment_status, 'paid', 'the bill is still correctly marked paid — a broken dual-write must never be visible to a merchant');
+    assertEqual(pay5.status, 500, 'the payment now FAILS when the authoritative payments model is unavailable — silent data loss is not allowed (SYNC-0 Part A3)');
+    const bill5After = db2.prepare('SELECT payment_status, payment_details FROM bills WHERE id = ?').get(Number(bill5.data.bill.id)) as { payment_status: string; payment_details: string | null };
+    assertEqual(bill5After.payment_status, 'unpaid', 'the bill remains unpaid — the legacy payment_details write rolled back atomically with the failed authoritative write');
+    assertEqual(bill5After.payment_details, null, 'no partial payment_details survives the rollback');
     db2.exec('ALTER TABLE payments_hidden_for_test RENAME TO payments');
 
     console.log('\n17. Retail compatibility: the full Core chain works with no table and no hospitality import');

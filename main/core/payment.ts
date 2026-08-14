@@ -52,10 +52,12 @@
  *     paths (the idempotency-key check and the transaction-id-match check)
  *     return before this call is ever reached, so a genuine retry can never
  *     produce a duplicate `payments` row.
- *   - can never break a real payment. It is wrapped so any failure is logged
- *     and swallowed — a bug in brand-new, not-yet-relied-upon infrastructure
- *     must not be the reason a merchant can't take a payment. Same rule as
- *     `recordAuditEvent()` in Phase 1.
+ *   - is authoritative and atomic as of SYNC-0. It originally swallowed all
+ *     errors (best-effort), which made `payments`/`payment_events` an
+ *     unreliable mirror — the Milestone 9A review's biggest sync blocker.
+ *     It now runs inside `applyPaymentBatch`'s transaction and is allowed to
+ *     throw, so a payment either lands in BOTH the legacy and new models or
+ *     in NEITHER. See `recordAppliedPaymentLine`'s own docstring.
  *   - mirrors the legacy 2-decimal-currency assumption it is fed, on
  *     purpose. `applyPaymentBatch` computes amounts as integer *cents*
  *     unconditionally (`main/routes/bills.ts`'s `paymentAmountCents()`,
@@ -308,6 +310,28 @@ interface PersistPaymentInput {
 }
 
 /**
+ * Resolves the global (ULID) identities of a bill and order from their local
+ * integer keys. `orders`/`bills` carry a `uid` beside the integer PK (v69);
+ * every current insert path populates it (SYNC-0 Part B), and any legacy row
+ * that predates that is backfilled by migration, so a lookup here should
+ * always find one — but this returns `null` rather than throwing if it does
+ * not, so a payment is never blocked by a missing uid it can be given later.
+ */
+function resolveBillOrderUids(
+  db: ReturnType<typeof getDatabase>,
+  billId: number | string | null,
+  orderId: number | string | null,
+): { billUid: string | null; orderUid: string | null } {
+  const billUid = billId != null
+    ? (db.prepare('SELECT uid FROM bills WHERE id = ?').get(billId) as { uid: string | null } | undefined)?.uid ?? null
+    : null;
+  const orderUid = orderId != null
+    ? (db.prepare('SELECT uid FROM orders WHERE id = ?').get(orderId) as { uid: string | null } | undefined)?.uid ?? null
+    : null;
+  return { billUid, orderUid };
+}
+
+/**
  * Insert a payment row and its first state-transition event. Low-level and
  * unexported — every write goes through `tender()` (new call sites) or
  * `recordAppliedPaymentLine()` (the legacy dual-write), which both add the
@@ -319,16 +343,21 @@ function persistPayment(input: PersistPaymentInput): PaymentRecord {
   const id = ulid();
   const requestedAt = now();
   const settledAt = result.state === 'settled' ? requestedAt : null;
+  // SYNC-0 (Part A6/B2): stamp the payment with the *global* identities of
+  // its bill and order, resolved from the integer foreign keys. The integer
+  // FKs stay for local joins; the uids are what a future sync engine keys
+  // on, since integer PKs collide across devices.
+  const { billUid, orderUid } = resolveBillOrderUids(db, input.billId, input.orderId ?? null);
 
   db.prepare(`
     INSERT INTO payments (
-      id, bill_id, order_id, adapter, method, state,
+      id, bill_id, order_id, bill_uid, order_uid, adapter, method, state,
       amount_minor, currency, refunded_minor, tendered_minor, change_minor,
       provider_reference, actor_user_id, notes, metadata,
       requested_at, settled_at, created_at, updated_at, organization_id, location_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    id, input.billId, input.orderId ?? null, t.adapter, t.method, result.state,
+    id, input.billId, input.orderId ?? null, billUid, orderUid, t.adapter, t.method, result.state,
     t.amountMinor, t.currency, t.tenderedMinor ?? null,
     t.tenderedMinor !== undefined ? Math.max(0, t.tenderedMinor - t.amountMinor) : null,
     result.providerReference ?? null, input.actorUserId ?? null, t.notes ?? null,
@@ -554,10 +583,19 @@ export function refundPayment(input: RefundPaymentInput): RefundPaymentResult {
 
     const changedAt = now();
     const refundId = ulid();
+    // SYNC-0 (Part A6/B2): a refund carries the global identities of the
+    // payment (payment_id is already a ULID), bill, and order it reverses.
+    // `payment.bill_uid`/`order_uid` were stamped when the payment was
+    // persisted (or backfilled), so prefer them; fall back to a live lookup
+    // for any payment row that predates the stamping.
+    const refundBillUid = (payment as { bill_uid?: string | null }).bill_uid
+      ?? resolveBillOrderUids(db, payment.bill_id, payment.order_id ?? null).billUid;
+    const refundOrderUid = (payment as { order_uid?: string | null }).order_uid
+      ?? resolveBillOrderUids(db, payment.bill_id, payment.order_id ?? null).orderUid;
     db.prepare(`
-      INSERT INTO refunds (id, payment_id, bill_id, amount_minor, currency, reason, state, actor_user_id, requested_at, settled_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)
-    `).run(refundId, input.paymentId, payment.bill_id, input.amountMinor, payment.currency, input.reason ?? null, input.actorUserId ?? null, changedAt, changedAt, changedAt, changedAt);
+      INSERT INTO refunds (id, payment_id, bill_id, bill_uid, order_uid, amount_minor, currency, reason, state, actor_user_id, requested_at, settled_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)
+    `).run(refundId, input.paymentId, payment.bill_id, refundBillUid, refundOrderUid, input.amountMinor, payment.currency, input.reason ?? null, input.actorUserId ?? null, changedAt, changedAt, changedAt, changedAt);
 
     if (input.items && input.items.length > 0) {
       for (const item of input.items) {
@@ -653,50 +691,57 @@ export interface RecordAppliedPaymentLineInput {
 }
 
 /**
- * The additive dual-write hook called from `applyPaymentBatch()` in
- * routes/bills.ts, once per tender line it has just applied to a bill — see
- * the module docstring for the full reasoning. Must run inside the same
- * transaction as the legacy write it is mirroring.
+ * The dual-write hook called from `applyPaymentBatch()` in routes/bills.ts,
+ * once per tender line it has just applied to a bill — see the module
+ * docstring for the full reasoning. Must run inside the same transaction as
+ * the legacy `bills.payment_details` write it mirrors.
  *
- * Deliberately never throws. This path has no test coverage backing it the
- * way `tender()` does from the outside — it runs inline in the one payment
- * flow real merchants depend on today, and a bug here must not be able to
- * turn a successful cash payment into a failed HTTP request.
+ * ## SYNC-0 change: this is now authoritative, not best-effort.
+ *
+ * Before SYNC-0 this function swallowed every error so a bug here could not
+ * turn a successful cash payment into a failed HTTP request. That made
+ * `payments`/`payment_events` an unreliable mirror — a payment could commit
+ * to `payment_details` while its `payment_event` was silently lost, which
+ * the Milestone 9A review identified as the single biggest sync blocker.
+ *
+ * It now runs inside `applyPaymentBatch`'s transaction and is allowed to
+ * throw: if the authoritative payment model cannot record a payment, the
+ * *entire* payment (including the `payment_details` write) rolls back, so a
+ * merchant is never told a payment succeeded while the record of it is
+ * incomplete. This is safe because the three local adapters
+ * (cash/wallet/manual_card) are pure and `persistPayment` only touches the
+ * local database inside the already-open transaction — it cannot fail on
+ * valid input, and if it somehow does, failing loudly is correct.
  */
 export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): void {
-  try {
-    const db = getDatabase();
-    const currency = (getSettingValue('currency') || 'INR').toUpperCase();
-    const adapter: PaymentAdapterId = input.line.method === 'cash' ? 'cash'
-      : input.line.method === 'wallet' ? 'wallet'
-      : 'manual_card';
+  const db = getDatabase();
+  const currency = (getSettingValue('currency') || 'INR').toUpperCase();
+  const adapter: PaymentAdapterId = input.line.method === 'cash' ? 'cash'
+    : input.line.method === 'wallet' ? 'wallet'
+    : 'manual_card';
 
-    const tenderRequest: TenderRequest = {
-      adapter,
-      method: input.line.method,
-      amountMinor: input.line.amountCents,
-      currency,
-      tenderedMinor: input.line.tenderedCents ?? undefined,
-      providerReference: input.line.transactionId ?? null,
-      notes: input.line.notes ?? null,
-      metadata: input.line.paymentMethodId != null ? { payment_method_id: input.line.paymentMethodId } : null,
-    };
+  const tenderRequest: TenderRequest = {
+    adapter,
+    method: input.line.method,
+    amountMinor: input.line.amountCents,
+    currency,
+    tenderedMinor: input.line.tenderedCents ?? undefined,
+    providerReference: input.line.transactionId ?? null,
+    notes: input.line.notes ?? null,
+    metadata: input.line.paymentMethodId != null ? { payment_method_id: input.line.paymentMethodId } : null,
+  };
 
-    const result = getPaymentAdapter(adapter).capture(tenderRequest);
-    const payment = persistPayment({
-      db, billId: input.billId, orderId: input.orderId, tender: tenderRequest, result,
-      actorUserId: input.actorUserId,
-    });
+  const result = getPaymentAdapter(adapter).capture(tenderRequest);
+  const payment = persistPayment({
+    db, billId: input.billId, orderId: input.orderId, tender: tenderRequest, result,
+    actorUserId: input.actorUserId,
+  });
 
-    recordAuditEvent({
-      type: 'payment.recorded',
-      actor: { userId: input.actorUserId ?? null },
-      entity: { type: 'payment', id: payment.id },
-      summary: `${adapter} tender applied to bill ${input.billId} (${result.state})`,
-      metadata: { bill_id: Number(input.billId), adapter, method: input.line.method, amount_minor: input.line.amountCents, currency, state: result.state },
-    });
-  } catch (err) {
-    // Never let the dual-write break a real payment. See the module docstring.
-    console.error('[PaymentService] dual-write to the new payment model failed', (err as Error).message);
-  }
+  recordAuditEvent({
+    type: 'payment.recorded',
+    actor: { userId: input.actorUserId ?? null },
+    entity: { type: 'payment', id: payment.id },
+    summary: `${adapter} tender applied to bill ${input.billId} (${result.state})`,
+    metadata: { bill_id: Number(input.billId), adapter, method: input.line.method, amount_minor: input.line.amountCents, currency, state: result.state },
+  });
 }

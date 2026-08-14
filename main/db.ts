@@ -4389,6 +4389,112 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       for (const user of users) insert.run(user.id, locationId.value, timestamp);
     },
   },
+  {
+    version: 79,
+    name: 'plemmo_feature_entitlements',
+    up: () => {
+      // PLEMMO CORE — feature entitlement foundation (Milestone 7, Part D-G).
+      // See docs/MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md.
+      //
+      // `features` is a static catalog — only keys for capabilities that
+      // actually exist in the codebase today (Part D: "do not implement
+      // every feature listed if it does not yet exist"). `feature_presets`/
+      // `feature_preset_items` are predefined collections a merchant can
+      // apply as a starting point; `organization_features` is the actual,
+      // authoritative per-organization entitlement set the backend checks
+      // against — presets and business type are conveniences that write
+      // into it, never a permanent restriction (Part E).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS features (
+          key TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          category TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS feature_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS feature_preset_items (
+          preset_id TEXT NOT NULL,
+          feature_key TEXT NOT NULL,
+          PRIMARY KEY (preset_id, feature_key),
+          FOREIGN KEY (preset_id) REFERENCES feature_presets(id),
+          FOREIGN KEY (feature_key) REFERENCES features(key)
+        );
+
+        -- organization_id is not a hard foreign key against organizations(id)
+        -- to keep this table usable the same way ahead of any future
+        -- multi-organization (cloud) scenario, matching how migration v75
+        -- already treats purchase_orders.organization_id as informational.
+        CREATE TABLE IF NOT EXISTS organization_features (
+          organization_id TEXT NOT NULL,
+          feature_key TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          source TEXT NOT NULL DEFAULT 'custom' CHECK (source IN ('preset', 'custom')),
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (organization_id, feature_key),
+          FOREIGN KEY (feature_key) REFERENCES features(key)
+        );
+      `);
+
+      const insertFeature = db.prepare('INSERT OR IGNORE INTO features (key, label, category, created_at) VALUES (?, ?, ?, ?)');
+      const featureTimestamp = now();
+      const FEATURES: [string, string, string][] = [
+        ['core.pos', 'Point of sale', 'core'],
+        ['core.customers', 'Customers', 'core'],
+        ['core.staff', 'Staff management', 'core'],
+        ['hospitality.tables', 'Tables', 'hospitality'],
+        ['hospitality.kds', 'Kitchen display', 'hospitality'],
+        ['hospitality.kot', 'Kitchen order tickets', 'hospitality'],
+        ['hospitality.modifiers', 'Modifiers / add-ons', 'hospitality'],
+        ['retail.catalog', 'Product catalogue', 'retail'],
+        ['retail.variants', 'Product variants', 'retail'],
+        ['retail.barcode', 'Barcode scanning', 'retail'],
+        ['retail.inventory', 'Inventory tracking', 'retail'],
+        ['retail.purchasing', 'Suppliers & purchase orders', 'retail'],
+        ['retail.transfers', 'Stock transfers', 'retail'],
+        ['advanced.multi_location', 'Multi-location', 'advanced'],
+      ];
+      for (const [key, label, category] of FEATURES) insertFeature.run(key, label, category, featureTimestamp);
+
+      const insertPreset = db.prepare('INSERT OR IGNORE INTO feature_presets (id, name, description, created_at) VALUES (?, ?, ?, ?)');
+      const insertPresetItem = db.prepare('INSERT OR IGNORE INTO feature_preset_items (preset_id, feature_key) VALUES (?, ?)');
+      const PRESETS: { id: string; name: string; description: string; features: string[] }[] = [
+        {
+          id: 'preset-hospitality', name: 'Hospitality', description: 'Restaurants and cafes',
+          features: ['core.pos', 'core.customers', 'core.staff', 'hospitality.tables', 'hospitality.kds', 'hospitality.kot', 'hospitality.modifiers'],
+        },
+        {
+          id: 'preset-retail', name: 'Retail', description: 'Shops and general retail',
+          features: ['core.pos', 'core.customers', 'core.staff', 'retail.catalog', 'retail.variants', 'retail.barcode', 'retail.inventory', 'retail.purchasing'],
+        },
+      ];
+      for (const preset of PRESETS) {
+        insertPreset.run(preset.id, preset.name, preset.description, featureTimestamp);
+        for (const featureKey of preset.features) insertPresetItem.run(preset.id, featureKey);
+      }
+
+      // Every existing organization gets every existing feature enabled —
+      // the safe default that changes nothing about current behavior for
+      // an already-running install (Part H: "do not break current default
+      // behavior... unless explicitly needed"). A merchant onboarded after
+      // this milestone would go through a real preset-selection flow this
+      // milestone does not build (Part K: backend/domain foundation only).
+      const organizations = db.prepare('SELECT id FROM organizations').all() as { id: string }[];
+      const insertOrgFeature = db.prepare(`
+        INSERT OR IGNORE INTO organization_features (organization_id, feature_key, enabled, source, updated_at)
+        VALUES (?, ?, 1, 'custom', ?)
+      `);
+      for (const organization of organizations) {
+        for (const [key] of FEATURES) insertOrgFeature.run(organization.id, key, featureTimestamp);
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

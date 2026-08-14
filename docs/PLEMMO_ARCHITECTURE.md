@@ -122,7 +122,7 @@ TypeScript with no Express dependency.
 | `transfers.ts` (`TransferService`) | ✅ Built (M6) | `createTransfer`, `addTransferItem`, `completeTransfer`, `cancelTransfer` |
 | `employee-access.ts` | ✅ Built (M6) | `grantLocationAccess`/`revokeLocationAccess`/`listUserLocations` — foundation only, not enforced |
 | `location-reports.ts` | ✅ Built (M6) | Sales/inventory/purchases by location, transfers, adjustments |
-| `authorization.ts` (`AuthorizationService`) | ✅ Built (M7) | `hasPermission`, `hasLocationAccess`, `can`, `requireCan` — role→permission table (additive to `requireRole()`) plus `user_locations` enforcement |
+| `authorization.ts` (`AuthorizationService`) | ✅ Built (M7), canonical (M8) | `hasPermission`, `hasLocationAccess`, `can`, `requireCan` — role→permission table plus `user_locations` enforcement; exports the canonical `Role`/`ALL_ROLES` every `requireRole()` call site now type-checks against |
 | `features.ts` (`FeatureService`) | ✅ Built (M7) | `isEnabled`, `requireEnabled`, `grantFeature`/`revokeFeature`, `applyPreset`, `setCustomFeatures` — per-organization feature entitlements |
 
 ### Module boundary (Milestone 3)
@@ -164,7 +164,7 @@ classification.
 | Device | ✅ New | `devices` (v68) | This installation's identity |
 | Employee | ⚠️ Partial | `users` | Sound bcrypt/PIN auth; location scope now enforced (M7) via `user_locations` on the routes that accept a client-supplied location |
 | Role | ⚠️ Partial | `users.role` CHECK | 5 hardcoded roles, no `supervisor` |
-| Permission | ⚠️ Partial (M7) | `authorization.ts`'s `ROLE_PERMISSIONS` | Static role→permission table alongside `requireRole()`, not yet the primary gate on any route |
+| Permission | ⚠️ Partial (M7), canonical gate on business-critical routes (M8) | `authorization.ts`'s `ROLE_PERMISSIONS` | `main/middleware/authorize.ts`'s `requirePermission()` is the primary gate on 42 sales/inventory/purchasing/staff/location/report route handlers; the remaining ~166 stay on `requireRole()` by deliberate choice (docs/MILESTONE_8_AUTHORIZATION.md §1) |
 | Feature entitlement | ✅ New (M7) | `features`/`feature_presets`/`feature_preset_items`/`organization_features` (v79) | Per-organization; 14 real feature keys; presets + custom configuration; `isEnabled()` is the single enforcement entry point |
 | Product | ✅ | `products` | Flat; a variant's parent when it has one |
 | ProductVariant | ✅ New (M3) | `product_variants` (v72) | ULID PK; own price/cost/SKU/barcode; a hospitality product never needs one — see § Product/Variant below |
@@ -629,21 +629,23 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 5 (M5) | Purchasing + suppliers + location-aware inventory — `SupplierService`, `PurchaseOrderService`, `ReceivingService`, `inventory_movements`/`inventory_balances` now stamped with the install's real location | ✅ Done |
 | 6 (M6) | Multi-location + device context + stock transfers — typed `context.ts`, `orders`/`payments` location stamping, `TransferService`, employee location-scope foundation, location-scoped reports | ✅ Done |
 | 7 (M7) | Access control + feature entitlements — `user_locations` enforcement on client-facing routes, `AuthorizationService` (role→permission model alongside `requireRole()`), `FeatureService` (`Organization → FeatureEntitlement[] → Feature`), presets, custom configuration, backend enforcement on business-critical routes | ✅ Done |
-| 8 | Multi-location selection/switching UI; a real goods-receiving workflow beyond the generic foundation; transfer reversal; `AuthorizationService`'s permission table wired as the primary gate on more routes | Next |
-| 9 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
-| 10 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
-| 11 | Plemmo Cloud + Admin | |
-| 12 | Licensing enforcement | |
-| 13 | Payment provider adapters | |
-| 14 | Advanced retail: phone-shop/IMEI, repairs, trade-ins | |
+| 8 (M8) | Authorization hardening — full `requireRole()` audit (212 call sites, 28 files), canonical `requirePermission()` gate on 42 business-critical routes (sales/inventory/purchasing/staff/locations/reports), device-location enforcement on sale creation, spoofing-resistance tests, `requireRole()` type-checked against `AuthorizationService`'s own `Role` union | ✅ Done |
+| 9 | Multi-location selection/switching UI; a real goods-receiving workflow beyond the generic foundation; transfer reversal; a dedicated refund/void HTTP surface for `PaymentService`'s `refundPayment()`/`voidPayment()` | Next |
+| 10 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
+| 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
+| 12 | Plemmo Cloud + Admin | |
+| 13 | Licensing enforcement | |
+| 14 | Payment provider adapters | |
+| 15 | Advanced retail: phone-shop/IMEI, repairs, trade-ins | |
 
-Phases 0–10 yield a product a single-location merchant can trade on, and a
+Phases 0–11 yield a product a single-location merchant can trade on, and a
 multi-location merchant can operate locally. The pilot does not wait for
 the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md`,
 `docs/MILESTONE_4_INVENTORY.md`, `docs/MILESTONE_5_PURCHASING_LOCATIONS.md`,
-`docs/MILESTONE_6_MULTI_LOCATION.md`, and
-`docs/MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md` for the detailed design
-records of Milestones 2, 4, 5, 6, and 7.
+`docs/MILESTONE_6_MULTI_LOCATION.md`,
+`docs/MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md`, and
+`docs/MILESTONE_8_AUTHORIZATION.md` for the detailed design records of
+Milestones 2, 4, 5, 6, 7, and 8.
 
 ---
 
@@ -657,5 +659,6 @@ records of Milestones 2, 4, 5, 6, and 7.
 - [`MILESTONE_5_PURCHASING_LOCATIONS.md`](./MILESTONE_5_PURCHASING_LOCATIONS.md) — the purchasing and location-aware inventory design record: the location model audit, suppliers, purchase orders, receiving, idempotency, deferred work
 - [`MILESTONE_6_MULTI_LOCATION.md`](./MILESTONE_6_MULTI_LOCATION.md) — the multi-location design record: the device/location context audit, sale/payment stamping, stock transfers and their atomicity, employee location scope, future sync implications, deferred work
 - [`MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md`](./MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md) — the access-control and feature-entitlement design record: `AuthorizationService`, location enforcement, the permission model, `FeatureService`, presets, custom configuration, backend enforcement, security considerations, deferred work
+- [`MILESTONE_8_AUTHORIZATION.md`](./MILESTONE_8_AUTHORIZATION.md) — the authorization hardening design record: the full `requireRole()` audit, the canonical `requirePermission()` gate, which routes were migrated and why, the security review of client-supplied context, remaining gaps
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

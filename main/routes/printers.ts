@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getDatabase, now, attachEffectiveAddons, isKotPrintingEnabled, parseItemJson } from '../db';
+import { getDatabase, now, attachEffectiveAddons, isKotPrintingEnabled, parseItemJson, deriveBillPaymentDetails } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { printViaNetwork, printViaUSB, buildTestPage, printReceiptDetailed, printKOTDetailed, detectConnectedPrinters, prepareReceipt, escPosToText } from '../printers/thermal';
 import { getSupportedPrinterProfiles, resolvePrinterProfile } from '../printers/profiles';
@@ -331,6 +331,12 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
       console.log('[Print Bill] Error: Bill not found');
       return res.status(404).json({ error: 'Bill not found' });
     }
+    // PAYMENT CUTOVER: the receipt's payment breakdown is derived from the
+    // authoritative payments table, not the stored payment_details column —
+    // see main/db.ts's deriveBillPaymentDetails(). thermal.ts already
+    // handles this field as a pre-parsed array (or a JSON string), so no
+    // change is needed downstream.
+    bill.payment_details = deriveBillPaymentDetails(bill.id);
 
     const order: any = db.prepare('SELECT * FROM orders WHERE id = ?').get(bill.order_id);
     if (!order) {

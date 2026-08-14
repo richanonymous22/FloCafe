@@ -8,6 +8,7 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled';
 import { ulid } from './core/ids';
+import { fromMinor, minorUnitExponent } from './core/money';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -4741,6 +4742,35 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 85,
+    name: 'payment_cutover_reconciliation',
+    up: () => {
+      // PAYMENT CUTOVER, Part C — migration v80 only backfilled bills with
+      // ZERO existing payments rows. Before SYNC-0 fixed the hospitality
+      // dual-write to be atomic, it swallowed errors PER LINE, so a bill
+      // with a multi-line split payment could have had some lines mirrored
+      // and others silently dropped — leaving a bill with >=1 payment row
+      // that v80's guard skips, but that is still missing some lines. This
+      // migration reconciles every bill that still has legacy
+      // payment_details against its authoritative payments, reconstructing
+      // any missing-but-deterministic line and leaving anything genuinely
+      // ambiguous unreconstructed and reported (never inventing data).
+      //
+      // Lazily required (not a top-level import) to avoid a circular import
+      // with main/db.ts — see main/core/payment-reconciliation.ts's own
+      // docstring. Same pattern already used for './lib/phone' above.
+      const { reconcileAllPaymentDetails } = require('./core/payment-reconciliation') as typeof import('./core/payment-reconciliation');
+      const report = reconcileAllPaymentDetails();
+      if (report.billsWithDiscrepancy > 0) {
+        console.log(
+          `[DB] v85 payment reconciliation: ${report.billsExamined} bill(s) examined, ` +
+          `${report.billsWithDiscrepancy} with a discrepancy — ` +
+          `${report.totalReconstructed} line(s) reconstructed, ${report.totalUnrepresentable} line(s) unrepresentable (left as-is)`,
+        );
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {
@@ -5793,6 +5823,58 @@ export function attachEffectiveAddons<T extends { id: number }>(
 }
 
 /** Parse JSON text columns on bill/order rows returned from SQLite. */
+/**
+ * PAYMENT CUTOVER — the historical `payment_details` line shape, derived
+ * from the authoritative `payments` table instead of the stored JSON
+ * column. Every merchant-facing reader of a bill's payment breakdown
+ * (thermal receipts, the frontend's web-print receipt encoders, bill
+ * rendering) consumes this exact shape, so replacing what feeds it here is
+ * enough to migrate all of them without touching their own code — see
+ * docs/PAYMENT_CUTOVER.md § Reader migration.
+ *
+ * Returns null (matching the legacy `payment_details IS NULL` semantics)
+ * when the bill has no payments yet.
+ */
+export function deriveBillPaymentDetails(billId: number | string): Array<Record<string, unknown>> | null {
+  // Defensive: this feeds bill *display* (rendering, receipts) — a read-side
+  // failure here must never take down basic bill viewing (Principle 8, "the
+  // local POS must never become unusable"). Contrast with the payment
+  // *write* path (persistPayment/recordAppliedPaymentLine), which correctly
+  // fails loudly if the authoritative model cannot record a payment — that
+  // is a different, intentionally stricter guarantee (SYNC-0 Part A3).
+  let rows: any[];
+  try {
+    rows = db.prepare('SELECT * FROM payments WHERE bill_id = ? ORDER BY requested_at ASC, created_at ASC').all(billId) as any[];
+  } catch (err) {
+    console.error('[DB] deriveBillPaymentDetails failed:', (err as Error).message);
+    return null;
+  }
+  if (rows.length === 0) return null;
+  return rows.map((p) => {
+    const exponent = minorUnitExponent(p.currency);
+    let paymentMethodId: number | undefined;
+    if (p.metadata) {
+      try {
+        const meta = JSON.parse(p.metadata);
+        if (meta && meta.payment_method_id != null) paymentMethodId = Number(meta.payment_method_id);
+      } catch { /* malformed metadata is not fatal to displaying the payment */ }
+    }
+    const line: Record<string, unknown> = {
+      method: p.method,
+      amount: fromMinor(p.amount_minor, exponent),
+      requested_amount: p.tendered_minor != null ? fromMinor(p.tendered_minor, exponent) : fromMinor(p.amount_minor, exponent),
+      amount_omitted: false,
+      timestamp: p.requested_at,
+    };
+    if (paymentMethodId !== undefined) line.payment_method_id = paymentMethodId;
+    if (p.tendered_minor != null) line.tendered_amount = fromMinor(p.tendered_minor, exponent);
+    if (p.change_minor != null) line.change_amount = fromMinor(p.change_minor, exponent);
+    if (p.provider_reference) line.transaction_id = p.provider_reference;
+    if (p.notes) line.notes = p.notes;
+    return line;
+  });
+}
+
 export function parseRowJson(row: any): any {
   if (!row) return row;
   const tryParse = (val: any) => {
@@ -5821,10 +5903,19 @@ export function parseRowJson(row: any): any {
     }));
   }
 
+  // PAYMENT CUTOVER: a bill's payment_details is now derived from the
+  // authoritative payments table, not the stored JSON column — see
+  // deriveBillPaymentDetails() above. `bill_number` only exists on bills
+  // (never orders), so this only fires for bill-shaped rows; an order row
+  // simply has `payment_details: undefined` as it always has.
+  const paymentDetails = row.bill_number !== undefined
+    ? deriveBillPaymentDetails(row.id)
+    : tryParse(row.payment_details);
+
   return {
     ...row,
     tax_breakdown: taxBreakdown,
     tax_snapshot: tryParse(row.tax_snapshot),
-    payment_details: tryParse(row.payment_details),
+    payment_details: paymentDetails,
   };
 }

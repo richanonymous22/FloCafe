@@ -48,6 +48,7 @@ import { supplierRoutes } from './suppliers';
 import { purchaseOrderRoutes } from './purchase-orders';
 import { transferRoutes } from './transfers';
 import { locationRoutes } from './locations';
+import { featureRoutes } from './features';
 
 // "Cloud POS is not registered" (thrown synchronously by cloud-sync.ts's
 // signedFetch, no network call even attempted) means this store was never
@@ -84,6 +85,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/purchase-orders', purchaseOrderRoutes);
   app.use('/api/transfers', transferRoutes);
   app.use('/api/locations', locationRoutes);
+  app.use('/api/features', featureRoutes);
 
   // Resource routes
   app.use('/api/categories', categoryRoutes);

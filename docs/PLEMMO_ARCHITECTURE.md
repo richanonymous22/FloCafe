@@ -178,7 +178,7 @@ classification.
 | Sale | ✅ | `orders` | The convergent spine; `createSale`/`addSaleItems` built; M3 adds `channel: 'in_store'` for retail, no table; M6 stamps organization/location/register/device |
 | SaleItem | ✅ | `order_items` | Inserted via the shared `persistSaleLine` engine; M3 adds `product_variant_id`/`unit_cost` columns, populated when a line names a variant |
 | Bill | ✅ | `bills` | Payable snapshot; now has `uid`; generation/split not yet in Core |
-| Payment | ✅ New (M2), authoritative (SYNC-0) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; **now the authoritative, complete payment model** — the hospitality dual-write is atomic (no longer error-swallowing) and legacy `payment_details` is backfilled (v80) and kept only as a compatibility bridge; `bill_uid`/`order_uid` global refs added (SYNC-0); M6 stamps organization/location |
+| Payment | ✅ New (M2), authoritative (SYNC-0), sole reader (Payment Cutover) | `payments`/`payment_events` (v71) | ULID PK, adapter-based state machine; **the authoritative, complete payment model** — the hospitality dual-write is atomic (no longer error-swallowing) and legacy `payment_details` is backfilled (v80) and reconciled for partial pre-SYNC-0 mirrors (v85); every merchant-facing reader (receipts, reports, payment-method usage/merge, bill rendering) now sources from `payments`, not `payment_details`; `bill_uid`/`order_uid` global refs added (SYNC-0); M6 stamps organization/location |
 | StockTransfer | ✅ New (M6) | `stock_transfers`/`stock_transfer_items` (v77) | draft → completed/cancelled; atomic transfer_out + transfer_in |
 | Refund | ✅ New (M2) | `refunds` (v71) | Foundation only — `refundPayment()` in `payment.ts`, no inventory return yet |
 | Tax/VAT | ✅ Strong | `services/tax-engine.ts` | Decimal, pack-driven; **no GB pack yet** |
@@ -633,9 +633,10 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 8 (M8) | Authorization hardening — full `requireRole()` audit (212 call sites, 28 files), canonical `requirePermission()` gate on 42 business-critical routes (sales/inventory/purchasing/staff/locations/reports), device-location enforcement on sale creation, spoofing-resistance tests, `requireRole()` type-checked against `AuthorizationService`'s own `Role` union | ✅ Done |
 | 9 (design) | Offline sync architecture — [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) design, [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) adversarial review | ✅ Done (design) |
 | SYNC-0 | Foundation repair before sync — authoritative payments (v80), load-bearing uids (v81), child-row tombstones (v82), inventory organization identity (v83), device-credential foundation (v84). [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) | ✅ Done |
+| Payment Cutover | Retire the legacy payment readers — every merchant-facing reader (receipts, reports, payment-method usage/merge, bill rendering) migrated from `bills.payment_details` to `payments`/`payment_events`; historical partial-mirror reconciliation (v85). [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) | ✅ Done |
 | SYNC-A+ | The sync engine itself (outbox/inbox/cloud) — not started | Next |
 | (later) | Multi-location selection/switching UI; two-phase transfers; a dedicated refund/void HTTP surface for `PaymentService` | |
-| 10 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
+| 10 | Retire the `bills.payment_details` *write* (kept only as a narrow compatibility bridge after the Payment Cutover milestone retired every read dependency — see `PAYMENT_CUTOVER.md` § F) once trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
 | 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
 | 12 | Plemmo Cloud + Admin | |
 | 13 | Licensing enforcement | |
@@ -666,5 +667,6 @@ Milestones 2, 4, 5, 6, 7, and 8.
 - [`MILESTONE_8_AUTHORIZATION.md`](./MILESTONE_8_AUTHORIZATION.md) — the authorization hardening design record: the full `requireRole()` audit, the canonical `requirePermission()` gate, which routes were migrated and why, the security review of client-supplied context, remaining gaps
 - [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) / [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) — the offline-sync architecture design and its adversarial review
 - [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) / [`SYNC_0_PAYMENT_MIGRATION.md`](./SYNC_0_PAYMENT_MIGRATION.md) — the pre-sync foundation repairs (authoritative payments, load-bearing uids, tombstones, sync identity, device credentials) and the payment migration in detail
+- [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) — retiring the legacy payment readers: every merchant-facing consumer migrated onto `payments`/`payment_events`, historical partial-mirror reconciliation, and why `bills.payment_details` is kept as a narrow write-side bridge
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

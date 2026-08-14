@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import * as os from 'os';
 import { requireRole } from '../middleware/security';
+import { ALL_ROLES } from '../core/authorization';
 import { cloudSync } from '../services/cloud-sync';
 import { getDatabase } from '../db';
 
@@ -70,7 +71,7 @@ function buildSystemDiagnostics(req: Request, category: string) {
   };
 }
 
-const supportRoles = ['owner', 'manager', 'cashier', 'waiter', 'chef'] as const;
+const supportRoles = ALL_ROLES;
 
 router.get('/profile', requireRole(...supportRoles), (req: Request, res: Response) => {
   const profile = supportProfile(req);

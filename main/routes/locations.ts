@@ -9,6 +9,7 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
+import { requirePermission } from '../middleware/authorize';
 import { getDatabase, now } from '../db';
 import { ulid } from '../core/ids';
 import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext } from '../core/context';
@@ -31,29 +32,29 @@ router.get('/context', requireRole('owner', 'manager', 'cashier'), (_req: Reques
   });
 });
 
-router.get('/reports/sales', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
+router.get('/reports/sales', requirePermission('reports.view'), (_req: Request, res: Response) => {
   res.json({ locations: salesByLocation() });
 });
 
-router.get('/reports/inventory', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
+router.get('/reports/inventory', requirePermission('reports.view'), (_req: Request, res: Response) => {
   res.json({ locations: inventoryByLocation() });
 });
 
-router.get('/reports/purchases', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
+router.get('/reports/purchases', requirePermission('reports.view'), (_req: Request, res: Response) => {
   res.json({ locations: purchasesByLocation() });
 });
 
-router.get('/reports/transfers', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.get('/reports/transfers', requirePermission('reports.view'), (req: Request, res: Response) => {
   const limit = req.query.limit ? Math.min(200, Math.max(1, Number(req.query.limit))) : 50;
   res.json({ transfers: transfersReport(limit) });
 });
 
-router.get('/reports/adjustments', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.get('/reports/adjustments', requirePermission('reports.view'), (req: Request, res: Response) => {
   const limit = req.query.limit ? Math.min(200, Math.max(1, Number(req.query.limit))) : 50;
   res.json({ adjustments: stockAdjustmentsByLocation(limit) });
 });
 
-router.post('/', requireRole('owner'), (req: Request, res: Response) => {
+router.post('/', requirePermission('locations.manage'), (req: Request, res: Response) => {
   const body = req.body || {};
   if (!body.name || !String(body.name).trim()) {
     return res.status(400).json({ error: 'Location name is required' });
@@ -72,7 +73,7 @@ router.post('/', requireRole('owner'), (req: Request, res: Response) => {
   res.status(201).json({ location: db.prepare('SELECT * FROM locations WHERE id = ?').get(id) });
 });
 
-router.put('/:id', requireRole('owner'), (req: Request, res: Response) => {
+router.put('/:id', requirePermission('locations.manage'), (req: Request, res: Response) => {
   const db = getDatabase();
   const id = String(req.params.id);
   const existing = db.prepare('SELECT * FROM locations WHERE id = ?').get(id) as any;

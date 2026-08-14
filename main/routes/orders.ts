@@ -14,6 +14,8 @@ import { cloudSync } from '../services/cloud-sync';
 import { validateOrderNotes, validateItemNotes } from '../core/notes-validation';
 import { createSale, addSaleItems, validateLineAddonGroupLimits } from '../core/sale';
 import { requireRole } from '../middleware/security';
+import { requirePermission } from '../middleware/authorize';
+import { getCurrentLocationId } from '../core/location';
 
 const router = Router();
 const MAX_ORDER_IDEMPOTENCY_KEY_LENGTH = 128;
@@ -267,7 +269,7 @@ router.get('/:id', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: R
  * domain input, so idempotency records written before this refactor still
  * match on retry.
  */
-router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+router.post('/', requirePermission('sales.create', { locationId: () => getCurrentLocationId() }), (req: Request, res: Response) => {
   try {
     const body = req.body || {};
     const { table_id, customer_id, type, guest_count, special_instructions, packaging_charge, delivery_charge, items } = body;
@@ -331,7 +333,7 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
  * the internal persistSaleLine helper. This handler keeps two checks that
  * stayed in the route deliberately — see the comment on addSaleItems for why.
  */
-router.post('/:id/items', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+router.post('/:id/items', requirePermission('sales.create', { locationId: () => getCurrentLocationId() }), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     // Kept in the route: a simple, self-contained guard with nothing to

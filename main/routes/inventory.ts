@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
-import { requireLocationAccess } from '../middleware/location-access';
+import { requirePermission } from '../middleware/authorize';
 import { getBalance, getMovementHistory, adjustStock, listLowStock } from '../core/inventory';
 import { getCurrentLocationId } from '../core/location';
 
@@ -17,7 +17,7 @@ function statusFor(error: any): number {
   return typeof error?.statusCode === 'number' ? error.statusCode : 500;
 }
 
-router.get('/balance', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.get('/balance', requirePermission('inventory.view'), (req: Request, res: Response) => {
   const productId = String(req.query.product_id || '');
   if (!productId) {
     return res.status(400).json({ error: 'product_id is required' });
@@ -26,7 +26,7 @@ router.get('/balance', requireRole('owner', 'manager', 'cashier'), (req: Request
   res.json({ balance: getBalance(productId, variantId) });
 });
 
-router.get('/history', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.get('/history', requirePermission('inventory.view'), (req: Request, res: Response) => {
   const productId = String(req.query.product_id || '');
   if (!productId) {
     return res.status(400).json({ error: 'product_id is required' });
@@ -40,8 +40,9 @@ router.get('/low-stock', requireRole('owner', 'manager'), (_req: Request, res: R
   res.json({ items: listLowStock() });
 });
 
-router.post('/adjust', requireRole('owner', 'manager'),
-  requireLocationAccess((req) => (req.body || {}).location_id || getCurrentLocationId()),
+router.post('/adjust', requirePermission('inventory.adjust', {
+  locationId: (req) => (req.body || {}).location_id || getCurrentLocationId(),
+}),
   (req: Request, res: Response) => {
   try {
     const body = req.body || {};

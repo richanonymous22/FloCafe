@@ -9,12 +9,16 @@ import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase, now } from '../db';
 import { requireRole, validatePassword, authRateLimit, invalidateUserAuthCache } from '../middleware/security';
+import { requirePermission } from '../middleware/authorize';
+import { ALL_ROLES } from '../core/authorization';
 import { grantLocationAccess, revokeLocationAccess, listUserLocations } from '../core/employee-access';
 
 const router = Router();
 
 const OPERATIONAL_ROLES = ['cashier', 'waiter', 'chef'];
-const VALID_ROLES = ['owner', 'manager', ...OPERATIONAL_ROLES];
+// Milestone 8, Part B: sourced from AuthorizationService's own Role list
+// instead of a second hardcoded copy, so the two cannot drift apart.
+const VALID_ROLES: readonly string[] = ALL_ROLES;
 const STAFF_SELECT_FIELDS = 'id, name, email, role, (pin_hash IS NOT NULL) AS has_pin, is_active, created_at, updated_at';
 
 function canModifyTargetStaff(requesterRole: string, targetRole: string): boolean {
@@ -95,7 +99,7 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
 
 // ── Create ────────────────────────────────────────────────────────────────────
 
-router.post('/', requireRole('owner', 'manager'), authRateLimit(), (req: Request, res: Response) => {
+router.post('/', requirePermission('employees.manage'), authRateLimit(), (req: Request, res: Response) => {
   try {
     const { name, email, password, role, pin } = req.body;
 
@@ -154,7 +158,7 @@ router.post('/', requireRole('owner', 'manager'), authRateLimit(), (req: Request
 
 // ── Update ────────────────────────────────────────────────────────────────────
 
-router.put('/:id', requireRole('owner', 'manager'), authRateLimit(), (req: Request, res: Response) => {
+router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req: Request, res: Response) => {
   try {
     const { name, email, password, role, pin, is_active } = req.body;
     const db = getDatabase();
@@ -255,7 +259,7 @@ router.put('/:id', requireRole('owner', 'manager'), authRateLimit(), (req: Reque
 // them, and losing the row would orphan historical order/print records.
 // Deactivating is the only removal path.
 
-router.post('/:id/deactivate', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/deactivate', requirePermission('employees.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const member = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id) as any;
@@ -286,7 +290,7 @@ router.post('/:id/deactivate', requireRole('owner', 'manager'), (req: Request, r
   }
 });
 
-router.post('/:id/reactivate', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/reactivate', requirePermission('employees.manage'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const member = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id) as any;
@@ -315,14 +319,14 @@ router.get('/:id/locations', requireRole('owner', 'manager'), (req: Request, res
   res.json({ locations: listUserLocations(String(req.params.id)) });
 });
 
-router.post('/:id/locations', requireRole('owner'), (req: Request, res: Response) => {
+router.post('/:id/locations', requirePermission('locations.manage'), (req: Request, res: Response) => {
   const body = req.body || {};
   if (!body.location_id) return res.status(400).json({ error: 'location_id is required' });
   grantLocationAccess(String(req.params.id), String(body.location_id));
   res.status(201).json({ locations: listUserLocations(String(req.params.id)) });
 });
 
-router.delete('/:id/locations/:locationId', requireRole('owner'), (req: Request, res: Response) => {
+router.delete('/:id/locations/:locationId', requirePermission('locations.manage'), (req: Request, res: Response) => {
   revokeLocationAccess(String(req.params.id), String(req.params.locationId));
   res.json({ locations: listUserLocations(String(req.params.id)) });
 });

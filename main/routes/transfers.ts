@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
-import { requireLocationAccess } from '../middleware/location-access';
+import { requirePermission } from '../middleware/authorize';
 import { requireFeature } from '../middleware/feature-access';
 import {
   createTransfer, addTransferItem, removeTransferItem, completeTransfer, cancelTransfer,
@@ -42,9 +42,10 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
   res.json({ transfer });
 });
 
-router.post('/', requireRole('owner', 'manager'), requireFeature('retail.transfers'),
-  requireLocationAccess((req) => (req.body || {}).from_location_id),
-  requireLocationAccess((req) => (req.body || {}).to_location_id),
+router.post('/', requireFeature('retail.transfers'),
+  requirePermission('inventory.transfer', {
+    locationId: [(req) => (req.body || {}).from_location_id, (req) => (req.body || {}).to_location_id],
+  }),
   (req: Request, res: Response) => {
   handle(res, () => {
     const body = req.body || {};
@@ -56,7 +57,7 @@ router.post('/', requireRole('owner', 'manager'), requireFeature('retail.transfe
   }, 201);
 });
 
-router.post('/:id/items', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/items', requirePermission('inventory.transfer'), (req: Request, res: Response) => {
   handle(res, () => {
     const body = req.body || {};
     return { item: addTransferItem(String(req.params.id), {
@@ -65,7 +66,7 @@ router.post('/:id/items', requireRole('owner', 'manager'), (req: Request, res: R
   }, 201);
 });
 
-router.delete('/:id/items/:itemId', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.delete('/:id/items/:itemId', requirePermission('inventory.transfer'), (req: Request, res: Response) => {
   try {
     removeTransferItem(String(req.params.id), String(req.params.itemId));
     res.status(204).send();
@@ -83,9 +84,9 @@ function loadTransferLocation(field: 'from_location_id' | 'to_location_id') {
   };
 }
 
-router.post('/:id/complete', requireRole('owner', 'manager'),
-  requireLocationAccess(loadTransferLocation('from_location_id')),
-  requireLocationAccess(loadTransferLocation('to_location_id')),
+router.post('/:id/complete', requirePermission('inventory.transfer', {
+  locationId: [loadTransferLocation('from_location_id'), loadTransferLocation('to_location_id')],
+}),
   (req: Request, res: Response) => {
   handle(res, () => {
     const user = (req as any).user;
@@ -93,7 +94,7 @@ router.post('/:id/complete', requireRole('owner', 'manager'),
   });
 });
 
-router.post('/:id/cancel', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/cancel', requirePermission('inventory.transfer'), (req: Request, res: Response) => {
   handle(res, () => ({ transfer: cancelTransfer(String(req.params.id)) }));
 });
 

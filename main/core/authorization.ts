@@ -1,5 +1,6 @@
 /**
- * Plemmo Core — AuthorizationService (Milestone 7, Part B/C).
+ * Plemmo Core — AuthorizationService (Milestone 7, Part B/C; established as
+ * the canonical backend authorization layer in Milestone 8).
  *
  * A small, reusable authorization layer, deliberately independent of
  * Express: `can()` takes a plain `{ userId, role }` and an optional
@@ -9,13 +10,7 @@
  * ## Two questions, kept separate
  *
  *   1. "Does this role have this permission at all?" — `hasPermission()`,
- *      a static role → permission-set table. Additive to the existing
- *      `users.role` + `requireRole()` system, not a replacement: every
- *      existing route keeps using `requireRole()` exactly as before. This
- *      is new infrastructure for callers that need a finer-grained answer
- *      than "is this role in this list" — most don't yet, and this
- *      milestone does not force it onto them (Part B: "do not add feature
- *      checks to every route just for the sake of coverage").
+ *      a static role → permission-set table.
  *   2. "Is this user allowed at this specific location?" — `hasLocationAccess()`,
  *      backed by Milestone 6's `user_locations` table
  *      (main/core/employee-access.ts). Owners and managers bypass this —
@@ -24,12 +19,23 @@
  *
  * `can()` combines both. Callers that only care about one question call
  * `hasPermission()`/`hasLocationAccess()` directly.
+ *
+ * `requireRole()` (main/middleware/security.ts) remains the coarse,
+ * route-level role gate most routes use, and is not being removed — see
+ * docs/MILESTONE_8_AUTHORIZATION.md for why a blanket rewrite of every
+ * route was rejected. It now type-checks its arguments against this
+ * module's own `Role` union instead of accepting bare strings, so the two
+ * systems' notion of "what roles exist" cannot silently drift apart.
+ * `main/middleware/authorize.ts`'s `requirePermission()` is the new
+ * canonical gate for the business-critical routes identified in Milestone
+ * 8, Part C — it wraps `requireCan()` directly, combining the permission
+ * and location checks the diagram in that milestone's spec describes.
  */
 
 import { userHasLocationAccess } from './employee-access';
 
 export type Permission =
-  | 'sales.create' | 'sales.refund'
+  | 'sales.create' | 'sales.refund' | 'sales.void'
   | 'inventory.view' | 'inventory.adjust' | 'inventory.receive' | 'inventory.transfer'
   | 'purchasing.manage'
   | 'reports.view'
@@ -37,6 +43,15 @@ export type Permission =
   | 'locations.manage';
 
 export type Role = 'owner' | 'manager' | 'cashier' | 'waiter' | 'chef';
+
+/**
+ * The canonical role list — the single source of truth `users.role`'s own
+ * CHECK constraint (main/db.ts) is written to match. Milestone 8, Part B:
+ * call sites that used to hardcode their own copy of this list (e.g.
+ * `main/routes/staff.ts`'s `VALID_ROLES`) now import it from here instead,
+ * so the two never drift apart.
+ */
+export const ALL_ROLES: readonly Role[] = ['owner', 'manager', 'cashier', 'waiter', 'chef'];
 
 /**
  * Roles that operate across every location in their organization without
@@ -47,11 +62,11 @@ const LOCATION_UNRESTRICTED_ROLES: readonly Role[] = ['owner', 'manager'];
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: [
-    'sales.create', 'sales.refund', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage', 'locations.manage',
   ],
   manager: [
-    'sales.create', 'sales.refund', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage',
   ],
   cashier: ['sales.create', 'inventory.view'],

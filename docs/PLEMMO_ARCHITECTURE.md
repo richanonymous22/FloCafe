@@ -122,7 +122,8 @@ TypeScript with no Express dependency.
 | `transfers.ts` (`TransferService`) | ✅ Built (M6) | `createTransfer`, `addTransferItem`, `completeTransfer`, `cancelTransfer` |
 | `employee-access.ts` | ✅ Built (M6) | `grantLocationAccess`/`revokeLocationAccess`/`listUserLocations` — foundation only, not enforced |
 | `location-reports.ts` | ✅ Built (M6) | Sales/inventory/purchases by location, transfers, adjustments |
-| `PermissionService` | ⬜ Later | Roles → granular permissions |
+| `authorization.ts` (`AuthorizationService`) | ✅ Built (M7) | `hasPermission`, `hasLocationAccess`, `can`, `requireCan` — role→permission table (additive to `requireRole()`) plus `user_locations` enforcement |
+| `features.ts` (`FeatureService`) | ✅ Built (M7) | `isEnabled`, `requireEnabled`, `grantFeature`/`revokeFeature`, `applyPreset`, `setCustomFeatures` — per-organization feature entitlements |
 
 ### Module boundary (Milestone 3)
 
@@ -161,9 +162,10 @@ classification.
 | Location | ✅ New | `locations` (v68) | One per local DB |
 | Register | ✅ New | `registers` (v68) | One per local DB |
 | Device | ✅ New | `devices` (v68) | This installation's identity |
-| Employee | ⚠️ Partial | `users` | Sound bcrypt/PIN auth; needs org/location scope |
+| Employee | ⚠️ Partial | `users` | Sound bcrypt/PIN auth; location scope now enforced (M7) via `user_locations` on the routes that accept a client-supplied location |
 | Role | ⚠️ Partial | `users.role` CHECK | 5 hardcoded roles, no `supervisor` |
-| Permission | ❌ | — | `requireRole()` string matching only |
+| Permission | ⚠️ Partial (M7) | `authorization.ts`'s `ROLE_PERMISSIONS` | Static role→permission table alongside `requireRole()`, not yet the primary gate on any route |
+| Feature entitlement | ✅ New (M7) | `features`/`feature_presets`/`feature_preset_items`/`organization_features` (v79) | Per-organization; 14 real feature keys; presets + custom configuration; `isEnabled()` is the single enforcement entry point |
 | Product | ✅ | `products` | Flat; a variant's parent when it has one |
 | ProductVariant | ✅ New (M3) | `product_variants` (v72) | ULID PK; own price/cost/SKU/barcode; a hospitality product never needs one — see § Product/Variant below |
 | Category | ✅ | `categories` | Has `parent_id` |
@@ -626,20 +628,22 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 4 (M4) | Inventory engine — movement ledger, variant-level balances, refund/adjustment integration, low-stock, basic inventory UI | ✅ Done |
 | 5 (M5) | Purchasing + suppliers + location-aware inventory — `SupplierService`, `PurchaseOrderService`, `ReceivingService`, `inventory_movements`/`inventory_balances` now stamped with the install's real location | ✅ Done |
 | 6 (M6) | Multi-location + device context + stock transfers — typed `context.ts`, `orders`/`payments` location stamping, `TransferService`, employee location-scope foundation, location-scoped reports | ✅ Done |
-| 7 | Employee location-scope enforcement; multi-location selection/switching; a real goods-receiving workflow beyond the generic foundation; transfer reversal | Next |
-| 8 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
-| 9 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
-| 10 | Plemmo Cloud + Admin | |
-| 11 | Licensing enforcement | |
-| 12 | Payment provider adapters | |
-| 13 | Advanced retail: phone-shop/IMEI, repairs, trade-ins | |
+| 7 (M7) | Access control + feature entitlements — `user_locations` enforcement on client-facing routes, `AuthorizationService` (role→permission model alongside `requireRole()`), `FeatureService` (`Organization → FeatureEntitlement[] → Feature`), presets, custom configuration, backend enforcement on business-critical routes | ✅ Done |
+| 8 | Multi-location selection/switching UI; a real goods-receiving workflow beyond the generic foundation; transfer reversal; `AuthorizationService`'s permission table wired as the primary gate on more routes | Next |
+| 9 | Retire the dual-write once the new payment model is trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
+| 10 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
+| 11 | Plemmo Cloud + Admin | |
+| 12 | Licensing enforcement | |
+| 13 | Payment provider adapters | |
+| 14 | Advanced retail: phone-shop/IMEI, repairs, trade-ins | |
 
-Phases 0–9 yield a product a single-location merchant can trade on, and a
+Phases 0–10 yield a product a single-location merchant can trade on, and a
 multi-location merchant can operate locally. The pilot does not wait for
 the cloud. See `docs/MILESTONE_2_CORE_ENGINE.md`,
 `docs/MILESTONE_4_INVENTORY.md`, `docs/MILESTONE_5_PURCHASING_LOCATIONS.md`,
-and `docs/MILESTONE_6_MULTI_LOCATION.md` for the detailed design records of
-Milestones 2, 4, 5, and 6.
+`docs/MILESTONE_6_MULTI_LOCATION.md`, and
+`docs/MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md` for the detailed design
+records of Milestones 2, 4, 5, 6, and 7.
 
 ---
 
@@ -652,5 +656,6 @@ Milestones 2, 4, 5, and 6.
 - [`MILESTONE_4_INVENTORY.md`](./MILESTONE_4_INVENTORY.md) — the inventory engine design record: the stock-behavior audit, the movement ledger and balance strategy, the opening-balance migration, sale/refund integration, negative-stock policy, concurrency assumptions, deferred work
 - [`MILESTONE_5_PURCHASING_LOCATIONS.md`](./MILESTONE_5_PURCHASING_LOCATIONS.md) — the purchasing and location-aware inventory design record: the location model audit, suppliers, purchase orders, receiving, idempotency, deferred work
 - [`MILESTONE_6_MULTI_LOCATION.md`](./MILESTONE_6_MULTI_LOCATION.md) — the multi-location design record: the device/location context audit, sale/payment stamping, stock transfers and their atomicity, employee location scope, future sync implications, deferred work
+- [`MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md`](./MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md) — the access-control and feature-entitlement design record: `AuthorizationService`, location enforcement, the permission model, `FeatureService`, presets, custom configuration, backend enforcement, security considerations, deferred work
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

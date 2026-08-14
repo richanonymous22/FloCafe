@@ -24,6 +24,7 @@ import {
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { recordAppliedPaymentLine } from '../core/payment';
+import { ulid } from '../core/ids';
 
 const router = Router();
 
@@ -244,12 +245,12 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
       const { total, adjustment: roundOff } = applyPayableRounding(order.total || 0, pack);
 
       const runResult = db.prepare(`
-        INSERT INTO bills (bill_number, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot,
+        INSERT INTO bills (bill_number, uid, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot,
           discount_amount, discount_type, discount_value, discount_reason,
           delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)
       `).run(
-        billNumber, orderId, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
+        billNumber, ulid(), orderId, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
         discountAmount, order.discount_type, order.discount_value, order.discount_reason,
         deliveryCharge, packagingCharge, roundOff, total, 0, total, now(), now()
       );
@@ -350,8 +351,8 @@ router.post('/:id/split-check', requireRole('owner', 'manager', 'cashier'), (req
             .run(groupId, check.label, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), allocations.discount_amount[index], allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], now(), source.id);
           billId = Number(source.id);
         } else {
-          const inserted = db.prepare(`INSERT INTO bills (bill_number, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot, discount_amount, discount_type, discount_value, discount_reason, delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, split_group_id, split_label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'unpaid', ?, ?, ?, ?)`)
-            .run(generateBillNumber(), source.order_id, source.customer_id, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), source.tax_snapshot, allocations.discount_amount[index], source.discount_type, source.discount_value, source.discount_reason, allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], groupId, check.label, now(), now());
+          const inserted = db.prepare(`INSERT INTO bills (bill_number, uid, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot, discount_amount, discount_type, discount_value, discount_reason, delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, split_group_id, split_label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'unpaid', ?, ?, ?, ?)`)
+            .run(generateBillNumber(), ulid(), source.order_id, source.customer_id, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), source.tax_snapshot, allocations.discount_amount[index], source.discount_type, source.discount_value, source.discount_reason, allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], groupId, check.label, now(), now());
           billId = Number(inserted.lastInsertRowid);
         }
         billIds.push(billId);

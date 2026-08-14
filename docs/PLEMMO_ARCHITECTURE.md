@@ -125,6 +125,7 @@ TypeScript with no Express dependency.
 | `authorization.ts` (`AuthorizationService`) | ✅ Built (M7), canonical (M8) | `hasPermission`, `hasLocationAccess`, `can`, `requireCan` — role→permission table plus `user_locations` enforcement; exports the canonical `Role`/`ALL_ROLES` every `requireRole()` call site now type-checks against |
 | `features.ts` (`FeatureService`) | ✅ Built (M7) | `isEnabled`, `requireEnabled`, `grantFeature`/`revokeFeature`, `applyPreset`, `setCustomFeatures` — per-organization feature entitlements |
 | `device-credentials.ts` | ✅ Built (SYNC-0) | `recordDeviceCredential`/`getActiveDeviceCredential`/`revokeDeviceCredential` — public-key + lifecycle only; no private key ever stored. Domain foundation for future device-authenticated sync |
+| `sync/*` (`outbox.ts`, `uploader.ts`, `inventory-events.ts`, `types.ts`) | ✅ Built (SYNC-A) | Local sync foundation — `appendOutboxEvent` (atomic with the business write), per-device sequence, `uploadPendingBatch` (transport-agnostic), typed inventory-movement events. First synced entity: `inventory_movements`. No cloud/network |
 
 ### Module boundary (Milestone 3)
 
@@ -186,7 +187,7 @@ classification.
 | CashSession | ❌ | — | No shift or drawer accounting |
 | Receipt | ✅ Strong | `printers/thermal.ts` | ESC/POS, profiles, typed failures |
 | AuditEvent | ✅ New | `audit_events` (v70) | |
-| Synchronization | ❌ | — | See §7 |
+| Synchronization | ⚠️ Local foundation (SYNC-A) | `sync_outbox`/`sync_inbox`/`sync_state` (v86) | Inventory movements produce outbox events atomically; per-device sequence; mock transport only — no cloud/network yet. See `SYNC_A_LOCAL_FOUNDATION.md` and §7 |
 
 ### Product / Variant (Milestone 3)
 
@@ -634,7 +635,8 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | 9 (design) | Offline sync architecture — [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) design, [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) adversarial review | ✅ Done (design) |
 | SYNC-0 | Foundation repair before sync — authoritative payments (v80), load-bearing uids (v81), child-row tombstones (v82), inventory organization identity (v83), device-credential foundation (v84). [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) | ✅ Done |
 | Payment Cutover | Retire the legacy payment readers — every merchant-facing reader (receipts, reports, payment-method usage/merge, bill rendering) migrated from `bills.payment_details` to `payments`/`payment_events`; historical partial-mirror reconciliation (v85). [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) | ✅ Done |
-| SYNC-A+ | The sync engine itself (outbox/inbox/cloud) — not started | Next |
+| SYNC-A | Local sync foundation — `sync_outbox`/`sync_inbox`/`sync_state` (v86), inventory movements produce outbox events atomically, per-device sequence, mock-transport upload/ack/retry/recovery. First synced entity only; no cloud. [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) | ✅ Done |
+| SYNC-B+ | The cloud API contract + real HTTP transport, device auth/enrollment, download/inbox apply loop, background worker, more entities — not started | Next |
 | (later) | Multi-location selection/switching UI; two-phase transfers; a dedicated refund/void HTTP surface for `PaymentService` | |
 | 10 | Retire the `bills.payment_details` *write* (kept only as a narrow compatibility bridge after the Payment Cutover milestone retired every read dependency — see `PAYMENT_CUTOVER.md` § F) once trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
 | 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
@@ -668,5 +670,6 @@ Milestones 2, 4, 5, 6, 7, and 8.
 - [`MILESTONE_9_SYNC_ARCHITECTURE.md`](./MILESTONE_9_SYNC_ARCHITECTURE.md) / [`MILESTONE_9A_SYNC_REVIEW.md`](./MILESTONE_9A_SYNC_REVIEW.md) — the offline-sync architecture design and its adversarial review
 - [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) / [`SYNC_0_PAYMENT_MIGRATION.md`](./SYNC_0_PAYMENT_MIGRATION.md) — the pre-sync foundation repairs (authoritative payments, load-bearing uids, tombstones, sync identity, device credentials) and the payment migration in detail
 - [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) — retiring the legacy payment readers: every merchant-facing consumer migrated onto `payments`/`payment_events`, historical partial-mirror reconciliation, and why `bills.payment_details` is kept as a narrow write-side bridge
+- [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) — the first sync implementation: the local outbox/inbox/sync_state foundation, inventory movements as the first synced entity, the atomic movement+event transaction boundary, and the mock transport (no cloud)
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

@@ -126,6 +126,8 @@ TypeScript with no Express dependency.
 | `features.ts` (`FeatureService`) | ✅ Built (M7) | `isEnabled`, `requireEnabled`, `grantFeature`/`revokeFeature`, `applyPreset`, `setCustomFeatures` — per-organization feature entitlements |
 | `device-credentials.ts` | ✅ Built (SYNC-0) | `recordDeviceCredential`/`getActiveDeviceCredential`/`revokeDeviceCredential` — public-key + lifecycle only; no private key ever stored. Domain foundation for future device-authenticated sync |
 | `sync/*` (`outbox.ts`, `uploader.ts`, `inventory-events.ts`, `types.ts`) | ✅ Built (SYNC-A) | Local sync foundation — `appendOutboxEvent` (atomic with the business write), per-device sequence, `uploadPendingBatch` (transport-agnostic), typed inventory-movement events. First synced entity: `inventory_movements`. No cloud/network |
+| `sync/*` (`http-transport.ts`, `downloader.ts`, `remote-apply.ts`, `device-identity.ts`, `config.ts`, `signing.ts`) | ✅ Built (SYNC-B) | Real HTTP transport — Ed25519-signed upload/pull against the cloud sync API, download→inbox→apply with atomic cursor advance, loop-preventing remote apply. Provider-neutral; env-configured |
+| `cloud/*` (`server.ts`, `store.ts`, `auth.ts`, `signing.ts`) | ✅ Built (SYNC-B) | The Plemmo Sync API — Express `/sync/v1/upload`+`/pull`, device-signature auth, organization isolation, idempotency, per-org feed cursor. Provider-neutral `CloudStore` (SQLite dev impl); separate from the Electron app |
 
 ### Module boundary (Milestone 3)
 
@@ -636,7 +638,8 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | SYNC-0 | Foundation repair before sync — authoritative payments (v80), load-bearing uids (v81), child-row tombstones (v82), inventory organization identity (v83), device-credential foundation (v84). [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) | ✅ Done |
 | Payment Cutover | Retire the legacy payment readers — every merchant-facing reader (receipts, reports, payment-method usage/merge, bill rendering) migrated from `bills.payment_details` to `payments`/`payment_events`; historical partial-mirror reconciliation (v85). [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) | ✅ Done |
 | SYNC-A | Local sync foundation — `sync_outbox`/`sync_inbox`/`sync_state` (v86), inventory movements produce outbox events atomically, per-device sequence, mock-transport upload/ack/retry/recovery. First synced entity only; no cloud. [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) | ✅ Done |
-| SYNC-B+ | The cloud API contract + real HTTP transport, device auth/enrollment, download/inbox apply loop, background worker, more entities — not started | Next |
+| SYNC-B | Real cloud transport for inventory movements — provider-neutral `CloudStore` + Ed25519-authenticated HTTP sync API (`cloud/`), `HttpSyncTransport`, upload/idempotency/pull/cursor/inbox-apply/loop-prevention, organization isolation. Inventory movements only; production infra undecided. [`SYNC_B_CLOUD_TRANSPORT.md`](./SYNC_B_CLOUD_TRANSPORT.md) | ✅ Done |
+| SYNC-C+ | Background worker, real device enrollment + OS-keychain keys, more entities, cross-device balance convergence, production cloud backend — not started | Next |
 | (later) | Multi-location selection/switching UI; two-phase transfers; a dedicated refund/void HTTP surface for `PaymentService` | |
 | 10 | Retire the `bills.payment_details` *write* (kept only as a narrow compatibility bridge after the Payment Cutover milestone retired every read dependency — see `PAYMENT_CUTOVER.md` § F) once trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
 | 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
@@ -671,5 +674,6 @@ Milestones 2, 4, 5, 6, 7, and 8.
 - [`SYNC_0_FOUNDATION.md`](./SYNC_0_FOUNDATION.md) / [`SYNC_0_PAYMENT_MIGRATION.md`](./SYNC_0_PAYMENT_MIGRATION.md) — the pre-sync foundation repairs (authoritative payments, load-bearing uids, tombstones, sync identity, device credentials) and the payment migration in detail
 - [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) — retiring the legacy payment readers: every merchant-facing consumer migrated onto `payments`/`payment_events`, historical partial-mirror reconciliation, and why `bills.payment_details` is kept as a narrow write-side bridge
 - [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) — the first sync implementation: the local outbox/inbox/sync_state foundation, inventory movements as the first synced entity, the atomic movement+event transaction boundary, and the mock transport (no cloud)
+- [`SYNC_B_CLOUD_TRANSPORT.md`](./SYNC_B_CLOUD_TRANSPORT.md) — the first real cloud communication: the infrastructure audit, the provider-neutral `CloudStore` boundary, the Ed25519-authenticated HTTP sync API (upload/pull/cursor/inbox-apply), organization isolation, idempotency, loop prevention, and why production infra is left undecided
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

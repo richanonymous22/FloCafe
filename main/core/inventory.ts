@@ -27,7 +27,7 @@
 
 import { getDatabase, now, withTxn } from '../db';
 import { ulid } from './ids';
-import { getCurrentLocationId } from './location';
+import { getCurrentLocationId, getCurrentOrganizationId } from './location';
 
 /**
  * An explicit `locationId` always wins (a future multi-location caller will
@@ -39,6 +39,22 @@ import { getCurrentLocationId } from './location';
  */
 function resolveLocationId(explicit: string | null | undefined): string | null {
   return explicit || getCurrentLocationId();
+}
+
+/**
+ * SYNC-0 (Part D): an inventory movement is an append-only sync primitive, so
+ * it must carry an unambiguous organization. Resolve it from the movement's
+ * own location (a location always belongs to exactly one organization),
+ * falling back to the install's current organization when the location is
+ * unknown. Derived, never guessed — the location→organization link is a real
+ * foreign key, not an assumption.
+ */
+function resolveOrganizationId(db: ReturnType<typeof getDatabase>, locationId: string | null): string | null {
+  if (locationId) {
+    const loc = db.prepare('SELECT organization_id FROM locations WHERE id = ?').get(locationId) as { organization_id: string | null } | undefined;
+    if (loc?.organization_id) return loc.organization_id;
+  }
+  return getCurrentOrganizationId();
 }
 
 export class InventoryError extends Error {
@@ -136,14 +152,16 @@ function recordMovement(input: RecordMovementInput): InventoryMovementRecord {
   const balanceAfter = applyBalanceDelta(db, input, input.quantityDelta);
   const id = ulid();
   const createdAt = now();
+  const locationId = resolveLocationId(input.locationId);
+  const organizationId = resolveOrganizationId(db, locationId);
 
   db.prepare(`
     INSERT INTO inventory_movements
-      (id, product_id, product_variant_id, location_id, quantity_delta, movement_type, reason,
+      (id, organization_id, product_id, product_variant_id, location_id, quantity_delta, movement_type, reason,
        reference_type, reference_id, unit_cost, actor_user_id, balance_after, metadata, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    id, input.productId, input.variantId || null, resolveLocationId(input.locationId),
+    id, organizationId, input.productId, input.variantId || null, locationId,
     input.quantityDelta, input.movementType, input.reason || null,
     input.referenceType || null, input.referenceId || null,
     input.unitCost ?? null, input.actorUserId || null, balanceAfter,

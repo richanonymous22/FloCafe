@@ -80,3 +80,31 @@ export interface SyncUploadResult {
 export interface SyncTransport {
   upload(events: OutboxEventDTO[]): SyncUploadResult | Promise<SyncUploadResult>;
 }
+
+/** One event returned by a pull, in the same payload shape the outbox produced. */
+export interface PulledEvent {
+  event_uid: string;
+  entity_uid: string;
+  feed_seq: number;
+  payload: InventoryMovementEventPayload;
+}
+
+export interface PullResult {
+  events: PulledEvent[];
+  next_cursor: number;
+  has_more: boolean;
+}
+
+/** The download half of the transport (SYNC-B). Kept separate from upload so a
+ *  mock can implement one without the other. */
+export interface SyncPullTransport {
+  pull(cursor: number, limit?: number): Promise<PullResult>;
+}
+
+/** A transient transport error (network/timeout/5xx/auth) — the batch stays retryable. */
+export class SyncTransportError extends Error {
+  constructor(message: string, public category: 'transient' | 'auth' = 'transient') {
+    super(message);
+    this.name = 'SyncTransportError';
+  }
+}

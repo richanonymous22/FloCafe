@@ -7,7 +7,9 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
+import { requireLocationAccess } from '../middleware/location-access';
 import { getBalance, getMovementHistory, adjustStock, listLowStock } from '../core/inventory';
+import { getCurrentLocationId } from '../core/location';
 
 const router = Router();
 
@@ -38,13 +40,16 @@ router.get('/low-stock', requireRole('owner', 'manager'), (_req: Request, res: R
   res.json({ items: listLowStock() });
 });
 
-router.post('/adjust', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/adjust', requireRole('owner', 'manager'),
+  requireLocationAccess((req) => (req.body || {}).location_id || getCurrentLocationId()),
+  (req: Request, res: Response) => {
   try {
     const body = req.body || {};
     const user = (req as any).user;
     const movement = adjustStock({
       productId: body.product_id,
       variantId: body.variant_id ?? null,
+      locationId: body.location_id ?? null,
       quantityDelta: body.quantity_delta,
       reason: body.reason,
       movementType: body.movement_type,

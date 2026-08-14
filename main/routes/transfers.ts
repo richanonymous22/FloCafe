@@ -5,10 +5,12 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
+import { requireLocationAccess } from '../middleware/location-access';
 import {
   createTransfer, addTransferItem, removeTransferItem, completeTransfer, cancelTransfer,
   getTransfer, listTransfers,
 } from '../core/transfers';
+import { getDatabase } from '../db';
 
 const router = Router();
 
@@ -39,7 +41,10 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
   res.json({ transfer });
 });
 
-router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/', requireRole('owner', 'manager'),
+  requireLocationAccess((req) => (req.body || {}).from_location_id),
+  requireLocationAccess((req) => (req.body || {}).to_location_id),
+  (req: Request, res: Response) => {
   handle(res, () => {
     const body = req.body || {};
     const user = (req as any).user;
@@ -70,7 +75,17 @@ router.delete('/:id/items/:itemId', requireRole('owner', 'manager'), (req: Reque
   }
 });
 
-router.post('/:id/complete', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+function loadTransferLocation(field: 'from_location_id' | 'to_location_id') {
+  return (req: Request) => {
+    const transfer = getDatabase().prepare(`SELECT ${field} as location_id FROM stock_transfers WHERE id = ?`).get(req.params.id) as { location_id: string | null } | undefined;
+    return transfer?.location_id;
+  };
+}
+
+router.post('/:id/complete', requireRole('owner', 'manager'),
+  requireLocationAccess(loadTransferLocation('from_location_id')),
+  requireLocationAccess(loadTransferLocation('to_location_id')),
+  (req: Request, res: Response) => {
   handle(res, () => {
     const user = (req as any).user;
     return { transfer: completeTransfer(String(req.params.id), user?.userId) };

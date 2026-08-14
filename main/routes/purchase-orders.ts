@@ -5,12 +5,15 @@
 
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
+import { requireLocationAccess } from '../middleware/location-access';
 import {
   createPurchaseOrder, addItem, updateItem, removeItem, markOrdered, cancelPurchaseOrder,
   getPurchaseOrder, listPurchaseOrders,
 } from '../modules/purchasing/purchase-orders';
 import { receiveGoods } from '../modules/purchasing/receiving';
 import { purchasesBySupplier, outstandingPurchaseOrders, recentGoodsReceived, stockReceivedByDate } from '../modules/purchasing/reports';
+import { getCurrentLocationId } from '../core/location';
+import { getDatabase } from '../db';
 
 const router = Router();
 
@@ -61,7 +64,9 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
   res.json({ purchaseOrder: po });
 });
 
-router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/', requireRole('owner', 'manager'),
+  requireLocationAccess((req) => (req.body || {}).location_id || getCurrentLocationId()),
+  (req: Request, res: Response) => {
   handle(res, () => {
     const body = req.body || {};
     const user = (req as any).user;
@@ -115,7 +120,12 @@ router.post('/:id/cancel', requireRole('owner', 'manager'), (req: Request, res: 
   handle(res, () => ({ purchaseOrder: cancelPurchaseOrder(String(req.params.id)) }));
 });
 
-router.post('/:id/receive', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/receive', requireRole('owner', 'manager'),
+  requireLocationAccess((req) => {
+    const po = getDatabase().prepare('SELECT location_id FROM purchase_orders WHERE id = ?').get(req.params.id) as { location_id: string | null } | undefined;
+    return po?.location_id;
+  }),
+  (req: Request, res: Response) => {
   handle(res, () => {
     const body = req.body || {};
     const user = (req as any).user;

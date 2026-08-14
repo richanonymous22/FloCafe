@@ -3,6 +3,11 @@ import Decimal from 'decimal.js';
 import { getDatabase, getSettingValue, parseDbTimestamp, parseItemJson, utcDayBounds, utcTodayDate } from '../db';
 import { requirePermission } from '../middleware/authorize';
 import { aggregateTaxComponents } from '../services/tax-components';
+import { fromMinor, minorUnitExponent } from '../core/money';
+
+function fromMinorAmount(amountMinor: number, currency: string): number {
+  return fromMinor(amountMinor, minorUnitExponent(currency));
+}
 
 const router = Router();
 
@@ -40,9 +45,18 @@ function bucketByLocalHourAndWeekday(timestamps: string[], timeZone: string): { 
 }
 
 /**
- * Return payment lines in a UTC half-open range using SQLite JSON1. Keeping
- * expansion in SQL avoids loading every bill and tolerates both the current
- * array shape, legacy top-level objects, and invalid JSON.
+ * Return payment lines in a UTC half-open range, sourced from the
+ * authoritative `payments` table (PAYMENT CUTOVER — this used to aggregate
+ * `bills.payment_details` via SQLite JSON1; `payments` has real columns and
+ * its own `requested_at`, so no JSON extraction or bill-level pre-filter
+ * approximation is needed). `paidOnly` preserves the exact old semantic —
+ * "this bill is fully paid" (`bills.payment_status = 'paid'`), NOT "this
+ * individual payment settled" — a settled payment on a still-partially-paid
+ * bill must stay excluded when `paidOnly` is true, exactly as it was when
+ * this read the bill-level `payment_status` column directly. Amounts are
+ * converted from minor units using each payment's own currency, so this is
+ * correct for non-2-decimal currencies too (the old JSON-based query
+ * inherited `applyPaymentBatch`'s unconditional 2-decimal assumption).
  */
 function paymentMethodBreakdown(
   db: ReturnType<typeof getDatabase>,
@@ -52,41 +66,38 @@ function paymentMethodBreakdown(
 ) {
   const start = utcDayBounds(startDate)[0];
   const end = utcDayBounds(endDate)[1];
-  return db.prepare(`
-    WITH payment_lines AS (
-      SELECT b.paid_at, b.created_at, je.value AS line
-      FROM bills b
-      JOIN json_each(CASE
-        WHEN json_valid(b.payment_details) AND json_type(b.payment_details) = 'array'
-          THEN b.payment_details
-        WHEN json_valid(b.payment_details)
-          THEN json_array(b.payment_details)
-        ELSE '[]'
-      END) je
-      WHERE b.payment_details IS NOT NULL
-        AND b.created_at < ?
-        AND (b.paid_at IS NULL OR b.paid_at >= ?)
-        AND (? = 0 OR b.payment_status = 'paid')
-        AND json_type(je.value) = 'object'
-    ), normalized AS (
-      SELECT
-        COALESCE(NULLIF(json_extract(line, '$.method'), ''), 'unknown') AS method,
-        CAST(json_extract(line, '$.payment_method_id') AS INTEGER) AS payment_method_id,
-        json_extract(line, '$.amount') AS amount,
-        COALESCE(
-          datetime(NULLIF(json_extract(line, '$.timestamp'), '')),
-          datetime(NULLIF(paid_at, '')),
-          datetime(NULLIF(created_at, ''))
-        ) AS payment_time
-      FROM payment_lines
-    )
-    SELECT COALESCE(pm.name, normalized.method) AS method, COUNT(*) AS count,
-      COALESCE(SUM(CASE WHEN typeof(amount) IN ('integer', 'real') THEN amount ELSE 0 END), 0) AS total
-    FROM normalized LEFT JOIN payment_methods pm ON pm.id = normalized.payment_method_id
-    WHERE payment_time >= datetime(?) AND payment_time < datetime(?)
-    GROUP BY COALESCE(pm.name, normalized.method)
-    ORDER BY total DESC
-  `).all(end, start, paidOnly ? 1 : 0, start, end);
+  const rows = db.prepare(`
+    SELECT p.method, p.amount_minor, p.currency, p.metadata
+    FROM payments p
+    JOIN bills b ON b.id = p.bill_id
+    WHERE p.requested_at >= ? AND p.requested_at < ?
+      AND (? = 0 OR b.payment_status = 'paid')
+  `).all(start, end, paidOnly ? 1 : 0) as Array<{ method: string; amount_minor: number; currency: string; metadata: string | null }>;
+
+  const methodNameById = new Map<number, string>();
+  for (const row of db.prepare('SELECT id, name FROM payment_methods').all() as Array<{ id: number; name: string }>) {
+    methodNameById.set(row.id, row.name);
+  }
+
+  const totals = new Map<string, { count: number; total: number }>();
+  for (const row of rows) {
+    let paymentMethodId: number | undefined;
+    if (row.metadata) {
+      try {
+        const meta = JSON.parse(row.metadata);
+        if (meta && meta.payment_method_id != null) paymentMethodId = Number(meta.payment_method_id);
+      } catch { /* ignore malformed metadata */ }
+    }
+    const label = (paymentMethodId !== undefined && methodNameById.get(paymentMethodId)) || row.method || 'unknown';
+    const amount = fromMinorAmount(row.amount_minor, row.currency);
+    const existing = totals.get(label) || { count: 0, total: 0 };
+    existing.count += 1;
+    existing.total += amount;
+    totals.set(label, existing);
+  }
+  return Array.from(totals.entries())
+    .map(([method, { count, total }]) => ({ method, count, total: Math.round(total * 100) / 100 }))
+    .sort((a, b) => b.total - a.total);
 }
 
 /** argmax/argmin over counts, restricted to indices where include(count) is true. Returns null if nothing qualifies. */

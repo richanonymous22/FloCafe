@@ -9,6 +9,7 @@ import {
   now,
   parseItemJson,
   parseRowJson,
+  deriveBillPaymentDetails,
   utcTodayDate,
   verifyPin,
   withTxn,
@@ -486,17 +487,16 @@ function preparePaymentBatch(
   if (!bill) throw Object.assign(new Error('Bill not found'), { statusCode: 404 });
   if (!Array.isArray(payments) || payments.length === 0) throw Object.assign(new Error('payments must be a non-empty array'), { statusCode: 400 });
   if (payments.length > MAX_PAYMENT_LINES) throw Object.assign(new Error(`A maximum of ${MAX_PAYMENT_LINES} payment lines is allowed`), { statusCode: 400 });
-  let existingPayments: any[] = [];
-  if (bill.payment_details) {
-    try {
-      const parsed = JSON.parse(bill.payment_details);
-      existingPayments = Array.isArray(parsed) ? parsed : [parsed];
-    } catch {
-      // Preserve settlement compatibility with legacy malformed JSON. The new
-      // line is still appended in a recoverable JSON array below.
-      existingPayments = [];
-    }
-  }
+  // PAYMENT CUTOVER: the duplicate-transaction-id guard below now reads its
+  // "what has already been applied to this bill" state from the
+  // authoritative payments table, not the legacy payment_details column —
+  // deriveBillPaymentDetails() returns the same line shape
+  // (method/amount/transaction_id/notes/...) this comparison already
+  // expected. `amount_omitted` is not tracked in payments, so it is simply
+  // absent on every derived line — transactionPaymentMatches() already
+  // treats an absent amount_omitted as "not enforced", the same fallback it
+  // has always used for any legacy line that predated that field.
+  const existingPayments: any[] = deriveBillPaymentDetails(billId) || [];
   payments.forEach(validatePaymentFields);
   const resolvedPayments = payments.map((payment, index) => {
     if (PAYMENT_METHODS.has(payment.method)) return payment;

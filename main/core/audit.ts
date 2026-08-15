@@ -75,7 +75,12 @@ export type AuditEventType =
   | 'device.registered'
   | 'device.revoked'
   | 'settings.changed'
-  | 'database.maintenance';
+  | 'database.maintenance'
+  // Sync conflict reconciliation (SYNC-F, Part L)
+  | 'sync.conflict_acknowledged'
+  | 'sync.conflict_resolved'
+  | 'sync.conflict_dismissed'
+  | 'sync.reconciliation_recorded';
 
 export interface AuditActor {
   /** The authenticated user id. Null only for system-initiated events. */

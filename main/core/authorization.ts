@@ -35,7 +35,7 @@
 import { userHasLocationAccess } from './employee-access';
 
 export type Permission =
-  | 'sales.create' | 'sales.refund' | 'sales.void'
+  | 'sales.create' | 'sales.refund' | 'sales.void' | 'sales.reconcile'
   | 'inventory.view' | 'inventory.adjust' | 'inventory.receive' | 'inventory.transfer'
   | 'purchasing.manage'
   | 'reports.view'
@@ -62,13 +62,16 @@ const LOCATION_UNRESTRICTED_ROLES: readonly Role[] = ['owner', 'manager'];
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: [
-    'sales.create', 'sales.refund', 'sales.void', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage', 'locations.manage',
   ],
   manager: [
-    'sales.create', 'sales.refund', 'sales.void', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage',
   ],
+  // NOTE (SYNC-F Part M): sales.reconcile is deliberately withheld from
+  // cashier/waiter/chef. Resolving a financial conflict is more powerful than
+  // normal POS usage, so it is an owner/manager capability only.
   cashier: ['sales.create', 'inventory.view'],
   waiter: ['sales.create'],
   chef: ['inventory.view'],

@@ -25,10 +25,47 @@ import {
   OrderEventPayload, OrderItemEventPayload, BillEventPayload,
   SyncEntityType, SyncEventPayload,
 } from './types';
+import { recordPending, resolvePendingForParent } from './pending-relationships';
+import { upsertConflict } from './conflict-store';
+import { orderLifecycle, billLifecycle } from './conflict-model';
 
 type Db = Database.Database;
 
 export type RemoteApplyResult = 'applied' | 'skipped';
+
+/**
+ * SYNC-F Part I — a remote child snapshot (order_item / bill) whose parent
+ * order is present neither in the mirror nor in the authoritative table is
+ * recorded as a durable pending relationship. The child is still applied into
+ * its mirror (no data loss); this only makes the missing link observable and
+ * recoverable when the parent later arrives.
+ */
+function notePendingParentIfMissing(db: Db, childType: string, childUid: string, orderUid: string | null | undefined, orgId: string | null, locId: string | null): void {
+  if (!orderUid) return;
+  const inMirror = db.prepare('SELECT 1 FROM remote_orders WHERE uid = ?').get(orderUid);
+  const inLocal = db.prepare('SELECT 1 FROM orders WHERE uid = ?').get(orderUid);
+  if (inMirror || inLocal) return;
+  recordPending({ childType, childUid, parentType: 'order', parentUid: orderUid, organizationId: orgId, locationId: locId }, db);
+}
+
+/**
+ * SYNC-F Part C — a remote snapshot arriving for an entity this device holds
+ * as its OWN authoritative record in a COMPLETED lifecycle state is a
+ * completion conflict: another device edited a sale this till already
+ * finalized. It is recorded (idempotently, source 'local') so an operator can
+ * reconcile it. The authoritative record is NEVER touched — the remote value
+ * still lands only in the mirror. Deterministic conflict_uid = one local
+ * completion conflict per entity.
+ */
+function detectCompletionConflict(db: Db, entityType: 'order' | 'bill', entityUid: string, completed: boolean, orgId: string | null, locId: string | null, remoteDeviceUid: string | null, remoteVersion: number): void {
+  if (!completed) return;
+  upsertConflict({
+    conflictUid: `cf_local_${entityType}_${entityUid}`,
+    organizationId: orgId, locationId: locId, entityType, entityUid,
+    conflictType: 'completion_conflict', source: 'local',
+    remoteDeviceUid, remoteSnapshotVersion: remoteVersion,
+  }, db);
+}
 
 /**
  * Dispatches a remote event to the correct per-entity apply function
@@ -62,6 +99,12 @@ function mirrorIsStale(db: Db, table: string, uid: string, incomingVersion: numb
 }
 
 export function applyRemoteOrder(db: Db, p: OrderEventPayload): RemoteApplyResult {
+  // A remote edit landing on this till's OWN completed sale is a completion
+  // conflict (flag, never mutate the authoritative order).
+  const localAuth = db.prepare('SELECT status FROM orders WHERE uid = ?').get(p.order_uid) as { status: string | null } | undefined;
+  if (localAuth) detectCompletionConflict(db, 'order', p.order_uid, orderLifecycle(localAuth.status) === 'completed', p.organization_id, p.location_id, p.device_id ?? null, p.snapshot_version);
+  // The parent has now arrived — recover any children that were staged waiting on it.
+  resolvePendingForParent(p.order_uid, db);
   if (mirrorIsStale(db, 'remote_orders', p.order_uid, p.snapshot_version)) return 'skipped';
   db.prepare(`
     INSERT INTO remote_orders (uid, order_number, organization_id, location_id, device_id, actor_user_id, channel, status,
@@ -76,6 +119,7 @@ export function applyRemoteOrder(db: Db, p: OrderEventPayload): RemoteApplyResul
 }
 
 export function applyRemoteOrderItem(db: Db, p: OrderItemEventPayload): RemoteApplyResult {
+  notePendingParentIfMissing(db, 'order_item', p.order_item_uid, p.order_uid, p.organization_id, p.location_id);
   if (mirrorIsStale(db, 'remote_order_items', p.order_item_uid, p.snapshot_version)) return 'skipped';
   db.prepare(`
     INSERT INTO remote_order_items (uid, order_uid, organization_id, location_id, product_id, product_variant_id, product_name,
@@ -90,6 +134,9 @@ export function applyRemoteOrderItem(db: Db, p: OrderItemEventPayload): RemoteAp
 }
 
 export function applyRemoteBill(db: Db, p: BillEventPayload): RemoteApplyResult {
+  notePendingParentIfMissing(db, 'bill', p.bill_uid, p.order_uid, p.organization_id, p.location_id);
+  const localBill = db.prepare('SELECT payment_status FROM bills WHERE uid = ?').get(p.bill_uid) as { payment_status: string | null } | undefined;
+  if (localBill) detectCompletionConflict(db, 'bill', p.bill_uid, billLifecycle(localBill.payment_status) === 'completed', p.organization_id, p.location_id, null, p.snapshot_version);
   if (mirrorIsStale(db, 'remote_bills', p.bill_uid, p.snapshot_version)) return 'skipped';
   db.prepare(`
     INSERT INTO remote_bills (uid, bill_number, order_uid, organization_id, location_id, customer_id, subtotal, tax_amount,

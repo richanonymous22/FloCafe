@@ -5005,6 +5005,107 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 89,
+    name: 'sync_f_conflict_reconciliation',
+    up: () => {
+      // SYNC-F — sales conflict resolution + reconciliation. Three additive
+      // local tables, no existing data touched, no authoritative sales table
+      // altered (a locally completed sale is never mutated by this milestone).
+      //
+      // 1) sales_conflicts — the DEVICE's working copy of sales conflicts. Two
+      //    sources feed it: conflicts DETECTED in the cloud (cross-device
+      //    concurrent_update) and pulled down here, and conflicts DETECTED
+      //    locally on remote-apply (a remote snapshot arriving for an entity
+      //    this device holds as authoritative-and-completed → completion
+      //    conflict). `conflict_uid` is the SHARED identity with the cloud's
+      //    cloud_conflicts row (ONE logical conflict, not two systems). The
+      //    local row carries the full state machine + resolution outcome; the
+      //    original conflicting events are preserved (never deleted).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sales_conflicts (
+          conflict_uid            TEXT PRIMARY KEY,
+          organization_id         TEXT,
+          location_id             TEXT,
+          entity_type             TEXT NOT NULL,
+          entity_uid              TEXT NOT NULL,
+          conflict_type           TEXT NOT NULL,
+          source                  TEXT NOT NULL DEFAULT 'cloud',
+          local_event_uid         TEXT,
+          remote_event_uid        TEXT,
+          local_device_uid        TEXT,
+          remote_device_uid       TEXT,
+          local_snapshot_version  INTEGER,
+          remote_snapshot_version INTEGER,
+          status                  TEXT NOT NULL DEFAULT 'open'
+            CHECK (status IN ('open','acknowledged','resolving','resolved','dismissed')),
+          detected_at             TEXT NOT NULL,
+          acknowledged_at         TEXT,
+          acknowledged_by         TEXT,
+          resolution_strategy     TEXT,
+          resolution_actor        TEXT,
+          resolved_at             TEXT,
+          resolution_notes        TEXT,
+          compensation_reference  TEXT,
+          resulting_state         TEXT,
+          updated_at              TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sales_conflicts_entity ON sales_conflicts(entity_type, entity_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_conflicts_status ON sales_conflicts(status, detected_at);
+
+        -- 2) sales_reconciliation_actions — the durable, append-only audit
+        --    trail of every conflict-lifecycle and reconciliation action
+        --    (acknowledge / resolve / dismiss / compensation / note). It is
+        --    never pruned; a resolved conflict retains its full action history.
+        --    A 'compensation' row is the durable reconciliation artifact — it
+        --    records a decision for an operator/Admin, it does NOT itself
+        --    create a refund/void/payment/inventory transaction (SYNC-F Part F).
+        CREATE TABLE IF NOT EXISTS sales_reconciliation_actions (
+          id               TEXT PRIMARY KEY,
+          conflict_uid     TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          entity_type      TEXT,
+          entity_uid       TEXT,
+          action_type      TEXT NOT NULL,
+          strategy         TEXT,
+          actor_user_id    TEXT,
+          actor_role       TEXT,
+          notes            TEXT,
+          reference        TEXT,
+          created_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sales_recon_actions_conflict ON sales_reconciliation_actions(conflict_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_recon_actions_entity ON sales_reconciliation_actions(entity_type, entity_uid);
+
+        -- 3) sales_pending_relationships — durable tracking of a child event
+        --    (order_item / bill / payment) that arrived before its parent
+        --    order. Never discarded (no data loss); the child is already staged
+        --    in its mirror. Status is event-driven, NOT polled: 'pending' until
+        --    the parent arrives (→ 'resolved'), or 'permanently_invalid' when a
+        --    reconciliation sweep confirms the parent never arrived within the
+        --    retention window (clear, bounded reason — no infinite polling).
+        CREATE TABLE IF NOT EXISTS sales_pending_relationships (
+          id               TEXT PRIMARY KEY,
+          child_type       TEXT NOT NULL,
+          child_uid        TEXT NOT NULL,
+          parent_type      TEXT NOT NULL,
+          parent_uid       TEXT NOT NULL,
+          organization_id  TEXT,
+          location_id      TEXT,
+          status           TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','resolved','permanently_invalid')),
+          reason           TEXT,
+          attempts         INTEGER NOT NULL DEFAULT 0,
+          detected_at      TEXT NOT NULL,
+          resolved_at      TEXT,
+          updated_at       TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_pending_child ON sales_pending_relationships(child_type, child_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_pending_parent ON sales_pending_relationships(parent_type, parent_uid, status);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

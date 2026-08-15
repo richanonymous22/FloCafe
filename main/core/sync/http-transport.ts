@@ -80,4 +80,59 @@ export class HttpSyncTransport implements SyncTransport, SyncPullTransport {
     const data = await res.json() as PullResult;
     return { events: data.events ?? [], next_cursor: data.next_cursor ?? cursor, has_more: !!data.has_more };
   }
+
+  /**
+   * Pulls the cross-device conflicts the cloud has detected for this device's
+   * organization (SYNC-F). The org is resolved server-side from the device —
+   * a device only ever sees its own org's conflicts.
+   */
+  async pullConflicts(): Promise<CloudConflictDTO[]> {
+    const res = await this.signedFetch('GET', '/sync/v1/conflicts', '');
+    const data = await res.json() as { conflicts?: CloudConflictDTO[] };
+    return data.conflicts ?? [];
+  }
+
+  /**
+   * Reports a locally-decided conflict resolution back to the cloud so other
+   * devices converge (SYNC-F). The cloud re-validates the financial-safety
+   * rule server-side (defense in depth) and records the resolution as durable
+   * append-only history. Returns whether the cloud accepted it.
+   */
+  async reportResolution(input: ConflictResolutionReport): Promise<{ ok: boolean; reason?: string }> {
+    const body = JSON.stringify(input);
+    const res = await this.signedFetch('POST', '/sync/v1/conflicts/resolve', body);
+    if (res.status === 422) {
+      const data = await res.json().catch(() => ({})) as { reason?: string };
+      return { ok: false, reason: data.reason ?? 'rejected' };
+    }
+    const data = await res.json().catch(() => ({})) as { recorded?: boolean };
+    return { ok: !!data.recorded };
+  }
+}
+
+/** A conflict as the cloud reports it to a device (SYNC-F). */
+export interface CloudConflictDTO {
+  conflict_uid: string;
+  organization_uid: string;
+  location_uid: string | null;
+  entity_type: string;
+  entity_uid: string;
+  local_event_uid: string | null;
+  remote_event_uid: string | null;
+  local_device_uid: string | null;
+  remote_device_uid: string | null;
+  conflict_type: string;
+  detected_at: string;
+  status: string;
+  resolution: string | null;
+}
+
+export interface ConflictResolutionReport {
+  conflict_uid: string;
+  status: 'acknowledged' | 'resolved' | 'dismissed';
+  strategy?: string | null;
+  resolution_notes?: string | null;
+  compensation_reference?: string | null;
+  actor_user_id?: string | null;
+  resolved_at?: string | null;
 }

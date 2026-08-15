@@ -1,27 +1,33 @@
 /**
- * Plemmo Cloud — the sync HTTP API (SYNC-B).
+ * Plemmo Cloud — the sync HTTP API (SYNC-B, hardened in SYNC-C).
  *
  * A real Express service exposing the provider-neutral sync protocol for
  * inventory movements only:
- *   POST /sync/v1/upload   — a device uploads a batch of movement events
- *   GET  /sync/v1/pull      — a device pulls movement events it is entitled to
- *   POST /sync/v1/dev/enroll — DEV/TEST ONLY device registration (see below)
+ *   POST /sync/v1/upload    — a device uploads a batch of movement events
+ *   GET  /sync/v1/pull       — a device pulls movement events it is entitled to
+ *   POST /sync/v1/enroll     — PRODUCTION enrollment via a one-time token
+ *   POST /sync/v1/dev/enroll — DEV/TEST ONLY device registration (gated)
  *
- * The concrete backend is `CloudStore` (SQLite in dev). No Supabase/Vercel/
- * Postgres logic lives in the local client — it speaks only this protocol.
+ * The concrete backend is `CloudStore` (SQLite in dev, Postgres in prod). No
+ * provider logic lives in the local client — it speaks only this protocol.
  *
- * Security posture (Part F/R): every /upload and /pull request is
- * authenticated by device signature; organization and location are resolved
- * from the device registry, never trusted from the payload. Body size is
- * capped; rejected/auth-failed attempts are logged.
+ * Security posture (Part J): every /upload and /pull request is authenticated
+ * by device signature; organization and location are resolved from the device
+ * registry, never trusted from the payload. Body size is capped; requests are
+ * rate-limited per device; auth failures return a COARSE reason to the client
+ * (no device-enumeration oracle) while the detailed reason is logged; no CORS
+ * headers are emitted (this is a device-to-server API, never browser-origin).
  */
 
-import express, { Express, Request, Response } from 'express';
+import express, { Express, NextFunction, Request, Response } from 'express';
 import { CloudStore, CloudInventoryMovement } from './store';
-import { authenticateDevice, DeviceAuthError, SignedRequestFields } from './auth';
+import { authenticateDevice, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
+import { enrollWithToken, EnrollmentError } from './enrollment';
 
 const MAX_BATCH = 500;
 const BODY_LIMIT = '1mb';
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 240; // per device per minute — generous for batching, curbs storms
 
 interface UploadEvent {
   uid: string;                 // outbox event uid
@@ -47,6 +53,23 @@ function signedFields(req: Request): SignedRequestFields {
   };
 }
 
+/** In-memory fixed-window rate limiter. In a multi-instance production
+ *  deployment this is replaced by a shared limiter (gateway / Redis); the
+ *  interface is the same. */
+function createRateLimiter(windowMs: number, max: number) {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  return function allow(key: string, nowMs: number): boolean {
+    const entry = hits.get(key);
+    if (!entry || nowMs >= entry.resetAt) {
+      hits.set(key, { count: 1, resetAt: nowMs + windowMs });
+      return true;
+    }
+    if (entry.count >= max) return false;
+    entry.count += 1;
+    return true;
+  };
+}
+
 export interface CreateCloudServerOptions {
   /** Enables POST /sync/v1/dev/enroll. DEV/TEST ONLY — must be false in production. */
   enableDevEnroll?: boolean;
@@ -54,37 +77,78 @@ export interface CreateCloudServerOptions {
 
 export function createCloudServer(store: CloudStore, options: CreateCloudServerOptions = {}): Express {
   const app = express();
+  app.disable('x-powered-by');
   app.use(express.json({
     limit: BODY_LIMIT,
     verify: (req, _res, buf) => { (req as unknown as { rawBody: string }).rawBody = buf.toString('utf8'); },
   }));
 
+  // A malformed / oversized body throws in the JSON parser — answer 400/413
+  // without leaking a stack (Part J — error leakage).
+  app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, next: NextFunction) => {
+    if (!err) return next();
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'payload too large' });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'malformed json' });
+    return res.status(400).json({ error: 'bad request' });
+  });
+
+  const rateLimited = createRateLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX);
+
+  /** Authenticates, rate-limits, and stamps last_seen. Returns the device, or
+   *  null after having already written the error response. */
+  function authOrReject(req: Request, res: Response) {
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const rlKey = req.header('x-plemmo-device') ?? req.ip ?? 'anon';
+    if (!rateLimited(rlKey, nowMs)) {
+      store.logSync('rate_limited', { deviceUid: req.header('x-plemmo-device'), message: req.path }, nowIso);
+      res.status(429).json({ error: 'rate limited' });
+      return null;
+    }
+    try {
+      const auth = authenticateDevice(store, signedFields(req), nowMs);
+      store.markDeviceSeen(auth.device.device_uid, nowIso);
+      return auth.device;
+    } catch (error) {
+      const reason = error instanceof DeviceAuthError ? error.reason : 'error';
+      store.logSync('auth_failure', { deviceUid: req.header('x-plemmo-device'), message: reason }, nowIso);
+      const clientReason = error instanceof DeviceAuthError ? clientAuthReason(error.reason) : 'unauthenticated';
+      res.status(401).json({ error: 'unauthenticated', reason: clientReason });
+      return null;
+    }
+  }
+
   // ── DEV/TEST ONLY device enrollment ──────────────────────────────────────
-  // Registers a device's PUBLIC key + org/location. In production this is
-  // replaced by the real merchant/admin enrollment flow (out of scope here);
-  // this endpoint is gated off unless explicitly enabled and must never be
-  // exposed in a production deployment.
+  // Registers a device's PUBLIC key + org/location, trusting the caller.
+  // Gated off unless explicitly enabled; MUST NOT be exposed in production —
+  // production uses the token flow below.
   if (options.enableDevEnroll) {
     app.post('/sync/v1/dev/enroll', (req: Request, res: Response) => {
-      const { device_uid, organization_uid, location_uid, public_key } = req.body ?? {};
+      const { device_uid, organization_uid, location_uid, register_uid, public_key } = req.body ?? {};
       if (!device_uid || !organization_uid || !public_key) {
         return res.status(400).json({ error: 'device_uid, organization_uid and public_key are required' });
       }
-      store.registerDevice({ device_uid, organization_uid, location_uid: location_uid ?? null, public_key, status: 'active' });
+      store.registerDevice({ device_uid, organization_uid, location_uid: location_uid ?? null, register_uid: register_uid ?? null, public_key, status: 'active' });
       res.status(201).json({ enrolled: true, device_uid });
     });
   }
 
-  app.post('/sync/v1/upload', (req: Request, res: Response) => {
-    let auth;
+  // ── PRODUCTION enrollment via one-time activation token (Part D) ─────────
+  app.post('/sync/v1/enroll', (req: Request, res: Response) => {
+    const { token, device_uid, public_key } = req.body ?? {};
     try {
-      auth = authenticateDevice(store, signedFields(req));
+      const enrolled = enrollWithToken(store, { token, deviceUid: device_uid, publicKey: public_key });
+      store.logSync('enrolled', { deviceUid: enrolled.device_uid, organizationUid: enrolled.organization_uid }, new Date().toISOString());
+      res.status(201).json({ enrolled: true, ...enrolled });
     } catch (error) {
-      const reason = error instanceof DeviceAuthError ? error.reason : 'error';
-      store.logSync('auth_failure', { deviceUid: req.header('x-plemmo-device'), message: reason }, new Date().toISOString());
-      return res.status(401).json({ error: 'unauthenticated', reason });
+      const reason = error instanceof EnrollmentError ? error.reason : 'error';
+      res.status(400).json({ error: 'enrollment_failed', reason });
     }
-    const device = auth.device;
+  });
+
+  app.post('/sync/v1/upload', (req: Request, res: Response) => {
+    const device = authOrReject(req, res);
+    if (!device) return;
 
     const events: UploadEvent[] = Array.isArray(req.body?.events) ? req.body.events : [];
     if (events.length === 0) return res.json({ accepted: [], duplicate: [], rejected: [] });
@@ -106,7 +170,7 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
         rejected.push({ uid: ev.uid, reason: 'malformed event', category: 'permanent' });
         continue;
       }
-      // AUTH/ISOLATION rejections (Part F): the fact must belong to THIS
+      // AUTH/ISOLATION rejections (Part J): the fact must belong to THIS
       // device's organization (resolved server-side), and to the device's
       // location when the device is location-bound. Client-claimed
       // organization_id/location_id are validated against the device
@@ -148,29 +212,24 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
       else { accepted.push(ev.uid); store.logSync('accepted', { deviceUid: device.device_uid, organizationUid: device.organization_uid }, receivedAt); }
     }
 
+    store.markDeviceSynced(device.device_uid, receivedAt);
     res.json({ accepted, duplicate, rejected });
   });
 
   app.get('/sync/v1/pull', (req: Request, res: Response) => {
-    let auth;
-    try {
-      auth = authenticateDevice(store, signedFields(req));
-    } catch (error) {
-      const reason = error instanceof DeviceAuthError ? error.reason : 'error';
-      store.logSync('auth_failure', { deviceUid: req.header('x-plemmo-device'), message: reason }, new Date().toISOString());
-      return res.status(401).json({ error: 'unauthenticated', reason });
-    }
-    const device = auth.device;
+    const device = authOrReject(req, res);
+    if (!device) return;
     const cursor = Number(req.query.cursor ?? 0) || 0;
     const limit = Math.min(Number(req.query.limit ?? 100) || 100, MAX_BATCH);
 
-    // Organization isolation (Part F/I): a device only ever receives its OWN
-    // organization's events, and never its own uploads back (SYNC-B
-    // simplification — a device already has its own movements locally).
-    const events = store.pullMovements(device.organization_uid, cursor, limit, device.device_uid);
-    const nextCursor = events.length > 0 ? events[events.length - 1].feed_seq : cursor;
+    // Organization isolation (Part J): a device only ever receives its OWN
+    // organization's events, and never its own uploads back (a device already
+    // has its own movements locally). The cursor advances past excluded own
+    // events because pullMovements reports the raw scanned position.
+    const page = store.pullMovements(device.organization_uid, cursor, limit, device.device_uid);
+    store.markDeviceSynced(device.device_uid, new Date().toISOString());
     res.json({
-      events: events.map((e) => ({
+      events: page.events.map((e) => ({
         event_uid: e.event_uid,
         entity_uid: e.movement_uid,
         feed_seq: e.feed_seq,
@@ -192,8 +251,8 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
           created_at: e.created_at,
         },
       })),
-      next_cursor: nextCursor,
-      has_more: events.length === limit,
+      next_cursor: page.nextCursor,
+      has_more: page.hasMore,
     });
   });
 

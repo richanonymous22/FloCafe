@@ -22,6 +22,20 @@ export type AuthFailureReason =
   | 'missing_headers' | 'unknown_device' | 'revoked_device'
   | 'stale_timestamp' | 'replayed_nonce' | 'bad_signature';
 
+/**
+ * The reason exposed to the CLIENT (Part J — error leakage). Deliberately
+ * coarse: 'unauthenticated' covers unknown-device / bad-signature / missing
+ * headers so the API is not a device-enumeration oracle. 'stale_timestamp'
+ * (resync your clock) and 'revoked_device' (re-enroll) are actionable, so
+ * they survive; 'replayed_nonce' maps to unauthenticated. The DETAILED reason
+ * is kept server-side for the sync log.
+ */
+export function clientAuthReason(reason: AuthFailureReason): 'unauthenticated' | 'stale_timestamp' | 'revoked_device' {
+  if (reason === 'stale_timestamp') return 'stale_timestamp';
+  if (reason === 'revoked_device') return 'revoked_device';
+  return 'unauthenticated';
+}
+
 export class DeviceAuthError extends Error {
   constructor(public reason: AuthFailureReason) {
     super(`device authentication failed: ${reason}`);
@@ -60,6 +74,10 @@ export function authenticateDevice(store: CloudStore, req: SignedRequestFields, 
   if (!Number.isFinite(ts) || Math.abs(nowMs - ts) > TIMESTAMP_WINDOW_MS) {
     throw new DeviceAuthError('stale_timestamp');
   }
+  // Keep the replay table bounded: any nonce older than the freshness window
+  // can never be replayed successfully (its timestamp is already stale), so
+  // it is safe to prune (Part J — nonce store must not grow unbounded).
+  store.pruneNonces(new Date(nowMs - TIMESTAMP_WINDOW_MS).toISOString());
   if (store.seenNonce(req.deviceUid, req.nonce)) throw new DeviceAuthError('replayed_nonce');
 
   let publicKey;

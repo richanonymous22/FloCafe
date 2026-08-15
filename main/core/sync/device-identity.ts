@@ -1,32 +1,40 @@
 /**
- * Plemmo Core — local device sync identity (SYNC-B).
+ * Plemmo Core — local device sync identity (SYNC-B, hardened SYNC-C Part E).
  *
  * Manages this device's Ed25519 keypair for signing sync requests.
  *
- * ## Key storage (dev vs production)
+ * ## Key storage
  *
- * The PRIVATE key is written to a file in the app data directory, with
- * owner-only permissions, and is NEVER stored in any database table (SYNC-0
- * Part O). **This file-based storage is the DEVELOPMENT/TEST mechanism.** In
- * production the private key belongs in OS-protected storage (Windows DPAPI /
- * macOS Keychain), which is a device-enrollment concern out of scope for
- * SYNC-B — see docs/SYNC_B_CLOUD_TRANSPORT.md Part E. The PUBLIC key is
- * recorded in `device_credentials` (SYNC-0) and registered with the cloud.
+ * The PRIVATE key is held by a `KeyStore` (key-store.ts): OS-encrypted via
+ * Electron safeStorage (Windows DPAPI / macOS Keychain / libsecret) in
+ * production, a `0600` PEM file in dev/test. It is NEVER written to any
+ * database table (SYNC-0 Part O). The PUBLIC key is recorded in
+ * `device_credentials` (SYNC-0) and registered with the cloud.
  *
- * The signing path is identical in dev and production; only where the private
- * key is stored differs, so swapping the store later touches only this file.
+ * The signing path is identical regardless of where the key rests, so the
+ * environment only changes the store, not the protocol.
  */
 
-import * as fs from 'fs';
 import * as path from 'path';
 import { generateKeyPairSync, createPrivateKey, createPublicKey, KeyObject } from 'crypto';
 import { getDbPath } from '../../db';
 import { getDeviceContext } from '../context';
-import { recordDeviceCredential, getActiveDeviceCredential } from '../device-credentials';
+import { recordDeviceCredential, getActiveDeviceCredential, revokeDeviceCredential } from '../device-credentials';
+import { createKeyStore, KeyStore } from './key-store';
+import { getSyncEnvironment } from './config';
 
-function keyFilePath(): string {
-  // Beside the local database (dev/test). Clearly a dev artifact.
+function keyBasePath(): string {
+  // Beside the local database. In dev this is the plaintext PEM; in production
+  // the store appends '.enc' and writes OS-encrypted ciphertext.
   return path.join(path.dirname(getDbPath()), 'plemmo-sync-device-key.pem');
+}
+
+function keyStore(): KeyStore {
+  return createKeyStore({ filePath: keyBasePath(), environment: getSyncEnvironment() });
+}
+
+function deviceId(): string {
+  return getDeviceContext()?.id ?? 'local-device';
 }
 
 export interface DeviceKeyMaterial {
@@ -35,36 +43,58 @@ export interface DeviceKeyMaterial {
   deviceId: string;
 }
 
+function materialFromPem(privateKeyPem: string): DeviceKeyMaterial {
+  const privateKey = createPrivateKey(privateKeyPem);
+  const publicKeyPem = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }) as string;
+  return { privateKey, publicKeyPem, deviceId: deviceId() };
+}
+
+function generateAndStore(store: KeyStore): DeviceKeyMaterial {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+  store.save(privateKeyPem);
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }) as string;
+  // Record the PUBLIC key locally (SYNC-0 device_credentials). Never the private key.
+  recordDeviceCredential({ deviceId: deviceId(), credentialType: 'device_keypair', publicKey: publicKeyPem });
+  return { privateKey: createPrivateKey(privateKeyPem), publicKeyPem, deviceId: deviceId() };
+}
+
 /**
  * Returns this device's key material, generating and persisting a keypair on
- * first use. Idempotent — subsequent calls load the same key. Also records
- * the public key in `device_credentials` so the local registry knows it.
+ * first use. Idempotent — subsequent calls load the same key.
  */
 export function getOrCreateDeviceKey(): DeviceKeyMaterial {
-  const deviceId = getDeviceContext()?.id ?? 'local-device';
-  const file = keyFilePath();
+  const store = keyStore();
+  const existing = store.load();
+  if (existing) return materialFromPem(existing);
+  return generateAndStore(store);
+}
 
-  let privateKeyPem: string;
-  if (fs.existsSync(file)) {
-    privateKeyPem = fs.readFileSync(file, 'utf8');
-  } else {
-    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
-    fs.writeFileSync(file, privateKeyPem, { mode: 0o600 });
-    const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }) as string;
-    // Record the public key locally (SYNC-0 device_credentials). Never the private key.
-    recordDeviceCredential({ deviceId, credentialType: 'device_keypair', publicKey: publicKeyPem });
-  }
+/**
+ * Rotates the device credential (Part E): generates a fresh keypair, replaces
+ * the stored private key, and records the new PUBLIC key — which marks the
+ * previous local credential `rotated`. The caller then re-registers the new
+ * public key with the cloud (dev enroll or `rotateDevice`). The device_uid is
+ * unchanged; this is rotation, not replacement.
+ */
+export function rotateDeviceKey(): DeviceKeyMaterial {
+  return generateAndStore(keyStore());
+}
 
-  const privateKey = createPrivateKey(privateKeyPem);
-  // Derive the public key PEM from the stored private key (avoids a second file).
-  const publicKeyPem = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }) as string;
-  return { privateKey, publicKeyPem, deviceId };
+/**
+ * Revokes this device's credential locally (Part E): removes the stored
+ * private key and marks the active local credential `revoked`. Used for device
+ * replacement / decommissioning. The cloud-side revoke is a separate call.
+ */
+export function revokeDeviceKey(): void {
+  keyStore().clear();
+  const active = getActiveDeviceCredential(deviceId());
+  if (active) revokeDeviceCredential(active.id);
 }
 
 /** The public key PEM this device presents at enrollment (dev) or via the real flow (prod). */
 export function getDevicePublicKeyPem(): string {
-  const active = getActiveDeviceCredential(getDeviceContext()?.id ?? 'local-device');
+  const active = getActiveDeviceCredential(deviceId());
   if (active?.public_key) return active.public_key;
   return getOrCreateDeviceKey().publicKeyPem;
 }

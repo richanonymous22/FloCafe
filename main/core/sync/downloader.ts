@@ -44,7 +44,21 @@ export async function pullAndApply(
 ): Promise<DownloadOutcome> {
   const cursor = getDownloadCursor(deviceId, db);
   const result = await transport.pull(cursor, limit);
-  if (result.events.length === 0) return { pulled: 0, applied: 0, skipped: 0, cursor };
+  if (result.events.length === 0) {
+    // The server may have SCANNED past our cursor while returning no events —
+    // e.g. the tail of the feed is entirely our own uploads, which the server
+    // excludes. Advance the cursor anyway so we never re-scan the same window
+    // forever (SYNC-B audit finding A1). No inbox rows to write, so this is a
+    // single small write.
+    if (result.next_cursor > cursor) {
+      db.prepare(`
+        INSERT INTO sync_state (device_id, last_download_cursor, last_download_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET last_download_cursor = excluded.last_download_cursor, last_download_at = excluded.last_download_at, updated_at = excluded.updated_at
+      `).run(deviceId, String(result.next_cursor), now(), now(), now());
+    }
+    return { pulled: 0, applied: 0, skipped: 0, cursor: result.next_cursor > cursor ? result.next_cursor : cursor };
+  }
 
   // ── TXN 1: persist inbox batch + advance cursor, atomically (Part J) ──────
   const insertInbox = db.prepare(`

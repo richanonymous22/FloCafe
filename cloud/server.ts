@@ -20,7 +20,7 @@
  */
 
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudDevice, CloudEntityType, CloudEvent, CloudPullPage, StoreResult } from './store';
+import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudPullPage, ConflictResolutionInput, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
 
@@ -37,6 +37,25 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   storeEvent(event: CloudEvent, receivedAt: string): StoreResult | Promise<StoreResult>;
   pullEvents(organizationUid: string, afterCursor: number, limit: number, excludeDeviceUid?: string): CloudPullPage | Promise<CloudPullPage>;
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void | Promise<void>;
+  // Conflict resolution (SYNC-F).
+  listConflicts(organizationUid: string): CloudConflict[] | Promise<CloudConflict[]>;
+  getConflict(conflictUid: string): CloudConflict | null | Promise<CloudConflict | null>;
+  recordConflictResolution(input: ConflictResolutionInput, at: string): void | Promise<void>;
+}
+
+/**
+ * Server-side financial-safety re-validation (SYNC-F Part C, defense in depth).
+ * The device already enforced role authorization + the full legality matrix
+ * before reporting; the cloud independently refuses a blind `accept_remote`
+ * overwrite of the two intrinsically financial conflict types, so a
+ * compromised or buggy client can never launder a completed-sale overwrite
+ * through the cloud. The cloud does not know local lifecycle, so this is a
+ * coarse but strict guard, not the full matrix.
+ */
+const CLOUD_BLIND_OVERWRITE_BANNED = new Set(['payment_conflict', 'completion_conflict']);
+function cloudResolutionAllowed(conflictType: string, strategy: string | null | undefined): boolean {
+  if (strategy === 'accept_remote' && CLOUD_BLIND_OVERWRITE_BANNED.has(conflictType)) return false;
+  return true;
 }
 
 const MAX_BATCH = 500;
@@ -269,6 +288,53 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
       next_cursor: page.nextCursor,
       has_more: page.hasMore,
     });
+  });
+
+  // ── SYNC-F: pull cross-device conflicts for this device's organization ────
+  // Organization isolation (Part M/P): the org is resolved from the device,
+  // never the query — a device only ever sees its own org's conflicts.
+  app.get('/sync/v1/conflicts', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
+    if (!device) return;
+    const conflicts = await store.listConflicts(device.organization_uid);
+    res.json({ conflicts });
+  });
+
+  // ── SYNC-F: record a device-reported conflict resolution ─────────────────
+  app.post('/sync/v1/conflicts/resolve', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
+    if (!device) return;
+    const at = new Date().toISOString();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const conflictUid = typeof body.conflict_uid === 'string' ? body.conflict_uid : '';
+    const status = body.status as string;
+    const strategy = (body.strategy as string | null) ?? null;
+    if (!conflictUid || !['acknowledged', 'resolved', 'dismissed'].includes(status)) {
+      return res.status(400).json({ error: 'conflict_uid and a valid status are required' });
+    }
+    const conflict = await store.getConflict(conflictUid);
+    // Organization isolation: never resolve another org's conflict.
+    if (!conflict || conflict.organization_uid !== device.organization_uid) {
+      await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: 'conflict not found for org' }, at);
+      return res.status(404).json({ error: 'conflict not found' });
+    }
+    // Defense-in-depth financial safety (Part C).
+    if (!cloudResolutionAllowed(conflict.conflict_type, strategy)) {
+      await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: 'illegal financial resolution' }, at);
+      return res.status(422).json({ error: 'illegal_resolution', reason: `strategy '${strategy}' cannot overwrite a ${conflict.conflict_type}` });
+    }
+    await store.recordConflictResolution({
+      conflict_uid: conflictUid,
+      status: status as 'acknowledged' | 'resolved' | 'dismissed',
+      strategy,
+      resolution_notes: (body.resolution_notes as string | null) ?? null,
+      compensation_reference: (body.compensation_reference as string | null) ?? null,
+      actor_user_id: (body.actor_user_id as string | null) ?? null,
+      device_uid: device.device_uid,
+      resolved_at: (body.resolved_at as string | null) ?? null,
+    }, at);
+    await store.logSync('conflict_resolved', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: status }, at);
+    res.json({ recorded: true });
   });
 
   return app;

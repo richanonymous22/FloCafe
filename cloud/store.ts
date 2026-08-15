@@ -47,8 +47,24 @@ export interface CloudConflict {
   remote_device_uid: string | null;
   conflict_type: string;
   detected_at: string;
-  status: 'open' | 'acknowledged' | 'resolved';
+  status: 'open' | 'acknowledged' | 'resolved' | 'dismissed';
   resolution: string | null;
+}
+
+/**
+ * A resolution reported by a device (SYNC-F). Recorded as append-only history
+ * — the cloud never destroys a conflict's resolution trail, so who resolved
+ * it, when, how, and with what compensation reference is always retrievable.
+ */
+export interface ConflictResolutionInput {
+  conflict_uid: string;
+  status: 'acknowledged' | 'resolved' | 'dismissed';
+  strategy?: string | null;
+  resolution_notes?: string | null;
+  compensation_reference?: string | null;
+  actor_user_id?: string | null;
+  device_uid: string;
+  resolved_at?: string | null;
 }
 
 export interface CloudDevice {
@@ -182,6 +198,11 @@ export interface CloudStore {
   listConflicts(organizationUid: string): CloudConflict[];
   getEntityVersion(organizationUid: string, entityType: string, entityUid: string): { current_event_uid: string; current_device_uid: string; snapshot_version: number } | null;
 
+  // ── Conflict resolution (SYNC-F) ──────────────────────────────────────────
+  getConflict(conflictUid: string): CloudConflict | null;
+  recordConflictResolution(input: ConflictResolutionInput, at: string): void;
+  listConflictResolutions(conflictUid: string): Array<Record<string, unknown>>;
+
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void;
   observability(): { accepted: number; duplicate: number; rejected: number; authFailure: number };
   observabilityByEntity(): Record<string, { accepted: number; duplicate: number; rejected: number }>;
@@ -259,10 +280,30 @@ export class SqliteCloudStore implements CloudStore {
         remote_device_uid TEXT,
         conflict_type    TEXT NOT NULL,
         detected_at      TEXT NOT NULL,
-        status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
-        resolution       TEXT
+        status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved','dismissed')),
+        resolution       TEXT,
+        resolution_strategy    TEXT,
+        resolution_actor       TEXT,
+        resolved_at            TEXT,
+        resolution_notes       TEXT,
+        compensation_reference TEXT,
+        acknowledged_at        TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_cloud_conflicts_entity ON cloud_conflicts(organization_uid, entity_type, entity_uid);
+      -- Append-only resolution history — a conflict's full audit trail (SYNC-F).
+      CREATE TABLE IF NOT EXISTS cloud_conflict_resolutions (
+        id                     TEXT PRIMARY KEY,
+        conflict_uid           TEXT NOT NULL,
+        organization_uid       TEXT NOT NULL,
+        status                 TEXT NOT NULL,
+        strategy               TEXT,
+        resolution_notes       TEXT,
+        compensation_reference TEXT,
+        actor_user_id          TEXT,
+        device_uid             TEXT NOT NULL,
+        recorded_at            TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_cloud_conflict_resolutions ON cloud_conflict_resolutions(conflict_uid, recorded_at);
       CREATE TABLE IF NOT EXISTS cloud_feed_sequence (organization_uid TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS cloud_nonces (device_uid TEXT NOT NULL, nonce TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (device_uid, nonce));
       CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
@@ -512,6 +553,34 @@ export class SqliteCloudStore implements CloudStore {
   getEntityVersion(organizationUid: string, entityType: string, entityUid: string): { current_event_uid: string; current_device_uid: string; snapshot_version: number } | null {
     return (this.db.prepare('SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = ? AND entity_type = ? AND entity_uid = ?')
       .get(organizationUid, entityType, entityUid) as { current_event_uid: string; current_device_uid: string; snapshot_version: number } | undefined) ?? null;
+  }
+
+  getConflict(conflictUid: string): CloudConflict | null {
+    return (this.db.prepare('SELECT * FROM cloud_conflicts WHERE conflict_uid = ?').get(conflictUid) as CloudConflict | undefined) ?? null;
+  }
+
+  recordConflictResolution(input: ConflictResolutionInput, at: string): void {
+    const txn = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO cloud_conflict_resolutions (id, conflict_uid, organization_uid, status, strategy, resolution_notes, compensation_reference, actor_user_id, device_uid, recorded_at)
+        SELECT ?, ?, organization_uid, ?, ?, ?, ?, ?, ?, ? FROM cloud_conflicts WHERE conflict_uid = ?
+      `).run(`res_${at}_${input.conflict_uid}`, input.conflict_uid, input.status, input.strategy ?? null, input.resolution_notes ?? null,
+        input.compensation_reference ?? null, input.actor_user_id ?? null, input.device_uid, at, input.conflict_uid);
+      this.db.prepare(`
+        UPDATE cloud_conflicts SET status = ?, resolution = ?, resolution_strategy = ?, resolution_actor = ?,
+          resolution_notes = ?, compensation_reference = ?,
+          resolved_at = CASE WHEN ? IN ('resolved','dismissed') THEN ? ELSE resolved_at END,
+          acknowledged_at = CASE WHEN ? = 'acknowledged' AND acknowledged_at IS NULL THEN ? ELSE acknowledged_at END
+        WHERE conflict_uid = ?
+      `).run(input.status, input.strategy ?? null, input.strategy ?? null, input.actor_user_id ?? null,
+        input.resolution_notes ?? null, input.compensation_reference ?? null,
+        input.status, input.resolved_at ?? at, input.status, at, input.conflict_uid);
+    });
+    txn();
+  }
+
+  listConflictResolutions(conflictUid: string): Array<Record<string, unknown>> {
+    return this.db.prepare('SELECT * FROM cloud_conflict_resolutions WHERE conflict_uid = ? ORDER BY recorded_at ASC').all(conflictUid) as Array<Record<string, unknown>>;
   }
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void {

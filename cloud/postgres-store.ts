@@ -20,6 +20,7 @@ import type {
   CloudDevice, CloudEvent, CloudPullPage, CloudFeedItem,
   StoreResult, EnrollmentToken, CloudInventoryDeficit, OrganizationHealth,
   DeficitStatus, CloudInventoryMovement, CloudFeedEvent, CloudConflict,
+  ConflictResolutionInput,
 } from './store';
 import { MUTABLE_CLOUD_ENTITIES } from './store';
 
@@ -134,6 +135,32 @@ export class PostgresCloudStore {
       'SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = $1 AND entity_type = $2 AND entity_uid = $3',
       [organizationUid, entityType, entityUid])).rows[0];
     return r ? { ...r, snapshot_version: Number(r.snapshot_version) } : null;
+  }
+
+  async getConflict(conflictUid: string): Promise<CloudConflict | null> {
+    return (await this.pg.query<CloudConflict>('SELECT * FROM cloud_conflicts WHERE conflict_uid = $1', [conflictUid])).rows[0] ?? null;
+  }
+
+  async recordConflictResolution(input: ConflictResolutionInput, at: string): Promise<void> {
+    await inTxn(this.pg, async () => {
+      await this.pg.query(
+        `INSERT INTO cloud_conflict_resolutions (id, conflict_uid, organization_uid, status, strategy, resolution_notes, compensation_reference, actor_user_id, device_uid, recorded_at)
+         SELECT $1, $2, organization_uid, $3, $4, $5, $6, $7, $8, $9 FROM cloud_conflicts WHERE conflict_uid = $2`,
+        [`res_${at}_${input.conflict_uid}`, input.conflict_uid, input.status, input.strategy ?? null, input.resolution_notes ?? null,
+          input.compensation_reference ?? null, input.actor_user_id ?? null, input.device_uid, at]);
+      await this.pg.query(
+        `UPDATE cloud_conflicts SET status = $1, resolution = $2, resolution_strategy = $2, resolution_actor = $3,
+           resolution_notes = $4, compensation_reference = $5,
+           resolved_at = CASE WHEN $1 IN ('resolved','dismissed') THEN $6 ELSE resolved_at END,
+           acknowledged_at = CASE WHEN $1 = 'acknowledged' AND acknowledged_at IS NULL THEN $7 ELSE acknowledged_at END
+         WHERE conflict_uid = $8`,
+        [input.status, input.strategy ?? null, input.actor_user_id ?? null, input.resolution_notes ?? null,
+          input.compensation_reference ?? null, input.resolved_at ?? at, at, input.conflict_uid]);
+    });
+  }
+
+  async listConflictResolutions(conflictUid: string): Promise<Array<Record<string, unknown>>> {
+    return (await this.pg.query('SELECT * FROM cloud_conflict_resolutions WHERE conflict_uid = $1 ORDER BY recorded_at ASC', [conflictUid])).rows;
   }
 
   private inventoryFields(evt: CloudEvent): InventoryFields | null {

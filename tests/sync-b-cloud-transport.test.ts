@@ -74,7 +74,7 @@ async function main() {
     const up1 = await uploadPendingBatch(transport, deviceId, 100, db);
     assertEqual(up1.acked, pendingBefore, 'the cloud accepted the uploaded event(s)');
     assertEqual(countOutboxByStatus('pending', db), 0, 'no events remain pending after a successful upload');
-    const cloudRow = store.pullMovements(organization.id, 0, 100)[0];
+    const cloudRow = store.pullMovements(organization.id, 0, 100).events[0];
     assertEqual(cloudRow.movement_uid, m1.id, 'the cloud persisted the movement as a business fact');
     assertEqual(cloudRow.organization_uid, organization.id, 'the cloud stamped the org from the device identity');
 
@@ -85,7 +85,7 @@ async function main() {
     db.prepare("UPDATE sync_outbox SET status = 'pending' WHERE uid = ?").run(evUid);
     const up2 = await uploadPendingBatch(transport, deviceId, 100, db);
     assertEqual(up2.acked, 1, 'the duplicate upload is acked (idempotent success)');
-    assertEqual(store.pullMovements(organization.id, 0, 100).length, 1, 'the cloud did NOT create a second business fact');
+    assertEqual(store.pullMovements(organization.id, 0, 100).events.length, 1, 'the cloud did NOT create a second business fact');
 
     // ══ 4-5. Organization / location isolation ═══════════════════════════
     console.log('\n4-5. Organization / location isolation');
@@ -114,7 +114,7 @@ async function main() {
     const spoofData = await spoofRes.json();
     assertEqual(spoofData.rejected.length, 1, 'the org-spoofing event is rejected');
     assertEqual(spoofData.rejected[0].reason, 'organization mismatch', 'rejection reason is organization mismatch');
-    assertEqual(store.pullMovements(organization.id, 0, 100).length, 1, "the attacker's org spoof did not land in the victim organization");
+    assertEqual(store.pullMovements(organization.id, 0, 100).events.length, 1, "the attacker's org spoof did not land in the victim organization");
     void attackerTransport;
 
     // ══ 6. Malformed event rejected ══════════════════════════════════════

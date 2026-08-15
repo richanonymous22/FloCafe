@@ -128,6 +128,8 @@ TypeScript with no Express dependency.
 | `sync/*` (`outbox.ts`, `uploader.ts`, `inventory-events.ts`, `types.ts`) | ✅ Built (SYNC-A) | Local sync foundation — `appendOutboxEvent` (atomic with the business write), per-device sequence, `uploadPendingBatch` (transport-agnostic), typed inventory-movement events. First synced entity: `inventory_movements`. No cloud/network |
 | `sync/*` (`http-transport.ts`, `downloader.ts`, `remote-apply.ts`, `device-identity.ts`, `config.ts`, `signing.ts`) | ✅ Built (SYNC-B) | Real HTTP transport — Ed25519-signed upload/pull against the cloud sync API, download→inbox→apply with atomic cursor advance, loop-preventing remote apply. Provider-neutral; env-configured |
 | `cloud/*` (`server.ts`, `store.ts`, `auth.ts`, `signing.ts`) | ✅ Built (SYNC-B) | The Plemmo Sync API — Express `/sync/v1/upload`+`/pull`, device-signature auth, organization isolation, idempotency, per-org feed cursor. Provider-neutral `CloudStore` (SQLite dev impl); separate from the Electron app |
+| `sync/*` (`worker.ts`, `health.ts`, `key-store.ts`) | ✅ Built (SYNC-C) | Production foundation — background worker (non-blocking, backoff, restart-safe), local sync-health telemetry, OS-protected key storage (safeStorage/DPAPI, dev file fallback), key rotation/revocation, env guards |
+| `cloud/*` (`postgres-store.ts`, `factory.ts`, `enrollment.ts`, `migrations/postgres/*`) | ✅ Built (SYNC-C) | Production persistence — `PostgresCloudStore` behind `CloudStore`, backend factory, token device-enrollment, hardened store (nonce prune, cursor fix, cross-till deficit detection), Postgres migrations. Client/protocol unchanged |
 
 ### Module boundary (Milestone 3)
 
@@ -189,7 +191,7 @@ classification.
 | CashSession | ❌ | — | No shift or drawer accounting |
 | Receipt | ✅ Strong | `printers/thermal.ts` | ESC/POS, profiles, typed failures |
 | AuditEvent | ✅ New | `audit_events` (v70) | |
-| Synchronization | ⚠️ Local foundation (SYNC-A) | `sync_outbox`/`sync_inbox`/`sync_state` (v86) | Inventory movements produce outbox events atomically; per-device sequence; mock transport only — no cloud/network yet. See `SYNC_A_LOCAL_FOUNDATION.md` and §7 |
+| Synchronization | ⚠️ Production foundation (SYNC-C) | `sync_outbox`/`sync_inbox`/`sync_state` (v86); cloud-side Postgres schema | Inventory movements only. Real Ed25519-authenticated HTTP transport, provider-neutral `CloudStore` (SQLite dev / Postgres prod adapter), background worker, token enrollment, OS-protected keys, cross-till deficit detection. Other entities not yet synced. See `SYNC_C_PRODUCTION_FOUNDATION.md` and §7 |
 
 ### Product / Variant (Milestone 3)
 
@@ -639,7 +641,8 @@ deliberately does **not** exempt LAN IPs, and a URL allowlist.
 | Payment Cutover | Retire the legacy payment readers — every merchant-facing reader (receipts, reports, payment-method usage/merge, bill rendering) migrated from `bills.payment_details` to `payments`/`payment_events`; historical partial-mirror reconciliation (v85). [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) | ✅ Done |
 | SYNC-A | Local sync foundation — `sync_outbox`/`sync_inbox`/`sync_state` (v86), inventory movements produce outbox events atomically, per-device sequence, mock-transport upload/ack/retry/recovery. First synced entity only; no cloud. [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) | ✅ Done |
 | SYNC-B | Real cloud transport for inventory movements — provider-neutral `CloudStore` + Ed25519-authenticated HTTP sync API (`cloud/`), `HttpSyncTransport`, upload/idempotency/pull/cursor/inbox-apply/loop-prevention, organization isolation. Inventory movements only; production infra undecided. [`SYNC_B_CLOUD_TRANSPORT.md`](./SYNC_B_CLOUD_TRANSPORT.md) | ✅ Done |
-| SYNC-C+ | Background worker, real device enrollment + OS-keychain keys, more entities, cross-device balance convergence, production cloud backend — not started | Next |
+| SYNC-C | Production sync foundation — managed-Postgres persistence behind `CloudStore` (`PostgresCloudStore` + migrations), concurrency-safe per-org sequencing, token device enrollment, OS-protected key storage (safeStorage/DPAPI), background worker, sync-health telemetry, cross-till deficit detection, env guards, security hardening. Inventory movements only. [`SYNC_C_PRODUCTION_FOUNDATION.md`](./SYNC_C_PRODUCTION_FOUNDATION.md) | ✅ Done |
+| SYNC-D+ | Sync additional entities (audit events, then sales/payments with a conflict model), real Admin token issuance + device/deficit console, shared rate limiter, deficit resolution workflow, stand up the production cloud backend — not started | Next |
 | (later) | Multi-location selection/switching UI; two-phase transfers; a dedicated refund/void HTTP surface for `PaymentService` | |
 | 10 | Retire the `bills.payment_details` *write* (kept only as a narrow compatibility bridge after the Payment Cutover milestone retired every read dependency — see `PAYMENT_CUTOVER.md` § F) once trusted in production; migrate `applyPaymentBatch`'s callers onto `tender()` | |
 | 11 | Sync engine — including real conflict resolution for concurrent inventory writes across tills (docs/MILESTONE_4_INVENTORY.md § Concurrency) | |
@@ -675,5 +678,6 @@ Milestones 2, 4, 5, 6, 7, and 8.
 - [`PAYMENT_CUTOVER.md`](./PAYMENT_CUTOVER.md) — retiring the legacy payment readers: every merchant-facing consumer migrated onto `payments`/`payment_events`, historical partial-mirror reconciliation, and why `bills.payment_details` is kept as a narrow write-side bridge
 - [`SYNC_A_LOCAL_FOUNDATION.md`](./SYNC_A_LOCAL_FOUNDATION.md) — the first sync implementation: the local outbox/inbox/sync_state foundation, inventory movements as the first synced entity, the atomic movement+event transaction boundary, and the mock transport (no cloud)
 - [`SYNC_B_CLOUD_TRANSPORT.md`](./SYNC_B_CLOUD_TRANSPORT.md) — the first real cloud communication: the infrastructure audit, the provider-neutral `CloudStore` boundary, the Ed25519-authenticated HTTP sync API (upload/pull/cursor/inbox-apply), organization isolation, idempotency, loop prevention, and why production infra is left undecided
+- [`SYNC_C_PRODUCTION_FOUNDATION.md`](./SYNC_C_PRODUCTION_FOUNDATION.md) — the production sync foundation: SYNC-B audit + fixes, managed-Postgres persistence behind `CloudStore`, concurrency-safe per-org sequencing, token device enrollment, OS-protected key storage, the background worker, sync-health telemetry, cross-till deficit detection, environment guards, and the security hardening pass
 - [`../AGENTS.md`](../AGENTS.md) — inherited repository conventions
 - [`tax-packs.md`](./tax-packs.md), [`printers.md`](./printers.md) — inherited subsystem docs

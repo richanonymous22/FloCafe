@@ -20,9 +20,24 @@
  */
 
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudStore, CloudInventoryMovement } from './store';
-import { authenticateDevice, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
-import { enrollWithToken, EnrollmentError } from './enrollment';
+import { CloudDevice, CloudEntityType, CloudEvent, CloudPullPage, StoreResult } from './store';
+import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
+import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
+
+/**
+ * The store surface the sync server uses. Every method may be sync or async,
+ * so ONE server runs unchanged over the sync `SqliteCloudStore` (dev/test) and
+ * the async `PostgresCloudStore` (production) — the sync-vs-async seam is fully
+ * absorbed here (SYNC-D). Both concrete stores satisfy it structurally.
+ */
+export interface ServerCloudStore extends AuthStore, EnrollStore {
+  registerDevice(device: CloudDevice): void | Promise<void>;
+  markDeviceSeen(deviceUid: string, at: string): void | Promise<void>;
+  markDeviceSynced(deviceUid: string, at: string): void | Promise<void>;
+  storeEvent(event: CloudEvent, receivedAt: string): StoreResult | Promise<StoreResult>;
+  pullEvents(organizationUid: string, afterCursor: number, limit: number, excludeDeviceUid?: string): CloudPullPage | Promise<CloudPullPage>;
+  logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void | Promise<void>;
+}
 
 const MAX_BATCH = 500;
 const BODY_LIMIT = '1mb';
@@ -34,11 +49,27 @@ interface UploadEvent {
   device_id: string;
   sequence: number;
   entity_type: string;
-  entity_uid: string;          // the movement uid (business fact)
+  entity_uid: string;          // the business fact uid
   organization_id: string | null;
   location_id: string | null;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+/**
+ * The multi-entity registry (SYNC-D, Part M). Each synchronized entity type
+ * declares how to validate its payload. Identity (org/location) is ALWAYS
+ * resolved from the authenticated device, never trusted from the payload —
+ * the registry only decides whether a payload is well-formed for its type.
+ */
+const ENTITY_REGISTRY: Record<CloudEntityType, (p: Record<string, unknown>) => boolean> = {
+  inventory_movement: (p) => typeof p.quantity_delta === 'number' && !!p.product_id && !!p.movement_type,
+  audit_event: (p) => !!p.audit_uid && !!p.event_type,
+  payment_event: (p) => !!p.payment_event_uid && !!p.payment_uid && !!p.to_state,
+};
+
+function isKnownEntity(t: string): t is CloudEntityType {
+  return t === 'inventory_movement' || t === 'audit_event' || t === 'payment_event';
 }
 
 function signedFields(req: Request): SignedRequestFields {
@@ -75,7 +106,7 @@ export interface CreateCloudServerOptions {
   enableDevEnroll?: boolean;
 }
 
-export function createCloudServer(store: CloudStore, options: CreateCloudServerOptions = {}): Express {
+export function createCloudServer(store: ServerCloudStore, options: CreateCloudServerOptions = {}): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({
@@ -96,22 +127,22 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
 
   /** Authenticates, rate-limits, and stamps last_seen. Returns the device, or
    *  null after having already written the error response. */
-  function authOrReject(req: Request, res: Response) {
+  async function authOrReject(req: Request, res: Response): Promise<CloudDevice | null> {
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
     const rlKey = req.header('x-plemmo-device') ?? req.ip ?? 'anon';
     if (!rateLimited(rlKey, nowMs)) {
-      store.logSync('rate_limited', { deviceUid: req.header('x-plemmo-device'), message: req.path }, nowIso);
+      await store.logSync('rate_limited', { deviceUid: req.header('x-plemmo-device'), message: req.path }, nowIso);
       res.status(429).json({ error: 'rate limited' });
       return null;
     }
     try {
-      const auth = authenticateDevice(store, signedFields(req), nowMs);
-      store.markDeviceSeen(auth.device.device_uid, nowIso);
+      const auth = await authenticateDevice(store, signedFields(req), nowMs);
+      await store.markDeviceSeen(auth.device.device_uid, nowIso);
       return auth.device;
     } catch (error) {
       const reason = error instanceof DeviceAuthError ? error.reason : 'error';
-      store.logSync('auth_failure', { deviceUid: req.header('x-plemmo-device'), message: reason }, nowIso);
+      await store.logSync('auth_failure', { deviceUid: req.header('x-plemmo-device'), message: reason }, nowIso);
       const clientReason = error instanceof DeviceAuthError ? clientAuthReason(error.reason) : 'unauthenticated';
       res.status(401).json({ error: 'unauthenticated', reason: clientReason });
       return null;
@@ -123,22 +154,22 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
   // Gated off unless explicitly enabled; MUST NOT be exposed in production —
   // production uses the token flow below.
   if (options.enableDevEnroll) {
-    app.post('/sync/v1/dev/enroll', (req: Request, res: Response) => {
+    app.post('/sync/v1/dev/enroll', async (req: Request, res: Response) => {
       const { device_uid, organization_uid, location_uid, register_uid, public_key } = req.body ?? {};
       if (!device_uid || !organization_uid || !public_key) {
         return res.status(400).json({ error: 'device_uid, organization_uid and public_key are required' });
       }
-      store.registerDevice({ device_uid, organization_uid, location_uid: location_uid ?? null, register_uid: register_uid ?? null, public_key, status: 'active' });
+      await store.registerDevice({ device_uid, organization_uid, location_uid: location_uid ?? null, register_uid: register_uid ?? null, public_key, status: 'active' });
       res.status(201).json({ enrolled: true, device_uid });
     });
   }
 
-  // ── PRODUCTION enrollment via one-time activation token (Part D) ─────────
-  app.post('/sync/v1/enroll', (req: Request, res: Response) => {
+  // ── PRODUCTION enrollment via one-time activation token (Part F) ─────────
+  app.post('/sync/v1/enroll', async (req: Request, res: Response) => {
     const { token, device_uid, public_key } = req.body ?? {};
     try {
-      const enrolled = enrollWithToken(store, { token, deviceUid: device_uid, publicKey: public_key });
-      store.logSync('enrolled', { deviceUid: enrolled.device_uid, organizationUid: enrolled.organization_uid }, new Date().toISOString());
+      const enrolled = await enrollWithToken(store, { token, deviceUid: device_uid, publicKey: public_key });
+      await store.logSync('enrolled', { deviceUid: enrolled.device_uid, organizationUid: enrolled.organization_uid }, new Date().toISOString());
       res.status(201).json({ enrolled: true, ...enrolled });
     } catch (error) {
       const reason = error instanceof EnrollmentError ? error.reason : 'error';
@@ -146,8 +177,8 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
     }
   });
 
-  app.post('/sync/v1/upload', (req: Request, res: Response) => {
-    const device = authOrReject(req, res);
+  app.post('/sync/v1/upload', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
     if (!device) return;
 
     const events: UploadEvent[] = Array.isArray(req.body?.events) ? req.body.events : [];
@@ -160,64 +191,60 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
     const receivedAt = new Date().toISOString();
 
     for (const ev of events) {
-      // PERMANENT rejections: malformed / wrong entity / not this device's fact.
-      if (ev.entity_type !== 'inventory_movement') {
+      // PERMANENT rejections: unknown entity type / malformed payload.
+      if (!isKnownEntity(ev.entity_type)) {
         rejected.push({ uid: ev.uid, reason: 'unsupported entity_type', category: 'permanent' });
+        await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, entityType: ev.entity_type, message: 'unsupported entity_type' }, receivedAt);
         continue;
       }
-      const p = ev.payload as Record<string, unknown>;
-      if (!ev.uid || !ev.entity_uid || !p || typeof p.quantity_delta !== 'number' || !p.product_id || !p.movement_type) {
+      const p = (ev.payload ?? {}) as Record<string, unknown>;
+      if (!ev.uid || !ev.entity_uid || !ENTITY_REGISTRY[ev.entity_type](p)) {
         rejected.push({ uid: ev.uid, reason: 'malformed event', category: 'permanent' });
+        await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, entityType: ev.entity_type, message: 'malformed event' }, receivedAt);
         continue;
       }
-      // AUTH/ISOLATION rejections (Part J): the fact must belong to THIS
+      // AUTH/ISOLATION rejections (Part P): the fact must belong to THIS
       // device's organization (resolved server-side), and to the device's
       // location when the device is location-bound. Client-claimed
-      // organization_id/location_id are validated against the device
-      // identity, never trusted to override it.
+      // organization_id/location_id/device_id/actor are validated against the
+      // device identity, never trusted to override it. Applies to every
+      // entity type identically.
       const eventOrg = (p.organization_id as string | null) ?? ev.organization_id ?? null;
       if (eventOrg !== null && eventOrg !== device.organization_uid) {
         rejected.push({ uid: ev.uid, reason: 'organization mismatch', category: 'auth' });
-        store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: 'organization mismatch' }, receivedAt);
+        await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, entityType: ev.entity_type, message: 'organization mismatch' }, receivedAt);
         continue;
       }
       const eventLoc = (p.location_id as string | null) ?? ev.location_id ?? null;
       if (device.location_uid && eventLoc !== null && eventLoc !== device.location_uid) {
         rejected.push({ uid: ev.uid, reason: 'location mismatch', category: 'auth' });
-        store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: 'location mismatch' }, receivedAt);
+        await store.logSync('rejected', { deviceUid: device.device_uid, organizationUid: device.organization_uid, entityType: ev.entity_type, message: 'location mismatch' }, receivedAt);
         continue;
       }
 
-      const movement: CloudInventoryMovement = {
+      const cloudEvent: CloudEvent = {
         event_uid: ev.uid,
-        movement_uid: ev.entity_uid,
-        organization_uid: device.organization_uid, // authoritative: from the device, not the payload
+        entity_type: ev.entity_type,
+        entity_uid: ev.entity_uid,
+        organization_uid: device.organization_uid, // authoritative: from the device
         location_uid: eventLoc,
-        device_uid: device.device_uid,
+        device_uid: device.device_uid,             // authoritative: from the device
         device_sequence: ev.sequence,
-        movement_type: String(p.movement_type),
-        product_uid: String(p.product_id),
-        variant_uid: (p.product_variant_id as string | null) ?? null,
-        quantity_delta: p.quantity_delta as number,
-        unit_cost: (p.unit_cost as number | null) ?? null,
-        reason: (p.reason as string | null) ?? null,
-        reference_type: (p.reference_type as string | null) ?? null,
-        reference_uid: (p.reference_id as string | null) ?? null,
-        actor_uid: (p.actor_user_id as string | null) ?? null,
-        metadata: p.metadata != null ? JSON.stringify(p.metadata) : null,
-        created_at: String(p.created_at ?? ev.created_at),
+        payload: JSON.stringify(p),
+        created_at: String(p.created_at ?? p.occurred_at ?? ev.created_at),
       };
-      const result = store.storeMovement(movement, receivedAt);
-      if (result === 'duplicate') { duplicate.push(ev.uid); store.logSync('duplicate', { deviceUid: device.device_uid, organizationUid: device.organization_uid }, receivedAt); }
-      else { accepted.push(ev.uid); store.logSync('accepted', { deviceUid: device.device_uid, organizationUid: device.organization_uid }, receivedAt); }
+      const result = await store.storeEvent(cloudEvent, receivedAt);
+      const logBase = { deviceUid: device.device_uid, organizationUid: device.organization_uid, entityType: ev.entity_type };
+      if (result === 'duplicate') { duplicate.push(ev.uid); await store.logSync('duplicate', logBase, receivedAt); }
+      else { accepted.push(ev.uid); await store.logSync('accepted', logBase, receivedAt); }
     }
 
-    store.markDeviceSynced(device.device_uid, receivedAt);
+    await store.markDeviceSynced(device.device_uid, receivedAt);
     res.json({ accepted, duplicate, rejected });
   });
 
-  app.get('/sync/v1/pull', (req: Request, res: Response) => {
-    const device = authOrReject(req, res);
+  app.get('/sync/v1/pull', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
     if (!device) return;
     const cursor = Number(req.query.cursor ?? 0) || 0;
     const limit = Math.min(Number(req.query.limit ?? 100) || 100, MAX_BATCH);
@@ -226,30 +253,15 @@ export function createCloudServer(store: CloudStore, options: CreateCloudServerO
     // organization's events, and never its own uploads back (a device already
     // has its own movements locally). The cursor advances past excluded own
     // events because pullMovements reports the raw scanned position.
-    const page = store.pullMovements(device.organization_uid, cursor, limit, device.device_uid);
-    store.markDeviceSynced(device.device_uid, new Date().toISOString());
+    const page = await store.pullEvents(device.organization_uid, cursor, limit, device.device_uid);
+    await store.markDeviceSynced(device.device_uid, new Date().toISOString());
     res.json({
       events: page.events.map((e) => ({
         event_uid: e.event_uid,
-        entity_uid: e.movement_uid,
+        entity_type: e.entity_type,
+        entity_uid: e.entity_uid,
         feed_seq: e.feed_seq,
-        payload: {
-          schema_version: 1,
-          movement_uid: e.movement_uid,
-          organization_id: e.organization_uid,
-          location_id: e.location_uid,
-          product_id: e.product_uid,
-          product_variant_id: e.variant_uid,
-          quantity_delta: e.quantity_delta,
-          movement_type: e.movement_type,
-          reason: e.reason,
-          reference_type: e.reference_type,
-          reference_id: e.reference_uid,
-          unit_cost: e.unit_cost,
-          actor_user_id: e.actor_uid,
-          metadata: e.metadata ? JSON.parse(e.metadata) : null,
-          created_at: e.created_at,
-        },
+        payload: JSON.parse(e.payload),
       })),
       next_cursor: page.nextCursor,
       has_more: page.hasMore,

@@ -23,7 +23,16 @@
  */
 
 import { createHash, randomBytes } from 'crypto';
-import { CloudStore, EnrollmentToken } from './store';
+import { CloudDevice, EnrollmentToken } from './store';
+
+/** The store surface enrollment needs; methods possibly async so the same
+ *  code works over sync SQLite and async Postgres backends. */
+export interface EnrollStore {
+  getDevice(deviceUid: string): CloudDevice | null | Promise<CloudDevice | null>;
+  registerDevice(device: CloudDevice): void | Promise<void>;
+  createEnrollmentToken(token: EnrollmentToken): void | Promise<void>;
+  consumeEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null | Promise<EnrollmentToken | null>;
+}
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -41,7 +50,7 @@ export interface IssueTokenInput {
  * token (shown once to the operator); only its hash is persisted. In
  * production this is called by an authenticated admin action, not by a device.
  */
-export function issueEnrollmentToken(store: CloudStore, input: IssueTokenInput, nowMs = Date.now()): { token: string } {
+export async function issueEnrollmentToken(store: EnrollStore, input: IssueTokenInput, nowMs = Date.now()): Promise<{ token: string }> {
   const token = `plemmo_act_${randomBytes(24).toString('base64url')}`;
   const ttl = input.ttlMs ?? 24 * 60 * 60 * 1000; // 24h default
   const record: EnrollmentToken = {
@@ -52,7 +61,7 @@ export function issueEnrollmentToken(store: CloudStore, input: IssueTokenInput, 
     expires_at: new Date(nowMs + ttl).toISOString(),
     consumed_at: null,
   };
-  store.createEnrollmentToken(record);
+  await store.createEnrollmentToken(record);
   return { token };
 }
 
@@ -83,18 +92,18 @@ export interface EnrolledDevice {
  * org/location/register taken from the token. Idempotent-safe against token
  * reuse (a consumed/expired token is rejected). Throws `EnrollmentError`.
  */
-export function enrollWithToken(store: CloudStore, input: EnrollWithTokenInput, nowMs = Date.now()): EnrolledDevice {
+export async function enrollWithToken(store: EnrollStore, input: EnrollWithTokenInput, nowMs = Date.now()): Promise<EnrolledDevice> {
   if (!input.token || !input.deviceUid || !input.publicKey) throw new EnrollmentError('missing_fields');
 
   // Re-enrolling an already-registered, still-active device is not allowed via
   // a fresh token — that path is credential ROTATION, not enrollment.
-  const existing = store.getDevice(input.deviceUid);
+  const existing = await store.getDevice(input.deviceUid);
   if (existing && existing.status === 'active') throw new EnrollmentError('device_exists');
 
-  const claim = store.consumeEnrollmentToken(hashToken(input.token), new Date(nowMs).toISOString());
+  const claim = await store.consumeEnrollmentToken(hashToken(input.token), new Date(nowMs).toISOString());
   if (!claim) throw new EnrollmentError('invalid_token');
 
-  store.registerDevice({
+  await store.registerDevice({
     device_uid: input.deviceUid,
     organization_uid: claim.organization_uid,
     location_uid: claim.location_uid,

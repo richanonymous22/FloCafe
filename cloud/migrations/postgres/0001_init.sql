@@ -1,23 +1,15 @@
--- Plemmo Cloud — production schema, version 0001 (SYNC-C, Part K).
+-- Plemmo Cloud — production schema, version 1 (SYNC-C, generalized SYNC-D).
 --
--- Cloud schema is INDEPENDENT of the local SQLite schema — this is not a
--- translation of any local migration. It is applied by the standalone cloud
--- service's migration runner (see cloud/migrate.ts), never by the desktop
--- app. Forward-only, additive; each file bumps schema_version. Deployment
--- ordering: run pending migrations BEFORE rolling out server code that
--- depends on them (expand/contract).
+-- Cloud schema is INDEPENDENT of the local SQLite schema. Applied ONLY by the
+-- standalone cloud service's migration runner (cloud/migrate.ts), never by the
+-- desktop app. Forward-only, additive. The runner owns the
+-- cloud_schema_version bookkeeping table and records this file's number.
 --
--- Rollback: additive DDL is reversible by a paired down-migration when one is
--- required; data-preserving. Backups: managed Postgres automated
--- backups + point-in-time recovery (see docs Part K).
+-- Rollback: additive DDL is data-preserving; a paired down-migration is added
+-- only when required. Backups: managed automated backups + PITR.
 
-CREATE TABLE IF NOT EXISTS cloud_schema_version (
-  version     INTEGER PRIMARY KEY,
-  applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Device registry: the source of truth for who a device is. Organization /
--- location / register identity is resolved from HERE, never from a payload.
+-- Device registry: the source of truth for device identity. Org/location/
+-- register are resolved from HERE, never from a payload.
 CREATE TABLE IF NOT EXISTS cloud_devices (
   device_uid        TEXT PRIMARY KEY,
   organization_uid  TEXT NOT NULL,
@@ -35,40 +27,38 @@ CREATE TABLE IF NOT EXISTS cloud_devices (
 CREATE INDEX IF NOT EXISTS idx_cloud_devices_org ON cloud_devices(organization_uid);
 
 -- Per-organization feed cursor allocator. Concurrent uploads serialize on the
--- org's row via UPDATE ... RETURNING, giving a gapless per-org sequence with
--- no global bottleneck (Part C).
+-- org row via UPSERT ... RETURNING, giving a gapless per-org sequence spanning
+-- all entity types with no global bottleneck (Part C/N).
 CREATE TABLE IF NOT EXISTS cloud_feed_sequence (
   organization_uid  TEXT PRIMARY KEY,
   next_seq          BIGINT NOT NULL DEFAULT 0
 );
 
--- The inventory-movement business fact. movement_uid is the idempotency key.
-CREATE TABLE IF NOT EXISTS cloud_inventory_movements (
+-- The generic multi-entity feed (Part K/M/N): inventory_movement, audit_event,
+-- payment_event. (entity_type, entity_uid) is the idempotency key.
+CREATE TABLE IF NOT EXISTS cloud_events (
   event_uid         TEXT PRIMARY KEY,
-  movement_uid      TEXT NOT NULL UNIQUE,
+  entity_type       TEXT NOT NULL,
+  entity_uid        TEXT NOT NULL,
   organization_uid  TEXT NOT NULL,
   location_uid      TEXT,
   device_uid        TEXT NOT NULL,
   device_sequence   BIGINT NOT NULL,
   feed_seq          BIGINT NOT NULL,
-  movement_type     TEXT NOT NULL,
-  product_uid       TEXT NOT NULL,
-  variant_uid       TEXT,
-  quantity_delta    DOUBLE PRECISION NOT NULL,
-  unit_cost         DOUBLE PRECISION,
-  reason            TEXT,
-  reference_type    TEXT,
-  reference_uid     TEXT,
-  actor_uid         TEXT,
-  metadata          JSONB,
+  -- payload is TEXT (JSON string), NOT JSONB, so it round-trips identically to
+  -- the SQLite dev store: CloudEvent.payload is always a JSON string the server
+  -- JSON.parses. A future migration can switch to JSONB with a read-time
+  -- stringify if cloud-side JSON querying is wanted.
+  payload           TEXT NOT NULL,
   created_at        TIMESTAMPTZ NOT NULL,
-  received_at       TIMESTAMPTZ NOT NULL
+  received_at       TIMESTAMPTZ NOT NULL,
+  UNIQUE (entity_type, entity_uid)
 );
--- The core pull query: (org, feed_seq) range scan, ascending.
-CREATE INDEX IF NOT EXISTS idx_cloud_mov_feed ON cloud_inventory_movements(organization_uid, feed_seq);
-CREATE INDEX IF NOT EXISTS idx_cloud_mov_device ON cloud_inventory_movements(device_uid);
+CREATE INDEX IF NOT EXISTS idx_cloud_events_feed ON cloud_events(organization_uid, feed_seq);
+CREATE INDEX IF NOT EXISTS idx_cloud_events_device ON cloud_events(device_uid);
+CREATE INDEX IF NOT EXISTS idx_cloud_events_entity ON cloud_events(organization_uid, entity_type);
 
--- Replay protection. Pruned to the freshness window on every auth (Part J).
+-- Replay protection. Pruned to the freshness window on every auth (Part P).
 CREATE TABLE IF NOT EXISTS cloud_nonces (
   device_uid  TEXT NOT NULL,
   nonce       TEXT NOT NULL,
@@ -77,8 +67,7 @@ CREATE TABLE IF NOT EXISTS cloud_nonces (
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
 
--- One-time device activation tokens (production enrollment, Part D). Stored
--- HASHED only.
+-- One-time device activation tokens (production enrollment, Part F). HASHED.
 CREATE TABLE IF NOT EXISTS cloud_enrollment_tokens (
   token_hash        TEXT PRIMARY KEY,
   organization_uid  TEXT NOT NULL,
@@ -89,9 +78,9 @@ CREATE TABLE IF NOT EXISTS cloud_enrollment_tokens (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Cross-till inventory projection + detected deficits (Part H). The cloud
--- sums movement deltas; a negative balance is recorded as a deficit fact.
--- Movements are NEVER mutated and sales are NEVER reversed.
+-- Cross-till inventory projection + detected deficits (Part J). The cloud sums
+-- movement deltas; a negative balance is recorded as a deficit fact with a
+-- lifecycle status. Movements are NEVER mutated and sales are NEVER reversed.
 CREATE TABLE IF NOT EXISTS cloud_inventory_stock (
   organization_uid  TEXT NOT NULL,
   location_uid      TEXT NOT NULL DEFAULT '',
@@ -107,21 +96,22 @@ CREATE TABLE IF NOT EXISTS cloud_inventory_deficits (
   product_uid             TEXT NOT NULL,
   variant_uid             TEXT NOT NULL DEFAULT '',
   balance                 DOUBLE PRECISION NOT NULL,
+  status                  TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
   first_detected_at       TIMESTAMPTZ NOT NULL,
   last_detected_at        TIMESTAMPTZ NOT NULL,
   triggering_movement_uid TEXT NOT NULL,
   PRIMARY KEY (organization_uid, location_uid, product_uid, variant_uid)
 );
 
--- Observability log (Part G).
+-- Observability log (Part R), carrying entity_type for per-entity metrics.
 CREATE TABLE IF NOT EXISTS cloud_sync_log (
   id                BIGSERIAL PRIMARY KEY,
   at                TIMESTAMPTZ NOT NULL,
   device_uid        TEXT,
   organization_uid  TEXT,
+  entity_type       TEXT,
   kind              TEXT NOT NULL,
   detail            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_sync_log_org ON cloud_sync_log(organization_uid, at);
-
-INSERT INTO cloud_schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_log_entity ON cloud_sync_log(entity_type, kind);

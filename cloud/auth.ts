@@ -13,10 +13,22 @@
  */
 
 import { createPublicKey } from 'crypto';
-import { CloudStore, CloudDevice } from './store';
+import { CloudDevice } from './store';
 import { verifyRequest } from './signing';
 
 const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * The store surface auth needs, methods possibly async. Both the sync
+ * `SqliteCloudStore` and the async `PostgresCloudStore` satisfy this
+ * structurally, so one auth path (and one server) works over either backend.
+ */
+export interface AuthStore {
+  getDevice(deviceUid: string): CloudDevice | null | Promise<CloudDevice | null>;
+  seenNonce(deviceUid: string, nonce: string): boolean | Promise<boolean>;
+  recordNonce(deviceUid: string, nonce: string, at: string): void | Promise<void>;
+  pruneNonces(olderThanIso: string): number | Promise<number>;
+}
 
 export type AuthFailureReason =
   | 'missing_headers' | 'unknown_device' | 'revoked_device'
@@ -62,11 +74,11 @@ export interface SignedRequestFields {
  * the caller maps that to a 401/403 and logs an auth failure. Records the
  * nonce on success so it cannot be replayed.
  */
-export function authenticateDevice(store: CloudStore, req: SignedRequestFields, nowMs = Date.now()): AuthenticatedDevice {
+export async function authenticateDevice(store: AuthStore, req: SignedRequestFields, nowMs = Date.now()): Promise<AuthenticatedDevice> {
   if (!req.deviceUid || !req.timestamp || !req.nonce || !req.signatureB64) {
     throw new DeviceAuthError('missing_headers');
   }
-  const device = store.getDevice(req.deviceUid);
+  const device = await store.getDevice(req.deviceUid);
   if (!device) throw new DeviceAuthError('unknown_device');
   if (device.status !== 'active') throw new DeviceAuthError('revoked_device');
 
@@ -76,15 +88,15 @@ export function authenticateDevice(store: CloudStore, req: SignedRequestFields, 
   }
   // Keep the replay table bounded: any nonce older than the freshness window
   // can never be replayed successfully (its timestamp is already stale), so
-  // it is safe to prune (Part J — nonce store must not grow unbounded).
-  store.pruneNonces(new Date(nowMs - TIMESTAMP_WINDOW_MS).toISOString());
-  if (store.seenNonce(req.deviceUid, req.nonce)) throw new DeviceAuthError('replayed_nonce');
+  // it is safe to prune (Part P — nonce store must not grow unbounded).
+  await store.pruneNonces(new Date(nowMs - TIMESTAMP_WINDOW_MS).toISOString());
+  if (await store.seenNonce(req.deviceUid, req.nonce)) throw new DeviceAuthError('replayed_nonce');
 
   let publicKey;
   try { publicKey = createPublicKey(device.public_key); } catch { throw new DeviceAuthError('bad_signature'); }
   const ok = verifyRequest(publicKey, req.method, req.pathWithQuery, req.timestamp, req.nonce, req.rawBody, req.signatureB64);
   if (!ok) throw new DeviceAuthError('bad_signature');
 
-  store.recordNonce(req.deviceUid, req.nonce, new Date(nowMs).toISOString());
+  await store.recordNonce(req.deviceUid, req.nonce, new Date(nowMs).toISOString());
   return { device };
 }

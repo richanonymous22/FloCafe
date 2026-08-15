@@ -22,6 +22,7 @@ import type Database from 'better-sqlite3';
 import { now } from '../../db';
 import {
   InventoryMovementEventPayload, AuditEventPayload, PaymentEventPayload,
+  OrderEventPayload, OrderItemEventPayload, BillEventPayload,
   SyncEntityType, SyncEventPayload,
 } from './types';
 
@@ -31,16 +32,76 @@ export type RemoteApplyResult = 'applied' | 'skipped';
 
 /**
  * Dispatches a remote event to the correct per-entity apply function
- * (SYNC-D, Part M/Q). Every path is idempotent and NONE appends an outbox
+ * (SYNC-D/E, Part M/Q). Every path is idempotent and NONE appends an outbox
  * event — the shared loop-prevention guarantee across all entity types.
+ *
+ * The MUTABLE sales entities (order/order_item/bill) are applied ONLY into
+ * FK-free MIRROR tables (remote_orders/remote_order_items/remote_bills), never
+ * the authoritative orders/order_items/bills. A locally completed sale can
+ * therefore never be mutated or undone by sync, and no local checkout,
+ * payment, or inventory logic is ever invoked (SYNC-E Part Q). The mirrors keep
+ * the highest snapshot_version seen (a local read-model / durable staging);
+ * the cloud remains the authority for cross-device conflict.
  */
 export function applyRemoteEvent(db: Db, entityType: SyncEntityType, payload: SyncEventPayload): RemoteApplyResult {
   switch (entityType) {
     case 'inventory_movement': return applyRemoteInventoryMovement(db, payload as InventoryMovementEventPayload);
     case 'audit_event': return applyRemoteAuditEvent(db, payload as AuditEventPayload);
     case 'payment_event': return applyRemotePaymentEvent(db, payload as PaymentEventPayload);
+    case 'order': return applyRemoteOrder(db, payload as OrderEventPayload);
+    case 'order_item': return applyRemoteOrderItem(db, payload as OrderItemEventPayload);
+    case 'bill': return applyRemoteBill(db, payload as BillEventPayload);
     default: throw new Error(`unknown remote entity type: ${entityType}`);
   }
+}
+
+/** True if a newer-or-equal snapshot of this mirror row is already stored. */
+function mirrorIsStale(db: Db, table: string, uid: string, incomingVersion: number): boolean {
+  const row = db.prepare(`SELECT snapshot_version AS v FROM ${table} WHERE uid = ?`).get(uid) as { v: number } | undefined;
+  return !!row && row.v >= incomingVersion;
+}
+
+export function applyRemoteOrder(db: Db, p: OrderEventPayload): RemoteApplyResult {
+  if (mirrorIsStale(db, 'remote_orders', p.order_uid, p.snapshot_version)) return 'skipped';
+  db.prepare(`
+    INSERT INTO remote_orders (uid, order_number, organization_id, location_id, device_id, actor_user_id, channel, status,
+      customer_id, table_id, subtotal, tax_amount, discount_amount, total, snapshot_version, order_created_at, order_updated_at, payload, sync_origin, applied_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'remote', ?)
+    ON CONFLICT(uid) DO UPDATE SET order_number=excluded.order_number, status=excluded.status, customer_id=excluded.customer_id,
+      table_id=excluded.table_id, subtotal=excluded.subtotal, tax_amount=excluded.tax_amount, discount_amount=excluded.discount_amount,
+      total=excluded.total, snapshot_version=excluded.snapshot_version, order_updated_at=excluded.order_updated_at, payload=excluded.payload, applied_at=excluded.applied_at
+  `).run(p.order_uid, p.order_number, p.organization_id, p.location_id, p.device_id, p.actor_user_id, p.channel, p.status,
+    p.customer_id, p.table_id, p.subtotal, p.tax_amount, p.discount_amount, p.total, p.snapshot_version, p.created_at, p.updated_at, JSON.stringify(p), now());
+  return 'applied';
+}
+
+export function applyRemoteOrderItem(db: Db, p: OrderItemEventPayload): RemoteApplyResult {
+  if (mirrorIsStale(db, 'remote_order_items', p.order_item_uid, p.snapshot_version)) return 'skipped';
+  db.prepare(`
+    INSERT INTO remote_order_items (uid, order_uid, organization_id, location_id, product_id, product_variant_id, product_name,
+      product_sku, quantity, unit_price, unit_cost, discount_amount, tax_amount, total, status, snapshot_version, payload, sync_origin, applied_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'remote', ?)
+    ON CONFLICT(uid) DO UPDATE SET order_uid=excluded.order_uid, quantity=excluded.quantity, unit_price=excluded.unit_price,
+      discount_amount=excluded.discount_amount, tax_amount=excluded.tax_amount, total=excluded.total, status=excluded.status,
+      snapshot_version=excluded.snapshot_version, payload=excluded.payload, applied_at=excluded.applied_at
+  `).run(p.order_item_uid, p.order_uid, p.organization_id, p.location_id, p.product_id, p.product_variant_id, p.product_name,
+    p.product_sku, p.quantity, p.unit_price, p.unit_cost, p.discount_amount, p.tax_amount, p.total, p.status, p.snapshot_version, JSON.stringify(p), now());
+  return 'applied';
+}
+
+export function applyRemoteBill(db: Db, p: BillEventPayload): RemoteApplyResult {
+  if (mirrorIsStale(db, 'remote_bills', p.bill_uid, p.snapshot_version)) return 'skipped';
+  db.prepare(`
+    INSERT INTO remote_bills (uid, bill_number, order_uid, organization_id, location_id, customer_id, subtotal, tax_amount,
+      discount_amount, total, paid_amount, balance, payment_status, split_group_id, snapshot_version, bill_created_at, bill_updated_at, payload, sync_origin, applied_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'remote', ?)
+    ON CONFLICT(uid) DO UPDATE SET bill_number=excluded.bill_number, order_uid=excluded.order_uid, subtotal=excluded.subtotal,
+      tax_amount=excluded.tax_amount, discount_amount=excluded.discount_amount, total=excluded.total, paid_amount=excluded.paid_amount,
+      balance=excluded.balance, payment_status=excluded.payment_status, split_group_id=excluded.split_group_id,
+      snapshot_version=excluded.snapshot_version, bill_updated_at=excluded.bill_updated_at, payload=excluded.payload, applied_at=excluded.applied_at
+  `).run(p.bill_uid, p.bill_number, p.order_uid, p.organization_id, p.location_id, p.customer_id, p.subtotal, p.tax_amount,
+    p.discount_amount, p.total, p.paid_amount, p.balance, p.payment_status, p.split_group_id, p.snapshot_version, p.created_at, p.updated_at, JSON.stringify(p), now());
+  return 'applied';
 }
 
 /**

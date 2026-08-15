@@ -4900,6 +4900,111 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 88,
+    name: 'sync_e_sales_mirrors',
+    up: () => {
+      // SYNC-E — sales synchronization. Two additive concerns, no existing data
+      // touched.
+      //
+      // 1) orders/order_items/bills are MUTABLE (a completed sale is edited
+      //    through its lifecycle), so the same business uid must be able to
+      //    emit MULTIPLE snapshot events over time. The SYNC-A outbox unique
+      //    index idx_sync_outbox_entity (entity_type, entity_uid) enforces
+      //    exactly ONE event per fact — correct for append-only entities
+      //    (inventory_movement, audit_event, payment_event) but wrong for
+      //    mutable snapshots. Relax it to apply ONLY to the append-only types,
+      //    so a mutable entity can carry several snapshot events, each with its
+      //    own event uid. Append-only idempotency is unchanged.
+      db.exec(`DROP INDEX IF EXISTS idx_sync_outbox_entity;`);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity
+          ON sync_outbox(entity_type, entity_uid)
+          WHERE entity_type IN ('inventory_movement', 'audit_event', 'payment_event');
+      `);
+
+      // 2) Remote sales pulled from OTHER devices are materialized into FK-free
+      //    MIRROR tables — never the authoritative orders/order_items/bills,
+      //    which are integer-PK, foreign-key-bound, lifecycle-guarded, and
+      //    locally authoritative. A locally completed sale can therefore NEVER
+      //    be mutated or undone by sync (9A rule). The mirrors are keyed by the
+      //    business uid and also serve as durable staging: a child that arrives
+      //    before its parent is still stored and queryable, and reconciles when
+      //    the parent arrives. Append/upsert-latest by uid; never re-emitted to
+      //    the outbox (loop prevention).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_orders (
+          uid              TEXT PRIMARY KEY,
+          order_number     TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          device_id        TEXT,
+          actor_user_id    TEXT,
+          channel          TEXT,
+          status           TEXT,
+          customer_id      TEXT,
+          table_id         TEXT,
+          subtotal         REAL,
+          tax_amount       REAL,
+          discount_amount  REAL,
+          total            REAL,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          order_created_at TEXT,
+          order_updated_at TEXT,
+          payload          TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_orders_org ON remote_orders(organization_id);
+        CREATE TABLE IF NOT EXISTS remote_order_items (
+          uid                TEXT PRIMARY KEY,
+          order_uid          TEXT NOT NULL,
+          organization_id    TEXT,
+          location_id        TEXT,
+          product_id         TEXT,
+          product_variant_id TEXT,
+          product_name       TEXT,
+          product_sku        TEXT,
+          quantity           INTEGER,
+          unit_price         REAL,
+          unit_cost          REAL,
+          discount_amount    REAL,
+          tax_amount         REAL,
+          total              REAL,
+          status             TEXT,
+          snapshot_version   INTEGER NOT NULL DEFAULT 0,
+          payload            TEXT,
+          sync_origin        TEXT NOT NULL DEFAULT 'remote',
+          applied_at         TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_order_items_order ON remote_order_items(order_uid);
+        CREATE TABLE IF NOT EXISTS remote_bills (
+          uid              TEXT PRIMARY KEY,
+          bill_number      TEXT,
+          order_uid        TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          customer_id      TEXT,
+          subtotal         REAL,
+          tax_amount       REAL,
+          discount_amount  REAL,
+          total            REAL,
+          paid_amount      REAL,
+          balance          REAL,
+          payment_status   TEXT,
+          split_group_id   TEXT,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          bill_created_at  TEXT,
+          bill_updated_at  TEXT,
+          payload          TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_bills_order ON remote_bills(order_uid);
+        CREATE INDEX IF NOT EXISTS idx_remote_bills_org ON remote_bills(organization_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

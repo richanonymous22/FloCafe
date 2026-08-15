@@ -77,6 +77,7 @@ import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
 import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext } from './context';
+import { appendOrderSnapshot, appendOrderItemSnapshot, appendBillSnapshot } from './sync/sales-events';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -682,6 +683,14 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
         .run(idempotency.userId, idempotency.key, idempotency.requestHash, JSON.stringify(response), now());
     }
 
+    // SYNC-E — enqueue the order + line-item snapshots in this same
+    // transaction (atomic with the sale). Best-effort; never breaks the sale.
+    appendOrderSnapshot(db, orderId);
+    for (const line of lines) {
+      const lid = (line as { id?: number }).id;
+      if (lid != null) appendOrderItemSnapshot(db, lid);
+    }
+
     return { sale, lines, idempotentReplay: false };
   });
 }
@@ -919,6 +928,16 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
         total,
       },
     });
+
+    // SYNC-E — the order changed (new items, new totals): re-emit a fresh
+    // order snapshot + the current line-item snapshots, plus the bill if it
+    // was updated. Atomic with the write; best-effort.
+    appendOrderSnapshot(db, Number(input.saleId));
+    for (const line of lines) {
+      const lid = (line as { id?: number }).id;
+      if (lid != null) appendOrderItemSnapshot(db, lid);
+    }
+    if (existingBill) appendBillSnapshot(db, existingBill.id);
 
     if (idempotency) {
       // Stored in the response shape the route replays verbatim.

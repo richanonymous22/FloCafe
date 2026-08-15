@@ -113,6 +113,45 @@ export function appendOutboxEvent(input: AppendOutboxEventInput): OutboxRow {
   return db.prepare('SELECT * FROM sync_outbox WHERE uid = ?').get(uid) as OutboxRow;
 }
 
+export interface AppendSnapshotInput {
+  db: ReturnType<typeof getDatabase>;
+  entityType: SyncEntityType;
+  entityUid: string;
+  organizationId?: string | null;
+  locationId?: string | null;
+  /** Builds the payload given the allocated monotonic snapshot version. */
+  buildPayload: (snapshotVersion: number) => unknown;
+}
+
+/**
+ * Appends a MUTABLE-entity snapshot event (SYNC-E). Unlike `appendOutboxEvent`,
+ * this NEVER dedupes by (entity_type, entity_uid): a mutable business record
+ * (order/order_item/bill) emits a fresh snapshot event — with its own event
+ * uid and a monotonically increasing `snapshot_version` — every time it
+ * changes. Runs inside the caller's transaction, so the snapshot commits or
+ * rolls back atomically with the business write. The relaxed outbox unique
+ * index (migration v88) permits several events per mutable entity_uid.
+ */
+export function appendSnapshotOutboxEvent(input: AppendSnapshotInput): OutboxRow {
+  const { db } = input;
+  const deviceId = resolveDeviceId(db);
+  const sequence = allocateSequence(db, deviceId);
+  const prior = (db.prepare('SELECT COUNT(*) AS c FROM sync_outbox WHERE entity_type = ? AND entity_uid = ?')
+    .get(input.entityType, input.entityUid) as { c: number }).c;
+  const snapshotVersion = prior + 1;
+  const uid = ulid();
+  const createdAt = now();
+  db.prepare(`
+    INSERT INTO sync_outbox
+      (uid, device_id, sequence, entity_type, entity_uid, operation, payload, organization_id, location_id, status, attempt_count, created_at)
+    VALUES (?, ?, ?, ?, ?, 'update', ?, ?, ?, 'pending', 0, ?)
+  `).run(
+    uid, deviceId, sequence, input.entityType, input.entityUid,
+    JSON.stringify(input.buildPayload(snapshotVersion)), input.organizationId ?? null, input.locationId ?? null, createdAt,
+  );
+  return db.prepare('SELECT * FROM sync_outbox WHERE uid = ?').get(uid) as OutboxRow;
+}
+
 function toDTO(row: OutboxRow): OutboxEventDTO {
   return {
     uid: row.uid,

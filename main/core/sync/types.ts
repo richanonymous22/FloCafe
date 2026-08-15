@@ -25,9 +25,24 @@
  * the same outbox/feed mechanism and no conflict engine: two devices never
  * "edit" the same fact, they only ever append new ones.
  */
-export type SyncEntityType = 'inventory_movement' | 'audit_event' | 'payment_event';
+export type SyncEntityType =
+  | 'inventory_movement' | 'audit_event' | 'payment_event'
+  | 'order' | 'order_item' | 'bill';
 export type SyncOperation = 'create' | 'update' | 'append';
 export type OutboxStatus = 'pending' | 'uploading' | 'acked' | 'failed';
+
+/**
+ * The MUTABLE sales entities (SYNC-E). Unlike the append-only entities above,
+ * these business records are edited across their lifecycle, so the SAME
+ * business uid emits MULTIPLE snapshot events over time — each a distinct sync
+ * event with a monotonic `snapshot_version`. The cloud keeps every snapshot
+ * (append-only event log) and projects a current version per entity, recording
+ * a conflict when two devices diverge. A locally completed sale is never
+ * mutated by sync (remote snapshots land in mirror tables).
+ */
+export const MUTABLE_SNAPSHOT_ENTITIES: ReadonlySet<SyncEntityType> = new Set<SyncEntityType>(['order', 'order_item', 'bill']);
+export const APPEND_ONLY_ENTITIES: ReadonlySet<SyncEntityType> = new Set<SyncEntityType>(['inventory_movement', 'audit_event', 'payment_event']);
+export function isMutableSnapshotEntity(t: SyncEntityType): boolean { return MUTABLE_SNAPSHOT_ENTITIES.has(t); }
 
 /**
  * The typed event payload for an inventory movement (Part F). Represents the
@@ -101,8 +116,83 @@ export interface PaymentEventPayload {
   metadata: Record<string, unknown> | null;
 }
 
+/**
+ * Sales snapshot payloads (SYNC-E). Each carries the authoritative business
+ * facts plus `snapshot_version` (a per-device monotonic counter for the
+ * entity) and lineage identity (device_uid) so the cloud can order snapshots
+ * and detect divergence. Deliberately EXCLUDED: local integer ids,
+ * `stock_quantity`, `bills.payment_details` (a local projection — payments are
+ * their own synced fact), derived report fields, and any secret.
+ */
+export interface OrderEventPayload {
+  schema_version: 1;
+  order_uid: string;
+  order_number: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  device_id: string | null;
+  actor_user_id: string | null;
+  channel: string | null;          // order.type (takeaway/dine-in/…)
+  status: string;                  // lifecycle state
+  customer_id: string | null;
+  table_id: string | null;
+  subtotal: number;
+  tax_amount: number;
+  discount_amount: number;
+  total: number;
+  snapshot_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderItemEventPayload {
+  schema_version: 1;
+  order_item_uid: string;
+  order_uid: string;
+  organization_id: string | null;
+  location_id: string | null;
+  product_id: string;
+  product_variant_id: string | null;
+  product_name: string | null;
+  product_sku: string | null;
+  quantity: number;
+  unit_price: number;
+  unit_cost: number | null;
+  discount_amount: number;
+  tax_amount: number;
+  total: number;
+  status: string;
+  snapshot_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillEventPayload {
+  schema_version: 1;
+  bill_uid: string;
+  bill_number: string | null;
+  order_uid: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  customer_id: string | null;
+  subtotal: number;
+  tax_amount: number;
+  discount_amount: number;
+  total: number;
+  /** Authoritative-from-payments in the cloud; carried here as the local projection at snapshot time. */
+  paid_amount: number;
+  balance: number;
+  payment_status: string;
+  split_group_id: string | null;
+  snapshot_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Any synchronized entity payload. */
-export type SyncEventPayload = InventoryMovementEventPayload | AuditEventPayload | PaymentEventPayload;
+export type SyncEventPayload =
+  | InventoryMovementEventPayload | AuditEventPayload | PaymentEventPayload
+  | OrderEventPayload | OrderItemEventPayload | BillEventPayload;
 
 /** The wire shape of one outbox event handed to a transport for upload. */
 export interface OutboxEventDTO {

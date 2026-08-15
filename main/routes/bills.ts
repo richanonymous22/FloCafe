@@ -24,6 +24,7 @@ import {
 } from '../services/tax';
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
+import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
 import { recordAppliedPaymentLine } from '../core/payment';
 import { ulid } from '../core/ids';
 
@@ -257,6 +258,7 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
       );
 
       const newBill = parseRowJson(db.prepare('SELECT * FROM bills WHERE id = ?').get(runResult.lastInsertRowid));
+      appendBillSnapshot(db, runResult.lastInsertRowid); // SYNC-E — bill create snapshot (atomic, best-effort)
       return { bill: newBill, isNew: true };
   });
 }
@@ -705,6 +707,7 @@ function applyPaymentBatch(
   }
   if (!bill.customer_id && effectiveCustomerId) db.prepare('UPDATE bills SET customer_id = ?, updated_at = ? WHERE id = ?').run(effectiveCustomerId, changedAt, billId);
   db.prepare(`UPDATE bills SET paid_amount = ?, balance = ?, payment_status = ?, payment_details = ?, paid_at = CASE WHEN ? = 'paid' THEN ? ELSE paid_at END, updated_at = ? WHERE id = ?`).run(newPaidCents / 100, newBalanceCents / 100, paymentStatus, JSON.stringify(allPayments), paymentStatus, paymentStatus === 'paid' ? changedAt : null, changedAt, billId);
+  appendBillSnapshot(db, billId); // SYNC-E — bill payment-status snapshot (atomic with the payment write, best-effort)
 
   // PLEMMO CORE — additive dual-write into the new payments/payment_events
   // model, alongside the bills.payment_details JSON write directly above.
@@ -734,6 +737,7 @@ function applyPaymentBatch(
       db.prepare("UPDATE orders SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").run(changedAt, changedAt, bill.order_id);
       const order = db.prepare('SELECT table_id FROM orders WHERE id = ?').get(bill.order_id) as any;
       if (order?.table_id) db.prepare("UPDATE tables SET status = 'available', updated_at = ? WHERE id = ?").run(changedAt, order.table_id);
+      appendOrderSnapshot(db, bill.order_id); // SYNC-E — order terminal (completed) snapshot
     }
     const cashback = calculateCashback(db, bill, effectiveCustomerId);
     const alreadyCredited = db.prepare(`SELECT id FROM loyalty_ledger WHERE bill_id = ? AND type = 'credit'`).get(bill.id);

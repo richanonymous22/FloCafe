@@ -35,6 +35,14 @@ let Pool: any;
 try { Pool = require('pg').Pool; } catch { console.log('  ⏭ pg driver not installed — skipping real-Postgres suite'); process.exit(77); }
 
 const DSN = process.env.PLEMMO_CLOUD_DB_URL || 'postgres://plemmo:plemmo_dev_pw@127.0.0.1:5432/plemmo_sync_test';
+// Connect timeout must tolerate a serverless cold-start: managed providers
+// like Neon autosuspend the compute, so the FIRST connection has to wait for
+// it to resume (commonly several seconds), unlike a warm local server. A 3s
+// cap was too short and made a reachable Neon look unreachable (the probe
+// timed out with "Connection terminated due to connection timeout" and the
+// suite skipped). Default generously; override with the env var if needed. A
+// genuinely-absent DB still fails fast (ECONNREFUSED), so CI skip stays quick.
+const CONNECT_TIMEOUT_MS = Number(process.env.PLEMMO_CLOUD_DB_CONNECT_TIMEOUT_MS) || 20000;
 
 const { initTestDb, closeDatabase, assert, assertEqual, getResults, now, getDatabase, startServer } = require('./helpers/test-setup');
 const { adjustStock } = require('../main/core/inventory');
@@ -78,7 +86,7 @@ async function main() {
 
   // ── Connectivity check → skip cleanly if no Postgres ──────────────────────
   try {
-    const probe = new Pool({ connectionString: DSN, connectionTimeoutMillis: 3000 });
+    const probe = new Pool({ connectionString: DSN, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
     await probe.query('SELECT 1');
     await probe.end();
   } catch (e) {
@@ -87,10 +95,15 @@ async function main() {
   }
 
   const schema = `sync_d_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  const admin = new Pool({ connectionString: DSN });
+  const admin = new Pool({ connectionString: DSN, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
   await admin.query(`CREATE SCHEMA "${schema}"`);
   await admin.end();
-  const pool = new Pool({ connectionString: DSN, options: `-c search_path=${schema}`, max: 8 });
+  // A dedicated schema isolates each run. search_path is set via the startup
+  // `options` parameter — race-free, and honoured by a direct Postgres/Neon
+  // compute connection. (If you point PLEMMO_CLOUD_DB_URL at a PgBouncer
+  // transaction-pooling endpoint, use the provider's DIRECT/unpooled string
+  // for this test, since poolers may strip startup options.)
+  const pool = new Pool({ connectionString: DSN, options: `-c search_path=${schema}`, max: 8, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
 
   const db = initTestDb();
   const organization = getOrganizationContext();
@@ -275,7 +288,7 @@ async function main() {
   } finally {
     if (server) server.close();
     await pool.end();
-    const admin2 = new Pool({ connectionString: DSN });
+    const admin2 = new Pool({ connectionString: DSN, connectionTimeoutMillis: CONNECT_TIMEOUT_MS });
     await admin2.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await admin2.end();
     closeDatabase();

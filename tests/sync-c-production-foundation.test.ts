@@ -130,7 +130,7 @@ async function main() {
     // ══ 3. Production enrollment via one-time activation token (Part D) ═══════
     console.log('\n3. Production enrollment: one-time activation token');
     const prodDev = { ...keypair(), id: ulid() };
-    const { token } = issueEnrollmentToken(store, { organizationUid: 'org-prod', locationUid: 'loc-prod', registerUid: 'reg-1' });
+    const { token } = await issueEnrollmentToken(store, { organizationUid: 'org-prod', locationUid: 'loc-prod', registerUid: 'reg-1' });
     const enrollRes = await (globalThis as any).fetch(`${baseUrl}/sync/v1/enroll`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token, device_uid: prodDev.id, public_key: prodDev.pub }),
@@ -149,11 +149,11 @@ async function main() {
     });
     assertEqual(reuse.status, 400, 'a consumed token cannot enroll a second device');
     let invalidThrew = false;
-    try { enrollWithToken(store, { token: 'plemmo_act_bogus', deviceUid: ulid(), publicKey: keypair().pub }); }
+    try { await enrollWithToken(store, { token: 'plemmo_act_bogus', deviceUid: ulid(), publicKey: keypair().pub }); }
     catch (e) { invalidThrew = e instanceof EnrollmentError && (e as any).reason === 'invalid_token'; }
     assert(invalidThrew, 'an unknown token is rejected as invalid_token');
     // Expired token.
-    const expired = issueEnrollmentToken(store, { organizationUid: 'org-x', ttlMs: -1000 });
+    const expired = await issueEnrollmentToken(store, { organizationUid: 'org-x', ttlMs: -1000 });
     assert(store.consumeEnrollmentToken(hashToken(expired.token), new Date().toISOString()) === null, 'an expired token cannot be consumed');
 
     // ══ 5. Credential rotation ═══════════════════════════════════════════════
@@ -392,7 +392,7 @@ async function main() {
     const fakePg = {
       async query(sql: string, params: any[] = []) {
         calls.push({ sql: sql.trim().split('\n')[0], params });
-        if (/SELECT 1 FROM cloud_inventory_movements/.test(sql)) return { rows: dupMode ? [{ x: 1 }] : [], rowCount: dupMode ? 1 : 0 };
+        if (/SELECT 1 FROM cloud_events/.test(sql)) return { rows: dupMode ? [{ x: 1 }] : [], rowCount: dupMode ? 1 : 0 };
         if (/INSERT INTO cloud_feed_sequence/.test(sql)) return { rows: [{ next_seq: 1 }], rowCount: 1 };
         if (/INSERT INTO cloud_inventory_stock/.test(sql)) return { rows: [{ balance: 5 }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
@@ -409,12 +409,12 @@ async function main() {
     dupMode = true; calls.length = 0;
     const pgDup = await pgStore.storeMovement(mv, now());
     assertEqual(pgDup, 'duplicate', 'the Postgres adapter is idempotent by movement_uid');
-    assert(!calls.some((c) => /INSERT INTO cloud_inventory_movements/.test(c.sql)), 'a duplicate does not insert a second fact');
+    assert(!calls.some((c) => /INSERT INTO cloud_events/.test(c.sql)), 'a duplicate does not insert a second fact');
 
     // ══ 20. Organization health snapshot (Part G, cloud-side) ════════════════
     console.log('\n20. Cloud organization health snapshot');
     const oh = store.organizationHealth(orgD);
-    assertEqual(oh.movements, 3, 'org health reports the movement count');
+    assertEqual(oh.events, 3, 'org health reports the event count');
     assertEqual(oh.deficits, 1, 'org health reports the deficit count');
     assert(oh.active_devices >= 2, 'org health reports active device count');
     assert(!!oh.last_received_at, 'org health records the last received time');

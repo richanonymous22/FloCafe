@@ -18,8 +18,8 @@
 
 import type Database from 'better-sqlite3';
 import { getDatabase, now } from '../../db';
-import { SyncPullTransport, InventoryMovementEventPayload } from './types';
-import { applyRemoteInventoryMovement } from './remote-apply';
+import { SyncPullTransport, SyncEntityType, SyncEventPayload } from './types';
+import { applyRemoteEvent } from './remote-apply';
 
 type Db = Database.Database;
 
@@ -63,11 +63,11 @@ export async function pullAndApply(
   // ── TXN 1: persist inbox batch + advance cursor, atomically (Part J) ──────
   const insertInbox = db.prepare(`
     INSERT OR IGNORE INTO sync_inbox (uid, entity_type, entity_uid, operation, payload, cursor, status, received_at)
-    VALUES (?, 'inventory_movement', ?, 'create', ?, ?, 'pending', ?)
+    VALUES (?, ?, ?, 'append', ?, ?, 'pending', ?)
   `);
   db.transaction(() => {
     for (const ev of result.events) {
-      insertInbox.run(ev.event_uid, ev.entity_uid, JSON.stringify(ev.payload), String(ev.feed_seq), now());
+      insertInbox.run(ev.event_uid, ev.entity_type ?? 'inventory_movement', ev.entity_uid, JSON.stringify(ev.payload), String(ev.feed_seq), now());
     }
     // Advance the cursor in the SAME transaction as the inbox insert.
     db.prepare(`
@@ -80,16 +80,19 @@ export async function pullAndApply(
   // ── TXN 2 (per row): apply, separately from the cursor advance (Part K) ───
   let applied = 0;
   let skipped = 0;
-  const pending = db.prepare("SELECT uid, payload FROM sync_inbox WHERE status = 'pending' ORDER BY received_at ASC").all() as Array<{ uid: string; payload: string }>;
+  // Per-row apply, dispatched by entity_type. A failure applying ONE event (or
+  // one entity type) marks only that inbox row failed and moves on — it never
+  // discards or blocks unrelated pending events (Part Q).
+  const pending = db.prepare("SELECT uid, entity_type, payload FROM sync_inbox WHERE status = 'pending' ORDER BY received_at ASC").all() as Array<{ uid: string; entity_type: string; payload: string }>;
   for (const row of pending) {
-    let payload: InventoryMovementEventPayload;
+    let payload: SyncEventPayload;
     try { payload = JSON.parse(row.payload); } catch {
       db.prepare("UPDATE sync_inbox SET status = 'failed', last_error = 'malformed payload' WHERE uid = ?").run(row.uid);
       continue;
     }
     try {
       const outcome = db.transaction(() => {
-        const r = applyRemoteInventoryMovement(db, payload);
+        const r = applyRemoteEvent(db, row.entity_type as SyncEntityType, payload);
         db.prepare("UPDATE sync_inbox SET status = 'applied', applied_at = ? WHERE uid = ?").run(now(), row.uid);
         return r;
       })();

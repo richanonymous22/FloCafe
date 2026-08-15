@@ -4866,6 +4866,40 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 87,
+    name: 'sync_d_remote_payment_events',
+    up: () => {
+      // SYNC-D Part L — a local, FK-FREE mirror for payment_events pulled from
+      // OTHER devices. The authoritative `payment_events` table has a foreign
+      // key to the local `payments` row; a remote payment event references a
+      // payment that lives on another device and is not synced in this
+      // milestone, so it cannot be inserted there. This mirror records the
+      // remote payment-event fact (with its payment_uid linkage) idempotently
+      // by its own id, for a future Admin/consolidated view. Append-only;
+      // never re-emitted to the outbox (loop prevention). Additive table only.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_payment_events (
+          id               TEXT PRIMARY KEY,
+          payment_uid      TEXT NOT NULL,
+          from_state       TEXT,
+          to_state         TEXT NOT NULL,
+          occurred_at      TEXT NOT NULL,
+          order_uid        TEXT,
+          bill_uid         TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          actor_user_id    TEXT,
+          reason           TEXT,
+          metadata         TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_payment_events_payment ON remote_payment_events(payment_uid);
+        CREATE INDEX IF NOT EXISTS idx_remote_payment_events_org ON remote_payment_events(organization_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

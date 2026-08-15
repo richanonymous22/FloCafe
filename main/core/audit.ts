@@ -37,6 +37,7 @@
 import { getDatabase, now } from '../db';
 import { ulid } from './ids';
 import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext, resetContextCache } from './context';
+import { appendAuditEventOutbox } from './sync/audit-events';
 
 /**
  * Dotted `entity.action` names. Kept as a plain string union rather than an
@@ -150,6 +151,24 @@ export function recordAuditEvent(input: AuditEventInput): string | null {
       input.metadata ? JSON.stringify(input.metadata) : null,
       now(),
     );
+    // SYNC-D Part K — enqueue the audit event for sync, in this same
+    // connection/transaction. Best-effort: appendAuditEventOutbox never throws,
+    // so sync can never break auditing.
+    appendAuditEventOutbox(db, {
+      id,
+      occurred_at: input.occurredAt || now(),
+      event_type: input.type,
+      actor_user_id: input.actor?.userId ?? null,
+      actor_role: input.actor?.role ?? null,
+      entity_type: input.entity?.type ?? null,
+      entity_id: input.entity?.id === undefined || input.entity?.id === null ? null : String(input.entity.id),
+      organization_id: place.organizationId,
+      location_id: place.locationId,
+      register_id: place.registerId,
+      device_id: place.deviceId,
+      summary: input.summary ?? null,
+      metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+    });
     return id;
   } catch (err) {
     // Never let auditing break the sale. See the rules above.

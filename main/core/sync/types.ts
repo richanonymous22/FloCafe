@@ -19,7 +19,13 @@
  * business fact is this" vs "which transmission attempt/record is this").
  */
 
-export type SyncEntityType = 'inventory_movement';
+/**
+ * The synchronized entity types (SYNC-D — multi-entity). All three are
+ * append-only business FACTS, which is why they are safe to synchronize with
+ * the same outbox/feed mechanism and no conflict engine: two devices never
+ * "edit" the same fact, they only ever append new ones.
+ */
+export type SyncEntityType = 'inventory_movement' | 'audit_event' | 'payment_event';
 export type SyncOperation = 'create' | 'update' | 'append';
 export type OutboxStatus = 'pending' | 'uploading' | 'acked' | 'failed';
 
@@ -50,6 +56,54 @@ export interface InventoryMovementEventPayload {
   created_at: string;
 }
 
+/**
+ * The typed payload for an `audit_event` (SYNC-D, Part K). The authoritative
+ * sync identity is `audit_events.id` (a ULID). Audit events are immutable and
+ * append-only — the lowest-risk second entity to prove the generalized seam.
+ */
+export interface AuditEventPayload {
+  schema_version: 1;
+  audit_uid: string;
+  occurred_at: string;
+  event_type: string;
+  actor_user_id: string | null;
+  actor_role: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  register_id: string | null;
+  device_id: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+/**
+ * The typed payload for a `payment_event` (SYNC-D, Part L). The authoritative
+ * sync identity is `payment_events.id`; `payment_uid` links it to the
+ * authoritative `payments` row (Payment Cutover). Deliberately NOT synced:
+ * `bills.payment_details`, `paid_amount`, `balance`, derived `payment_status`
+ * — those remain local projections/compatibility representations.
+ */
+export interface PaymentEventPayload {
+  schema_version: 1;
+  payment_event_uid: string;
+  payment_uid: string;
+  from_state: string | null;
+  to_state: string;
+  occurred_at: string;
+  order_uid: string | null;
+  bill_uid: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  actor_user_id: string | null;
+  reason: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+/** Any synchronized entity payload. */
+export type SyncEventPayload = InventoryMovementEventPayload | AuditEventPayload | PaymentEventPayload;
+
 /** The wire shape of one outbox event handed to a transport for upload. */
 export interface OutboxEventDTO {
   uid: string;
@@ -60,7 +114,7 @@ export interface OutboxEventDTO {
   operation: SyncOperation;
   organization_id: string | null;
   location_id: string | null;
-  payload: InventoryMovementEventPayload;
+  payload: SyncEventPayload;
   created_at: string;
 }
 
@@ -84,9 +138,10 @@ export interface SyncTransport {
 /** One event returned by a pull, in the same payload shape the outbox produced. */
 export interface PulledEvent {
   event_uid: string;
+  entity_type: SyncEntityType;
   entity_uid: string;
   feed_seq: number;
-  payload: InventoryMovementEventPayload;
+  payload: SyncEventPayload;
 }
 
 export interface PullResult {

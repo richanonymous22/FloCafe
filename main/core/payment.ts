@@ -83,6 +83,7 @@ import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
 import { recordReturn as recordInventoryReturn } from './inventory';
 import { getOrganizationContext, getLocationContext } from './context';
+import { appendPaymentEventOutbox } from './sync/payment-events';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -366,10 +367,12 @@ function persistPayment(input: PersistPaymentInput): PaymentRecord {
     getOrganizationContext()?.id ?? null, getLocationContext()?.id ?? null,
   );
 
+  const peId = ulid();
   db.prepare(`
     INSERT INTO payment_events (id, payment_id, from_state, to_state, occurred_at, actor_user_id, metadata, created_at)
     VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
-  `).run(ulid(), id, result.state, requestedAt, input.actorUserId ?? null, null, requestedAt);
+  `).run(peId, id, result.state, requestedAt, input.actorUserId ?? null, null, requestedAt);
+  appendPaymentEventOutbox(db, peId); // SYNC-D Part L — enqueue for sync (best-effort)
 
   return db.prepare('SELECT * FROM payments WHERE id = ?').get(id) as PaymentRecord;
 }
@@ -491,10 +494,12 @@ export function voidPayment(input: VoidPaymentInput): VoidPaymentResult {
     const changedAt = now();
     db.prepare(`UPDATE payments SET state = 'voided', voided_at = ?, updated_at = ? WHERE id = ?`)
       .run(changedAt, changedAt, input.paymentId);
+    const voidPeId = ulid();
     db.prepare(`
       INSERT INTO payment_events (id, payment_id, from_state, to_state, occurred_at, actor_user_id, reason, created_at)
       VALUES (?, ?, ?, 'voided', ?, ?, ?, ?)
-    `).run(ulid(), input.paymentId, payment.state, changedAt, input.actorUserId ?? null, input.reason ?? null, changedAt);
+    `).run(voidPeId, input.paymentId, payment.state, changedAt, input.actorUserId ?? null, input.reason ?? null, changedAt);
+    appendPaymentEventOutbox(db, voidPeId); // SYNC-D Part L
 
     recordAuditEvent({
       type: 'payment.voided',
@@ -624,10 +629,12 @@ export function refundPayment(input: RefundPaymentInput): RefundPaymentResult {
       .run(newRefundedMinor, newState, changedAt, input.paymentId);
 
     if (newState !== payment.state) {
+      const refundPeId = ulid();
       db.prepare(`
         INSERT INTO payment_events (id, payment_id, from_state, to_state, occurred_at, actor_user_id, reason, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(ulid(), input.paymentId, payment.state, newState, changedAt, input.actorUserId ?? null, input.reason ?? null, changedAt);
+      `).run(refundPeId, input.paymentId, payment.state, newState, changedAt, input.actorUserId ?? null, input.reason ?? null, changedAt);
+      appendPaymentEventOutbox(db, refundPeId); // SYNC-D Part L
     }
 
     recordAuditEvent({

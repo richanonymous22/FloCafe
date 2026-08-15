@@ -28,7 +28,28 @@
 import Database from 'better-sqlite3';
 
 export type DeviceStatus = 'active' | 'revoked';
-export type CloudEntityType = 'inventory_movement' | 'audit_event' | 'payment_event';
+export type CloudEntityType =
+  | 'inventory_movement' | 'audit_event' | 'payment_event'
+  | 'order' | 'order_item' | 'bill';
+
+/** Mutable sales entities: many snapshot events per entity_uid (SYNC-E). */
+export const MUTABLE_CLOUD_ENTITIES: ReadonlySet<string> = new Set(['order', 'order_item', 'bill']);
+
+export interface CloudConflict {
+  conflict_uid: string;
+  organization_uid: string;
+  location_uid: string | null;
+  entity_type: string;
+  entity_uid: string;
+  local_event_uid: string | null;
+  remote_event_uid: string | null;
+  local_device_uid: string | null;
+  remote_device_uid: string | null;
+  conflict_type: string;
+  detected_at: string;
+  status: 'open' | 'acknowledged' | 'resolved';
+  resolution: string | null;
+}
 
 export interface CloudDevice {
   device_uid: string;
@@ -157,6 +178,10 @@ export interface CloudStore {
   listDeficits(organizationUid: string): CloudInventoryDeficit[];
   setDeficitStatus(organizationUid: string, locationUid: string | null, productUid: string, variantUid: string | null, status: DeficitStatus, at: string): boolean;
 
+  // ── Sales conflict + version projection (SYNC-E) ──────────────────────────
+  listConflicts(organizationUid: string): CloudConflict[];
+  getEntityVersion(organizationUid: string, entityType: string, entityUid: string): { current_event_uid: string; current_device_uid: string; snapshot_version: number } | null;
+
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void;
   observability(): { accepted: number; duplicate: number; rejected: number; authFailure: number };
   observabilityByEntity(): Record<string, { accepted: number; duplicate: number; rejected: number }>;
@@ -200,11 +225,44 @@ export class SqliteCloudStore implements CloudStore {
         feed_seq         INTEGER NOT NULL,
         payload          TEXT NOT NULL,
         created_at       TEXT NOT NULL,
-        received_at      TEXT NOT NULL,
-        UNIQUE (entity_type, entity_uid)
+        received_at      TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cloud_events_feed ON cloud_events(organization_uid, feed_seq);
       CREATE INDEX IF NOT EXISTS idx_cloud_events_device ON cloud_events(device_uid);
+      -- Append-only entities keep one event per fact (idempotency backstop);
+      -- MUTABLE sales entities (order/order_item/bill) may have many snapshot
+      -- events per entity_uid, so the uniqueness is scoped away from them.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_events_entity_uid
+        ON cloud_events(entity_type, entity_uid)
+        WHERE entity_type IN ('inventory_movement', 'audit_event', 'payment_event');
+      -- Current-version projection for mutable entities.
+      CREATE TABLE IF NOT EXISTS cloud_entity_versions (
+        organization_uid   TEXT NOT NULL,
+        entity_type        TEXT NOT NULL,
+        entity_uid         TEXT NOT NULL,
+        current_event_uid  TEXT NOT NULL,
+        current_device_uid TEXT NOT NULL,
+        snapshot_version   INTEGER NOT NULL DEFAULT 0,
+        updated_at         TEXT NOT NULL,
+        PRIMARY KEY (organization_uid, entity_type, entity_uid)
+      );
+      -- Detected cross-device conflicts on mutable entities (never auto-resolved).
+      CREATE TABLE IF NOT EXISTS cloud_conflicts (
+        conflict_uid     TEXT PRIMARY KEY,
+        organization_uid TEXT NOT NULL,
+        location_uid     TEXT,
+        entity_type      TEXT NOT NULL,
+        entity_uid       TEXT NOT NULL,
+        local_event_uid  TEXT,
+        remote_event_uid TEXT,
+        local_device_uid TEXT,
+        remote_device_uid TEXT,
+        conflict_type    TEXT NOT NULL,
+        detected_at      TEXT NOT NULL,
+        status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
+        resolution       TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_cloud_conflicts_entity ON cloud_conflicts(organization_uid, entity_type, entity_uid);
       CREATE TABLE IF NOT EXISTS cloud_feed_sequence (organization_uid TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS cloud_nonces (device_uid TEXT NOT NULL, nonce TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (device_uid, nonce));
       CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
@@ -259,8 +317,15 @@ export class SqliteCloudStore implements CloudStore {
   }
 
   storeEvent(evt: CloudEvent, receivedAt: string): StoreResult {
+    const mutable = MUTABLE_CLOUD_ENTITIES.has(evt.entity_type);
     const txn = this.db.transaction((): StoreResult => {
-      const existing = this.db.prepare('SELECT 1 FROM cloud_events WHERE entity_type = ? AND entity_uid = ?').get(evt.entity_type, evt.entity_uid);
+      // Idempotency: append-only entities dedup by (entity_type, entity_uid) —
+      // one fact, one event. Mutable sales entities dedup by event_uid — each
+      // snapshot is a distinct event, and the SAME snapshot re-uploaded (lost
+      // ACK) is the duplicate (SYNC-E).
+      const existing = mutable
+        ? this.db.prepare('SELECT 1 FROM cloud_events WHERE event_uid = ?').get(evt.event_uid)
+        : this.db.prepare('SELECT 1 FROM cloud_events WHERE entity_type = ? AND entity_uid = ?').get(evt.entity_type, evt.entity_uid);
       if (existing) return 'duplicate';
       // Atomic per-org feed sequence spanning all entity types (Part C/N).
       this.db.prepare(`
@@ -276,9 +341,46 @@ export class SqliteCloudStore implements CloudStore {
         const fields = this.inventoryFieldsFromPayload(evt);
         if (fields) this.projectStockAndFlagDeficit(evt.organization_uid, fields, receivedAt);
       }
+      if (mutable) this.projectVersionAndFlagConflict(evt, receivedAt);
       return 'accepted';
     });
     return txn();
+  }
+
+  /**
+   * Part I/R — maintain the current-version projection for a mutable entity
+   * and record a conflict when a DIFFERENT device produces a snapshot of the
+   * same entity. This is CONSERVATIVE by design: it flags any cross-device
+   * divergence for later review, preserves every snapshot event, and never
+   * auto-resolves a financial conflict or deletes history. The current pointer
+   * moves to the higher snapshot_version (deterministic), but that is only a
+   * read-model hint — the conflict record is the durable truth.
+   */
+  private projectVersionAndFlagConflict(evt: CloudEvent, at: string): void {
+    let snapshotVersion = 0;
+    try { snapshotVersion = Number((JSON.parse(evt.payload) as { snapshot_version?: number }).snapshot_version ?? 0); } catch { snapshotVersion = 0; }
+    const current = this.db.prepare('SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = ? AND entity_type = ? AND entity_uid = ?')
+      .get(evt.organization_uid, evt.entity_type, evt.entity_uid) as { current_event_uid: string; current_device_uid: string; snapshot_version: number } | undefined;
+    if (current && current.current_device_uid !== evt.device_uid) {
+      // Two devices touched the same entity — record it (never silently merge).
+      const conflictUid = `cf_${evt.event_uid}`;
+      this.db.prepare(`
+        INSERT OR IGNORE INTO cloud_conflicts (conflict_uid, organization_uid, location_uid, entity_type, entity_uid,
+          local_event_uid, remote_event_uid, local_device_uid, remote_device_uid, conflict_type, detected_at, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'concurrent_update', ?, 'open')
+      `).run(conflictUid, evt.organization_uid, evt.location_uid, evt.entity_type, evt.entity_uid,
+        current.current_event_uid, evt.event_uid, current.current_device_uid, evt.device_uid, at);
+      this.logSync('conflict', { organizationUid: evt.organization_uid, entityType: evt.entity_type, deviceUid: evt.device_uid }, at);
+    }
+    const winsPointer = !current || snapshotVersion >= current.snapshot_version;
+    if (winsPointer) {
+      this.db.prepare(`
+        INSERT INTO cloud_entity_versions (organization_uid, entity_type, entity_uid, current_event_uid, current_device_uid, snapshot_version, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(organization_uid, entity_type, entity_uid) DO UPDATE SET current_event_uid = excluded.current_event_uid,
+          current_device_uid = excluded.current_device_uid, snapshot_version = excluded.snapshot_version, updated_at = excluded.updated_at
+      `).run(evt.organization_uid, evt.entity_type, evt.entity_uid, evt.event_uid, evt.device_uid, snapshotVersion, at);
+    }
   }
 
   private inventoryFieldsFromPayload(evt: CloudEvent): InventoryProjectionFields | null {
@@ -402,6 +504,14 @@ export class SqliteCloudStore implements CloudStore {
       WHERE organization_uid = ? AND location_uid = ? AND product_uid = ? AND variant_uid = ?
     `).run(status, at, organizationUid, locationUid ?? '', productUid, variantUid ?? '');
     return res.changes > 0;
+  }
+
+  listConflicts(organizationUid: string): CloudConflict[] {
+    return this.db.prepare('SELECT * FROM cloud_conflicts WHERE organization_uid = ? ORDER BY detected_at DESC').all(organizationUid) as CloudConflict[];
+  }
+  getEntityVersion(organizationUid: string, entityType: string, entityUid: string): { current_event_uid: string; current_device_uid: string; snapshot_version: number } | null {
+    return (this.db.prepare('SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = ? AND entity_type = ? AND entity_uid = ?')
+      .get(organizationUid, entityType, entityUid) as { current_event_uid: string; current_device_uid: string; snapshot_version: number } | undefined) ?? null;
   }
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void {

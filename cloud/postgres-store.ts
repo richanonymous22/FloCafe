@@ -19,8 +19,9 @@
 import type {
   CloudDevice, CloudEvent, CloudPullPage, CloudFeedItem,
   StoreResult, EnrollmentToken, CloudInventoryDeficit, OrganizationHealth,
-  DeficitStatus, CloudInventoryMovement, CloudFeedEvent,
+  DeficitStatus, CloudInventoryMovement, CloudFeedEvent, CloudConflict,
 } from './store';
+import { MUTABLE_CLOUD_ENTITIES } from './store';
 
 export interface PgClient {
   query<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[]; rowCount: number }>;
@@ -73,8 +74,11 @@ export class PostgresCloudStore {
   }
 
   async storeEvent(evt: CloudEvent, receivedAt: string): Promise<StoreResult> {
+    const mutable = MUTABLE_CLOUD_ENTITIES.has(evt.entity_type);
     return inTxn(this.pg, async () => {
-      const dup = await this.pg.query('SELECT 1 FROM cloud_events WHERE entity_type = $1 AND entity_uid = $2', [evt.entity_type, evt.entity_uid]);
+      const dup = mutable
+        ? await this.pg.query('SELECT 1 FROM cloud_events WHERE event_uid = $1', [evt.event_uid])
+        : await this.pg.query('SELECT 1 FROM cloud_events WHERE entity_type = $1 AND entity_uid = $2', [evt.entity_type, evt.entity_uid]);
       if (dup.rowCount > 0) return 'duplicate';
       const seqRes = await this.pg.query<{ next_seq: number }>(
         `INSERT INTO cloud_feed_sequence (organization_uid, next_seq) VALUES ($1, 1)
@@ -92,8 +96,44 @@ export class PostgresCloudStore {
         const f = this.inventoryFields(evt);
         if (f) await this.projectStockAndFlagDeficit(evt.organization_uid, f, receivedAt);
       }
+      if (mutable) await this.projectVersionAndFlagConflict(evt, receivedAt);
       return 'accepted';
     });
+  }
+
+  private async projectVersionAndFlagConflict(evt: CloudEvent, at: string): Promise<void> {
+    let snapshotVersion = 0;
+    try { snapshotVersion = Number((JSON.parse(evt.payload) as { snapshot_version?: number }).snapshot_version ?? 0); } catch { snapshotVersion = 0; }
+    const cur = (await this.pg.query<{ current_event_uid: string; current_device_uid: string; snapshot_version: number }>(
+      'SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = $1 AND entity_type = $2 AND entity_uid = $3',
+      [evt.organization_uid, evt.entity_type, evt.entity_uid])).rows[0];
+    if (cur && cur.current_device_uid !== evt.device_uid) {
+      await this.pg.query(
+        `INSERT INTO cloud_conflicts (conflict_uid, organization_uid, location_uid, entity_type, entity_uid,
+           local_event_uid, remote_event_uid, local_device_uid, remote_device_uid, conflict_type, detected_at, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'concurrent_update',$10,'open') ON CONFLICT (conflict_uid) DO NOTHING`,
+        [`cf_${evt.event_uid}`, evt.organization_uid, evt.location_uid, evt.entity_type, evt.entity_uid,
+          cur.current_event_uid, evt.event_uid, cur.current_device_uid, evt.device_uid, at]);
+      await this.logSync('conflict', { organizationUid: evt.organization_uid, entityType: evt.entity_type, deviceUid: evt.device_uid }, at);
+    }
+    if (!cur || snapshotVersion >= Number(cur.snapshot_version)) {
+      await this.pg.query(
+        `INSERT INTO cloud_entity_versions (organization_uid, entity_type, entity_uid, current_event_uid, current_device_uid, snapshot_version, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (organization_uid, entity_type, entity_uid) DO UPDATE SET current_event_uid = EXCLUDED.current_event_uid,
+           current_device_uid = EXCLUDED.current_device_uid, snapshot_version = EXCLUDED.snapshot_version, updated_at = EXCLUDED.updated_at`,
+        [evt.organization_uid, evt.entity_type, evt.entity_uid, evt.event_uid, evt.device_uid, snapshotVersion, at]);
+    }
+  }
+
+  async listConflicts(organizationUid: string): Promise<CloudConflict[]> {
+    return (await this.pg.query<CloudConflict>('SELECT * FROM cloud_conflicts WHERE organization_uid = $1 ORDER BY detected_at DESC', [organizationUid])).rows;
+  }
+  async getEntityVersion(organizationUid: string, entityType: string, entityUid: string): Promise<{ current_event_uid: string; current_device_uid: string; snapshot_version: number } | null> {
+    const r = (await this.pg.query<{ current_event_uid: string; current_device_uid: string; snapshot_version: number }>(
+      'SELECT current_event_uid, current_device_uid, snapshot_version FROM cloud_entity_versions WHERE organization_uid = $1 AND entity_type = $2 AND entity_uid = $3',
+      [organizationUid, entityType, entityUid])).rows[0];
+    return r ? { ...r, snapshot_version: Number(r.snapshot_version) } : null;
   }
 
   private inventoryFields(evt: CloudEvent): InventoryFields | null {

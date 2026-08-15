@@ -66,10 +66,13 @@ const ENTITY_REGISTRY: Record<CloudEntityType, (p: Record<string, unknown>) => b
   inventory_movement: (p) => typeof p.quantity_delta === 'number' && !!p.product_id && !!p.movement_type,
   audit_event: (p) => !!p.audit_uid && !!p.event_type,
   payment_event: (p) => !!p.payment_event_uid && !!p.payment_uid && !!p.to_state,
+  order: (p) => !!p.order_uid && typeof p.status === 'string',
+  order_item: (p) => !!p.order_item_uid && !!p.order_uid && !!p.product_id,
+  bill: (p) => !!p.bill_uid,
 };
 
 function isKnownEntity(t: string): t is CloudEntityType {
-  return t === 'inventory_movement' || t === 'audit_event' || t === 'payment_event';
+  return t in ENTITY_REGISTRY;
 }
 
 function signedFields(req: Request): SignedRequestFields {

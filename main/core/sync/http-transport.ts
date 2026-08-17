@@ -108,6 +108,20 @@ export class HttpSyncTransport implements SyncTransport, SyncPullTransport {
     const data = await res.json().catch(() => ({})) as { recorded?: boolean };
     return { ok: !!data.recorded };
   }
+
+  /** Pulls the organization's sync health for the operator console (SYNC-G). */
+  async pullHealth(): Promise<Record<string, unknown> | null> {
+    const res = await this.signedFetch('GET', '/sync/v1/health', '');
+    const data = await res.json().catch(() => ({})) as { health?: Record<string, unknown> };
+    return data.health ?? null;
+  }
+
+  /** Pulls the organization's cross-device inventory deficits (SYNC-G). */
+  async pullDeficits(): Promise<Array<Record<string, unknown>>> {
+    const res = await this.signedFetch('GET', '/sync/v1/deficits', '');
+    const data = await res.json().catch(() => ({})) as { deficits?: Array<Record<string, unknown>> };
+    return data.deficits ?? [];
+  }
 }
 
 /** A conflict as the cloud reports it to a device (SYNC-F). */

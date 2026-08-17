@@ -20,7 +20,7 @@
  */
 
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudPullPage, ConflictResolutionInput, StoreResult } from './store';
+import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
 
@@ -41,6 +41,9 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   listConflicts(organizationUid: string): CloudConflict[] | Promise<CloudConflict[]>;
   getConflict(conflictUid: string): CloudConflict | null | Promise<CloudConflict | null>;
   recordConflictResolution(input: ConflictResolutionInput, at: string): void | Promise<void>;
+  // Operator read models (SYNC-G).
+  organizationHealth(organizationUid: string): OrganizationHealth | Promise<OrganizationHealth>;
+  listDeficits(organizationUid: string): CloudInventoryDeficit[] | Promise<CloudInventoryDeficit[]>;
 }
 
 /**
@@ -335,6 +338,20 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     }, at);
     await store.logSync('conflict_resolved', { deviceUid: device.device_uid, organizationUid: device.organization_uid, message: status }, at);
     res.json({ recorded: true });
+  });
+
+  // ── SYNC-G: operator sync/device health (organization-scoped) ────────────
+  app.get('/sync/v1/health', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
+    if (!device) return;
+    res.json({ health: await store.organizationHealth(device.organization_uid) });
+  });
+
+  // ── SYNC-G: operator inventory deficits (organization-scoped) ────────────
+  app.get('/sync/v1/deficits', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
+    if (!device) return;
+    res.json({ deficits: await store.listDeficits(device.organization_uid) });
   });
 
   return app;

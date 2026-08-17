@@ -38,7 +38,7 @@ const { ulid } = require('../main/core/ids');
 const { snapshotProduct, snapshotCustomer, snapshotSupplier } = require('../main/core/sync/reference-entities');
 const { createSupplier } = require('../main/modules/purchasing/suppliers');
 const licensing = require('../main/core/licensing');
-const { executeCompensation, inventoryCorrectionRequirement } = require('../main/core/admin/compensation');
+const { executeCompensation, executeInventoryCorrection } = require('../main/core/admin/compensation');
 const { upsertConflict, getConflict } = require('../main/core/sync/conflict-store');
 const { grantFeature } = require('../main/core/features');
 
@@ -189,7 +189,11 @@ async function main() {
     // Exactly-once: repeat the same compensation → idempotent, no double refund.
     executeCompensation({ conflictUid: 'comp1', action: 'refund', paymentId: payId, amountMinor: 400, user: OWNER });
     assertEqual((db.prepare('SELECT refunded_minor AS r FROM payments WHERE id=?').get(payId) as any).r, 400, '23. repeating the compensation did NOT double-refund (exactly-once)');
-    assertEqual(inventoryCorrectionRequirement().safe, false, '24. inventory correction is honestly left manual (no idempotent primitive)');
+    const invc = executeInventoryCorrection({ conflictUid: 'comp1', productId: 'prod-c', quantityDelta: -2, reason: 'shrinkage', user: OWNER });
+    assert(!!invc.movement, '24. inventory correction executes safely (now automated, exactly-once)');
+    const invBal1 = (db.prepare("SELECT quantity AS q FROM inventory_balances WHERE product_id='prod-c'").get() as any)?.q;
+    executeInventoryCorrection({ conflictUid: 'comp1', productId: 'prod-c', quantityDelta: -2, reason: 'shrinkage', user: OWNER });
+    assertEqual((db.prepare("SELECT quantity AS q FROM inventory_balances WHERE product_id='prod-c'").get() as any)?.q, invBal1, '24b. repeating the inventory correction did NOT double-apply (exactly-once)');
     // A cashier cannot compensate.
     let denied = false; try { executeCompensation({ conflictUid: 'comp1', action: 'void', paymentId: payId, user: CASHIER }); } catch { denied = true; }
     assert(denied, '24b. a cashier cannot execute compensation (sales.reconcile only)');

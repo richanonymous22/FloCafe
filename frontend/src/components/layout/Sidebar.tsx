@@ -22,6 +22,7 @@ import {
   ChefHat,
   UserCircle,
   LifeBuoy,
+  Scale,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { usePosSettingsStore } from '@/store/pos-settings';
@@ -51,6 +52,7 @@ const ALL_NAV_ITEMS = [
   { href: '/purchasing', labelKey: 'nav.purchasing', icon: Truck, roles: ['owner', 'manager'], businessTypes: null },
   { href: '/suppliers', labelKey: 'nav.suppliers', icon: Truck, roles: ['owner', 'manager'], businessTypes: null },
   { href: '/transfers', labelKey: 'nav.transfers', icon: ArrowLeftRight, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/reconciliation', labelKey: 'nav.reconciliation', icon: Scale, roles: ['owner', 'manager'], businessTypes: null },
   { href: '/locations', labelKey: 'nav.locations', icon: MapPin, roles: ['owner'], businessTypes: null },
   { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, roles: ['owner'], businessTypes: null },
   { href: '/orders', labelKey: 'nav.orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier'], businessTypes: null },

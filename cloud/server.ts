@@ -61,6 +61,11 @@ function cloudResolutionAllowed(conflictType: string, strategy: string | null | 
   return true;
 }
 
+/** Sync wire-protocol version (COMMERCIALIZATION Part H — protocol versioning).
+ *  Bumped only on a breaking protocol change; surfaced on every response so a
+ *  client can detect an incompatible server. */
+export const PLEMMO_PROTOCOL_VERSION = '1';
+
 const MAX_BATCH = 500;
 const BODY_LIMIT = '1mb';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -84,6 +89,10 @@ interface UploadEvent {
  * resolved from the authenticated device, never trusted from the payload —
  * the registry only decides whether a payload is well-formed for its type.
  */
+// A reference/operational entity snapshot is well-formed when it carries its
+// ULID identity + a fields object (COMMERCIALIZATION). Identity (org/location)
+// is still resolved server-side from the device, never trusted from here.
+const referenceValidator = (p: Record<string, unknown>) => !!p.entity_uid && typeof p.fields === 'object' && p.fields !== null;
 const ENTITY_REGISTRY: Record<CloudEntityType, (p: Record<string, unknown>) => boolean> = {
   inventory_movement: (p) => typeof p.quantity_delta === 'number' && !!p.product_id && !!p.movement_type,
   audit_event: (p) => !!p.audit_uid && !!p.event_type,
@@ -91,6 +100,17 @@ const ENTITY_REGISTRY: Record<CloudEntityType, (p: Record<string, unknown>) => b
   order: (p) => !!p.order_uid && typeof p.status === 'string',
   order_item: (p) => !!p.order_item_uid && !!p.order_uid && !!p.product_id,
   bill: (p) => !!p.bill_uid,
+  product: referenceValidator,
+  category: referenceValidator,
+  product_variant: referenceValidator,
+  addon_group: referenceValidator,
+  addon: referenceValidator,
+  customer: referenceValidator,
+  supplier: referenceValidator,
+  purchase_order: referenceValidator,
+  purchase_order_item: referenceValidator,
+  stock_transfer: referenceValidator,
+  stock_transfer_item: referenceValidator,
 };
 
 function isKnownEntity(t: string): t is CloudEntityType {
@@ -146,6 +166,28 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'payload too large' });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'malformed json' });
     return res.status(400).json({ error: 'bad request' });
+  });
+
+  // Stamp the protocol version on every response (COMMERCIALIZATION Part H).
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Plemmo-Protocol', PLEMMO_PROTOCOL_VERSION);
+    next();
+  });
+
+  // ── Production operations: health + readiness (Part A/H) ──────────────────
+  // Liveness: the process is up. No auth, no DB — safe for a load balancer.
+  app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', protocol: PLEMMO_PROTOCOL_VERSION });
+  });
+  // Readiness: the datastore is reachable. A trivial round-trip (returns null)
+  // works identically over the SQLite dev store and the async Postgres store.
+  app.get('/ready', async (_req: Request, res: Response) => {
+    try {
+      await store.getConflict('__ready_probe__');
+      res.json({ status: 'ready', protocol: PLEMMO_PROTOCOL_VERSION });
+    } catch (error) {
+      res.status(503).json({ status: 'unavailable', error: (error as Error).message });
+    }
   });
 
   const rateLimited = createRateLimiter(RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX);

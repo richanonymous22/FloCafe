@@ -92,3 +92,63 @@ Provision the managed PostgreSQL instance and set `PLEMMO_CLOUD_DB_URL` in the
 cloud service's environment. No code change is required — the adapter, the
 migration runner, and the async HTTP server are complete and proven against
 real PostgreSQL.
+
+---
+
+## Permanent production service (COMMERCIALIZATION, Part A)
+
+The smallest reliable architecture: **one stateless Node service**
+(`cloud/serve.ts`, containerized by `cloud/Dockerfile`) behind the managed
+PostgreSQL, fronted by the platform's HTTPS load balancer. No second backend,
+no protocol redesign — the same `createCloudServer` proven in dev/test.
+
+### Operational endpoints (built)
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /health` | none | Liveness — process up. For the load balancer. |
+| `GET /ready` | none | Readiness — datastore reachable (trivial round-trip). |
+| every response | — | `X-Plemmo-Protocol` header (protocol versioning, Part H). |
+
+### PROVEN ALREADY
+
+- Provider-neutral `CloudStore`, async PostgreSQL adapter, real migration
+  runner, per-org atomic sequencing, idempotency, security (device-signed,
+  org/location isolation, revoked/tampered rejection), rate limiting.
+- Hosted **Neon PostgreSQL** connectivity + `test:sync-d-production` **43/43**
+  from the real Windows client (dated verification 2026-08-17, above).
+- Health/readiness endpoints; protocol version header; graceful shutdown
+  (SIGTERM/SIGINT drain); production server entrypoint; container image with a
+  built-in `HEALTHCHECK`; one-shot migration entrypoint (`run-migrations.ts`).
+
+### STILL REQUIRED (external — needs the user)
+
+These need external provisioning/credentials and are **NOT done**; the code is
+ready to consume them:
+
+1. A cloud host/account (container platform or VM) to run the image.
+2. A managed PostgreSQL instance + its `PLEMMO_CLOUD_DB_URL` secret.
+3. A production **domain** + **TLS certificate** (HTTPS terminates at the LB).
+4. A **secrets manager** binding for `PLEMMO_CLOUD_DB_URL` (never committed).
+5. **CI/CD**: build → run `run-migrations.js` → roll out `serve.js`, with a
+   rollback step (previous image + expand/contract migrations so rollback is
+   schema-safe).
+6. **Monitoring/alerting** wired to `/health`, `/ready`, and the sync log.
+7. Verified **backup/restore** on the managed instance (PITR is available on
+   the chosen providers; a restore drill must actually be run).
+
+### PRODUCTION RISK (to weigh before pilot)
+
+- The in-memory rate limiter is per-instance; a multi-instance deployment needs
+  a shared limiter (gateway/Redis) — the interface is unchanged, see
+  `createRateLimiter`.
+- `/ready` proves DB reachability, not migration currency — the deploy order
+  (migrate first) is what guarantees schema compatibility.
+- Protocol is `v1`; a breaking change must bump `PLEMMO_PROTOCOL_VERSION` and
+  gate old clients.
+
+**STOP — external dependency.** A permanent public deployment cannot be
+completed from here: it requires the user to provide a cloud host, a managed
+PostgreSQL instance + URL secret, and a domain/TLS. Everything the service
+needs in code is built and proven against real PostgreSQL; the remaining steps
+are provisioning, not code.

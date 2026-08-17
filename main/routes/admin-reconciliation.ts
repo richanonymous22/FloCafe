@@ -31,6 +31,9 @@ import { recordReconciliationAction } from '../core/sync/conflict-store';
 import { recordAuditEvent } from '../core/audit';
 import { getSyncCloudConfig } from '../core/sync/config';
 import { HttpSyncTransport } from '../core/sync/http-transport';
+import { executeCompensation, inventoryCorrectionRequirement, CompensationError } from '../core/admin/compensation';
+import { getLicense, effectiveStatus, activateLicense, isFeatureLicensed, License } from '../core/licensing';
+import { LicenseError } from '../core/licensing';
 
 const router = Router();
 
@@ -45,7 +48,8 @@ function handle(res: Response, fn: () => unknown, okStatus = 200): void {
     res.status(okStatus).json({ data: fn() });
   } catch (error) {
     const e = error as Error & { statusCode?: number };
-    if (e instanceof AuthorizationError || e instanceof ConflictNotFoundError || e instanceof ConflictStateError || e instanceof IllegalResolutionError) {
+    if (e instanceof AuthorizationError || e instanceof ConflictNotFoundError || e instanceof ConflictStateError || e instanceof IllegalResolutionError
+        || e instanceof CompensationError || e instanceof LicenseError) {
       res.status(e.statusCode ?? 400).json({ error: e.message, code: e.name });
       return;
     }
@@ -158,6 +162,32 @@ router.post('/inventory/discrepancies/:key/acknowledge', requirePermission('sale
     });
     return { action };
   }, 201);
+});
+
+// ── Safe compensation execution (Part B) ─────────────────────────────────────
+router.post('/conflicts/:uid/compensate', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => {
+    const body = req.body || {};
+    return executeCompensation({
+      conflictUid: String(req.params.uid), action: body.action === 'void' ? 'void' : 'refund',
+      paymentId: String(body.payment_id ?? ''), amountMinor: body.amount_minor != null ? Number(body.amount_minor) : undefined,
+      reason: body.reason ?? null, user: userOf(req),
+    });
+  });
+});
+router.get('/compensation/inventory-requirement', requirePermission('sales.reconcile'), (_req: Request, res: Response) => {
+  handle(res, () => inventoryCorrectionRequirement());
+});
+
+// ── Licensing (Part I) ───────────────────────────────────────────────────────
+router.get('/license', requirePermission('sales.reconcile'), (_req: Request, res: Response) => {
+  handle(res, () => { const license = getLicense(); return { license, effectiveStatus: effectiveStatus(license) }; });
+});
+router.post('/license/activate', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => ({ license: activateLicense((req.body || {}) as License) }), 201);
+});
+router.get('/license/feature/:key', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => ({ feature: String(req.params.key), licensed: isFeatureLicensed(String(req.params.key), orgId() || undefined) }));
 });
 
 // ── Sync / device health ─────────────────────────────────────────────────────

@@ -12,9 +12,11 @@
  *     over-refund, no voiding a settled/refunded payment). Their payment /
  *     inventory / audit / sync effects are the same as a live refund/void.
  *     → SAFE to invoke from Admin.
- *   - Inventory *correction* (a bare `adjustment` movement) has NO idempotency
- *     key of its own, so a retried Admin correction could double-apply.
- *     → NOT auto-executed; left as `manual_action_required` (documented).
+ *   - Inventory *correction*: PLATFORM-HARDENING (Part D) added an
+ *     `idempotencyKey` to `adjustStock`, so an Admin correction is now
+ *     exactly-once (a repeat with the same key returns the prior movement
+ *     without a second delta, and keeps the negative-stock guard).
+ *     → SAFE to invoke from Admin.
  *
  * The Admin path here derives a DETERMINISTIC idempotency key from the
  * conflict + action + payment, so pressing "issue refund" twice for the same
@@ -28,6 +30,7 @@ import { getDatabase, withTxn, now } from '../../db';
 import { requireCan, AuthUser } from '../authorization';
 import { recordAuditEvent } from '../audit';
 import { refundPayment, voidPayment, PaymentIdempotency } from '../payment';
+import { adjustStock } from '../inventory';
 import { getConflict, updateConflictState, recordReconciliationAction } from '../sync/conflict-store';
 import { ConflictNotFoundError } from '../sync/conflict-resolution';
 
@@ -102,11 +105,48 @@ export function executeCompensation(input: CompensationInput): { conflict: unkno
   });
 }
 
-/** Inventory correction is intentionally NOT auto-executed (Part B — no exactly-once primitive yet). */
-export function inventoryCorrectionRequirement(): { safe: false; reason: string } {
-  return {
-    safe: false,
-    reason: 'A bare inventory adjustment has no idempotency key, so an Admin-triggered correction could double-apply. '
-      + 'Left as manual_action_required until an idempotent inventory-correction primitive exists.',
-  };
+export interface InventoryCorrectionInput {
+  conflictUid: string;
+  productId: string;
+  variantId?: string | null;
+  locationId?: string | null;
+  quantityDelta: number;
+  reason: string;
+  user: AuthUser;
+}
+
+/**
+ * Executes a SAFE, exactly-once inventory correction for a conflict
+ * (PLATFORM-HARDENING Part D). The deterministic idempotency key
+ * (`invcorr:<conflict>:<product>:<variant>`) makes a repeated correction a
+ * no-op — no double-decrement, no silent rewrite. Links + audits like the
+ * payment path. `adjustStock` keeps its negative-stock guard and emits the
+ * inventory sync fact.
+ */
+export function executeInventoryCorrection(input: InventoryCorrectionInput): { conflict: unknown; movement: unknown } {
+  return withTxn(() => {
+    const db = getDatabase();
+    const conflict = getConflict(input.conflictUid, db);
+    if (!conflict) throw new ConflictNotFoundError(input.conflictUid);
+    requireCan(input.user, 'sales.reconcile', { locationId: conflict.location_id ?? input.locationId ?? null });
+    const idempotencyKey = `invcorr:${input.conflictUid}:${input.productId}:${input.variantId ?? ''}`;
+    const movement = adjustStock({
+      productId: input.productId, variantId: input.variantId ?? null, locationId: input.locationId ?? null,
+      quantityDelta: input.quantityDelta, reason: input.reason || 'conflict inventory correction',
+      actorUserId: input.user.userId, idempotencyKey,
+    });
+    recordReconciliationAction({
+      conflictUid: input.conflictUid, organizationId: conflict.organization_id, locationId: conflict.location_id,
+      entityType: conflict.entity_type, entityUid: conflict.entity_uid, actionType: 'compensation', strategy: 'compensate',
+      actorUserId: input.user.userId, actorRole: input.user.role, notes: input.reason ?? null,
+      reference: `inventory_correction:${(movement as { id?: string }).id ?? idempotencyKey}`,
+    }, db);
+    recordAuditEvent({
+      type: 'sync.reconciliation_recorded', actor: { userId: input.user.userId, role: input.user.role },
+      entity: { type: 'inventory_correction', id: input.productId },
+      summary: `Executed inventory correction (${input.quantityDelta}) for conflict ${input.conflictUid}`,
+      metadata: { conflict_uid: input.conflictUid, product_id: input.productId, delta: input.quantityDelta },
+    });
+    return { conflict: getConflict(input.conflictUid, db), movement };
+  });
 }

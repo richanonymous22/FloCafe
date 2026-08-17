@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, generateShortId } from '../db';
 import { requireRole } from '../middleware/security';
+import { snapshotCategory } from '../core/sync/reference-entities';
 
 const router = Router();
 
@@ -73,6 +74,7 @@ router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, name, slug, description || null, parent_id || null, sort_order || 0, is_active !== false ? 1 : 0, color || null, icon || null, now(), now());
 
+    snapshotCategory(db, id); // PLATFORM-HARDENING — catalog sync snapshot
     const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
     res.status(201).json({ category });
   } catch (error: any) {
@@ -103,6 +105,7 @@ router.put('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
       WHERE id = ?
     `).run(name, slug, description, parent_id, sort_order, activeInt, color, icon, now(), req.params.id);
 
+    snapshotCategory(db, String(req.params.id)); // PLATFORM-HARDENING — catalog sync snapshot
     const updated = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id);
     res.json({ category: updated });
   } catch (error: any) {
@@ -146,6 +149,7 @@ router.delete('/:id', requireRole('owner', 'manager'), (req: Request, res: Respo
         throw new Error('Invalid action. Must be reassign or delete_all.');
       }
       db.prepare('UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), req.params.id);
+      snapshotCategory(db, String(req.params.id)); // PLATFORM-HARDENING — catalog deactivate sync
     });
     try {
       deleteCategory();

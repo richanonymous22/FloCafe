@@ -301,6 +301,15 @@ export interface AdjustStockInput extends InventoryKey {
   reason: string;
   movementType?: 'adjustment' | 'receipt';
   actorUserId?: string | null;
+  /**
+   * PLATFORM-HARDENING (Part D): when set, the adjustment is EXACTLY-ONCE. It
+   * is recorded as `reference_type='inventory_correction'`,
+   * `reference_id=idempotencyKey`; a repeat with the same key returns the
+   * existing movement without applying a second delta — the property that
+   * makes an Admin-triggered inventory correction safe (no double-decrement,
+   * no silent stock rewrite).
+   */
+  idempotencyKey?: string | null;
 }
 
 /**
@@ -321,6 +330,13 @@ export function adjustStock(input: AdjustStockInput): InventoryMovementRecord {
   }
   const db = getDatabase();
   return withTxn(() => {
+    // Exactly-once guard (Part D): a repeat with the same idempotency key
+    // returns the prior correction without applying a second delta.
+    if (input.idempotencyKey) {
+      const prior = db.prepare("SELECT * FROM inventory_movements WHERE reference_type = 'inventory_correction' AND reference_id = ?")
+        .get(input.idempotencyKey) as InventoryMovementRecord | undefined;
+      if (prior) return prior;
+    }
     const current = getBalance(input.productId, input.variantId, input.locationId) ?? 0;
     if (current + input.quantityDelta < 0) {
       throw new InventoryError(`Adjustment would take stock negative (current: ${current})`, 400);
@@ -328,7 +344,10 @@ export function adjustStock(input: AdjustStockInput): InventoryMovementRecord {
     const movement = recordMovement({
       db, productId: input.productId, variantId: input.variantId, locationId: input.locationId,
       quantityDelta: input.quantityDelta, movementType: input.movementType || 'adjustment',
-      reason: input.reason, referenceType: 'manual', actorUserId: input.actorUserId,
+      reason: input.reason,
+      referenceType: input.idempotencyKey ? 'inventory_correction' : 'manual',
+      referenceId: input.idempotencyKey || null,
+      actorUserId: input.actorUserId,
     });
     syncLegacyStockQuantity(db, input.productId, input.variantId, input.quantityDelta);
     return movement;

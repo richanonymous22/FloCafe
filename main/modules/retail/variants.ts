@@ -12,6 +12,7 @@
 
 import { getDatabase, now } from '../../db';
 import { ulid } from '../../core/ids';
+import { snapshotProductVariant } from '../../core/sync/reference-entities';
 
 export class RetailError extends Error {
   statusCode: number;
@@ -87,6 +88,7 @@ export function createVariant(input: ProductVariantInput): any {
     throw error;
   }
 
+  snapshotProductVariant(db, id); // PLATFORM-HARDENING — catalog sync snapshot
   return db.prepare('SELECT * FROM product_variants WHERE id = ?').get(id);
 }
 
@@ -147,6 +149,7 @@ export function updateVariant(id: string, input: VariantUpdateInput): any {
     throw error;
   }
 
+  snapshotProductVariant(db, id); // PLATFORM-HARDENING — catalog sync snapshot
   return db.prepare('SELECT * FROM product_variants WHERE id = ?').get(id);
 }
 
@@ -157,6 +160,7 @@ export function deactivateVariant(id: string): void {
     throw new RetailError(`Variant ${id} not found`, 404);
   }
   db.prepare('UPDATE product_variants SET is_active = 0, updated_at = ? WHERE id = ?').run(now(), id);
+  snapshotProductVariant(db, id); // PLATFORM-HARDENING — variant deactivate sync
 }
 
 export interface LookupResult {

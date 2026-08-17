@@ -31,9 +31,10 @@ import { recordReconciliationAction } from '../core/sync/conflict-store';
 import { recordAuditEvent } from '../core/audit';
 import { getSyncCloudConfig } from '../core/sync/config';
 import { HttpSyncTransport } from '../core/sync/http-transport';
-import { executeCompensation, inventoryCorrectionRequirement, CompensationError } from '../core/admin/compensation';
+import { executeCompensation, executeInventoryCorrection, CompensationError } from '../core/admin/compensation';
 import { getLicense, effectiveStatus, activateLicense, isFeatureLicensed, License } from '../core/licensing';
 import { LicenseError } from '../core/licensing';
+import { promoteRemoteEntity, listPromotable, PromotionError } from '../core/admin/catalog-promotion';
 
 const router = Router();
 
@@ -49,7 +50,7 @@ function handle(res: Response, fn: () => unknown, okStatus = 200): void {
   } catch (error) {
     const e = error as Error & { statusCode?: number };
     if (e instanceof AuthorizationError || e instanceof ConflictNotFoundError || e instanceof ConflictStateError || e instanceof IllegalResolutionError
-        || e instanceof CompensationError || e instanceof LicenseError) {
+        || e instanceof CompensationError || e instanceof LicenseError || e instanceof PromotionError) {
       res.status(e.statusCode ?? 400).json({ error: e.message, code: e.name });
       return;
     }
@@ -175,8 +176,26 @@ router.post('/conflicts/:uid/compensate', requirePermission('sales.reconcile'), 
     });
   });
 });
-router.get('/compensation/inventory-requirement', requirePermission('sales.reconcile'), (_req: Request, res: Response) => {
-  handle(res, () => inventoryCorrectionRequirement());
+router.post('/conflicts/:uid/compensate-inventory', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => {
+    const body = req.body || {};
+    return executeInventoryCorrection({
+      conflictUid: String(req.params.uid), productId: String(body.product_id ?? ''),
+      variantId: body.variant_id ?? null, locationId: body.location_id ?? null,
+      quantityDelta: Number(body.quantity_delta), reason: body.reason ?? 'conflict inventory correction', user: userOf(req),
+    });
+  });
+});
+
+// ── Controlled catalog promotion (Part C) ───────────────────────────────────
+router.get('/catalog/promotable', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => ({ items: listPromotable(req.query.entity_type as string | undefined) }));
+});
+router.post('/catalog/promote', requirePermission('sales.reconcile'), (req: Request, res: Response) => {
+  handle(res, () => {
+    const body = req.body || {};
+    return promoteRemoteEntity({ entityType: String(body.entity_type ?? ''), uid: String(body.uid ?? ''), user: userOf(req) });
+  });
 });
 
 // ── Licensing (Part I) ───────────────────────────────────────────────────────

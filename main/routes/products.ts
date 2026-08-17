@@ -737,6 +737,7 @@ router.delete('/:id', requireRole('owner', 'manager'), (req: Request, res: Respo
     }
 
     db.prepare('UPDATE products SET deleted_at = ? WHERE id = ?').run(now(), req.params.id);
+    snapshotProduct(db, String(req.params.id)); // PLATFORM-HARDENING — catalog delete sync
     res.json({ message: 'Product deleted' });
   } catch (error: any) {
     console.error("[API] Internal error:", error);

@@ -3,6 +3,7 @@ import { getDatabase, now, withTxn, getSettingValue } from '../db';
 import { randomUUID } from 'crypto';
 import { requireRole } from '../middleware/security';
 import { getActiveCountryPack, hasConfiguredTaxCategories } from '../services/tax';
+import { snapshotAddonGroup } from '../core/sync/reference-entities';
 
 const VALID_TAX_BEHAVIORS = ['country_default', 'inclusive', 'exclusive', 'exempt'];
 
@@ -150,6 +151,7 @@ router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) 
       };
     });
 
+    snapshotAddonGroup(getDatabase(), groupId); // PLATFORM-HARDENING — catalog sync snapshot
     res.status(201).json({ addon_group: Object.assign({}, group, { addons: groupAddons }) });
   } catch (error: any) {
     console.error("[API] Internal error:", error);
@@ -225,6 +227,7 @@ router.put('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
       };
     });
 
+    snapshotAddonGroup(getDatabase(), String(req.params.id)); // PLATFORM-HARDENING — catalog sync snapshot
     res.json({ addon_group: Object.assign({}, updated, { addons: updatedAddons }) });
   } catch (error: any) {
     console.error("[API] Internal error:", error);

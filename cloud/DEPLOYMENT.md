@@ -5,12 +5,30 @@ The standalone cloud sync service: an Express app (`cloud/server.ts`) over a
 PostgreSQL. The desktop client never runs any of this — it only speaks the
 HTTP sync protocol.
 
-> **Deployment status in this milestone:** NOT executed against a hosted
-> provider — no managed-Postgres credentials were available in the build
-> environment. Everything below is validated against a REAL local PostgreSQL
-> 16 server (migration runner, concurrency, transactions, the async HTTP API).
-> The single remaining external step is provisioning the managed instance and
-> setting `PLEMMO_CLOUD_DB_URL`. See "Remaining external step".
+> **Deployment status in the SYNC-D milestone (historical):** NOT executed
+> against a hosted provider — no managed-Postgres credentials were available in
+> the build environment at the time. Everything below was validated against a
+> REAL local PostgreSQL 16 server (migration runner, concurrency, transactions,
+> the async HTTP API). See "Remaining external step".
+>
+> ---
+>
+> #### Verification update — 2026-08-17 (post-SYNC-F)
+>
+> A hosted **Neon PostgreSQL** project was subsequently created, and from the
+> **real Windows client** `npm run test:sync-d-production` was run against that
+> hosted Neon database with the result **43 passed, 0 failed** — exercising real
+> hosted PostgreSQL + real HTTP end-to-end: migration, concurrency, duplicate
+> handling, device enrollment, multi-entity sync, security, and observability.
+>
+> **Now proven:** hosted Neon PostgreSQL connectivity; the SYNC-D real
+> hosted-DB integration test against Neon.
+>
+> **Still NOT done** (a permanent production service is more than one green
+> test run): a permanent public cloud **API deployment**; a production
+> **domain / HTTPS**; production **CI/CD**; **monitoring / alerting**; and
+> documented production **backup / restore** procedures. Provisioning the
+> managed instance is done; standing up and operating the service is not.
 
 ## Production database decision
 

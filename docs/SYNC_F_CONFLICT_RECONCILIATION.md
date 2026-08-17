@@ -210,8 +210,11 @@ touched; no authoritative sales table altered. Verified by schema-health
 3. `permanently_invalid` pending relationships require an explicit retention
    sweep to be invoked (wired as a function; no scheduler in this milestone).
 4. No Admin UI — this milestone delivers the backend/domain contract only.
-5. Production cloud remains un-deployed (no hosted credentials — SYNC-D);
-   proven on real local PostgreSQL.
+5. Production cloud is not yet a permanently operated deployment. Hosted **Neon
+   PostgreSQL** connectivity and the SYNC-D hosted-DB integration test are proven
+   (later verification, 2026-08-17 — 43/43 from the real Windows client); a
+   permanent public API / domain / CI/CD / monitoring / backup-restore is not
+   yet stood up. See `cloud/DEPLOYMENT.md`.
 
 ## Recommended next bundled milestone
 

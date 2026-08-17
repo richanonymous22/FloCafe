@@ -28,7 +28,8 @@ runs against a REAL PostgreSQL 16 server and the REAL HTTP API.
 | Per-org isolation; multi-entity ordering; deficit workflow | ✅ **REAL PostgreSQL** |
 | Ed25519-authenticated HTTP upload/pull, enrollment, security spoofs, worker | ✅ **REAL HTTP over REAL PostgreSQL** (async server) |
 | Local outbox emission for audit/payment; remote apply; loop prevention | ✅ real SQLite + real HTTP |
-| Production **deployment** to a hosted provider | ⚠️ **NOT executed** — no managed-PG credentials; validated on local PG; deployment procedure documented |
+| Hosted **Neon PostgreSQL** connectivity + the SYNC-D test against hosted Neon | ✅ **PROVEN (later verification, 2026-08-17)** — `npm run test:sync-d-production` run from the real Windows client against a hosted Neon database: **43/43**. See the note below and `cloud/DEPLOYMENT.md` |
+| Production **service deployment** to a hosted provider (permanent public API, domain/HTTPS, CI/CD, monitoring, backup/restore) | ⚠️ **NOT yet completed** — connectivity + the integration test are proven against hosted Neon, but a permanent operated deployment is not stood up |
 | **Windows** DPAPI key storage on a real Windows box | ⚠️ **NOT executable here** (headless Linux). Real-`safeStorage` validation script provided: `scripts/validate-windows-key-storage.cjs`. The Linux/CI path is proven with an injected safeStorage; DPAPI itself must be validated on Windows. |
 
 ---
@@ -84,10 +85,16 @@ constraint and ordering by the serialized per-org counter.
 
 **Managed PostgreSQL** — see [`cloud/DEPLOYMENT.md`](../cloud/DEPLOYMENT.md)
 for the full comparison (managed vs VPS vs Supabase vs NoSQL) and the
-deployment procedure. **Deployment was NOT executed**: no hosted credentials
-were available. The adapter, migrations, and async server are complete and
-proven on real local PostgreSQL; the single remaining step is provisioning the
-instance and setting `PLEMMO_CLOUD_DB_URL`.
+deployment procedure. **At the time of this milestone, deployment was NOT
+executed** (no hosted credentials). The adapter, migrations, and async server
+were complete and proven on real local PostgreSQL.
+
+> **Verification update — 2026-08-17 (post-SYNC-F):** a hosted **Neon
+> PostgreSQL** instance was later provisioned and `npm run
+> test:sync-d-production` was run from the real Windows client against it —
+> **43/43**. Hosted connectivity + the hosted integration test are now proven.
+> A permanent operated deployment (public API, domain/HTTPS, CI/CD, monitoring,
+> backup/restore) is still not stood up. See `cloud/DEPLOYMENT.md`.
 
 ## Part F — Device enrollment
 

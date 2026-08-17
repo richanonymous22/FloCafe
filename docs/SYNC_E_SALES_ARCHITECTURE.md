@@ -233,8 +233,11 @@ upgrade-path.
    three-way merge; resolution is status-only (no UI, no auto-resolve).
 4. Remote sales live in mirror tables (a local read model / staging); a
    consolidated authoritative-vs-remote reconciliation view is future Admin.
-5. Production cloud remains un-deployed (no hosted credentials — SYNC-D);
-   proven on real local PostgreSQL.
+5. Production cloud is not yet a permanently operated deployment. Hosted **Neon
+   PostgreSQL** connectivity and the SYNC-D hosted-DB integration test are proven
+   (later verification, 2026-08-17 — 43/43 from the real Windows client); a
+   permanent public API / domain / CI/CD / monitoring / backup-restore is not
+   yet stood up. See `cloud/DEPLOYMENT.md`.
 
 ## Recommended next bundled milestone
 

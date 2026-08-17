@@ -7,6 +7,7 @@
 import { getDatabase, now, withTxn } from '../../db';
 import { ulid } from '../../core/ids';
 import { getCurrentOrganizationId, getCurrentLocationId } from '../../core/location';
+import { snapshotPurchaseOrder } from '../../core/sync/reference-entities';
 
 export class PurchaseOrderError extends Error {
   statusCode: number;
@@ -62,6 +63,7 @@ export function createPurchaseOrder(input: CreatePurchaseOrderInput): any {
     input.referenceNumber || null, input.orderDate || null, input.expectedDate || null, input.notes || null,
     input.createdBy || null, timestamp, timestamp,
   );
+  snapshotPurchaseOrder(db, id); // COMMERCIALIZATION — best-effort PO sync snapshot
   return db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(id);
 }
 
@@ -171,6 +173,7 @@ export function markOrdered(purchaseOrderId: string): any {
     throw new PurchaseOrderError('A purchase order needs at least one item before it can be ordered');
   }
   db.prepare("UPDATE purchase_orders SET status = 'ordered', updated_at = ? WHERE id = ?").run(now(), purchaseOrderId);
+  snapshotPurchaseOrder(db, purchaseOrderId); // COMMERCIALIZATION — best-effort PO status sync snapshot
   return db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(purchaseOrderId);
 }
 
@@ -182,6 +185,7 @@ export function cancelPurchaseOrder(purchaseOrderId: string): any {
     throw new PurchaseOrderError(`A purchase order in status '${po.status}' cannot be cancelled`, 400);
   }
   db.prepare("UPDATE purchase_orders SET status = 'cancelled', updated_at = ? WHERE id = ?").run(now(), purchaseOrderId);
+  snapshotPurchaseOrder(db, purchaseOrderId); // COMMERCIALIZATION — best-effort PO status sync snapshot
   return db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(purchaseOrderId);
 }
 

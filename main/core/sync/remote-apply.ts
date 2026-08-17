@@ -23,7 +23,7 @@ import { now } from '../../db';
 import {
   InventoryMovementEventPayload, AuditEventPayload, PaymentEventPayload,
   OrderEventPayload, OrderItemEventPayload, BillEventPayload,
-  SyncEntityType, SyncEventPayload,
+  ReferenceEntityPayload, SyncEntityType, SyncEventPayload, isReferenceEntity,
 } from './types';
 import { recordPending, resolvePendingForParent } from './pending-relationships';
 import { upsertConflict } from './conflict-store';
@@ -88,8 +88,32 @@ export function applyRemoteEvent(db: Db, entityType: SyncEntityType, payload: Sy
     case 'order': return applyRemoteOrder(db, payload as OrderEventPayload);
     case 'order_item': return applyRemoteOrderItem(db, payload as OrderItemEventPayload);
     case 'bill': return applyRemoteBill(db, payload as BillEventPayload);
-    default: throw new Error(`unknown remote entity type: ${entityType}`);
+    default:
+      if (isReferenceEntity(entityType)) return applyRemoteReferenceEntity(db, entityType, payload as ReferenceEntityPayload);
+      throw new Error(`unknown remote entity type: ${entityType}`);
   }
+}
+
+/**
+ * Applies a remote reference/operational snapshot into the generic
+ * `remote_reference_entities` MIRROR (COMMERCIALIZATION). Idempotent by
+ * (entity_type, uid), keeps the highest snapshot_version, never touches the
+ * authoritative catalog/customer/supplier tables, and never re-emits (loop
+ * prevention). Because identity is a stable ULID, re-applying the same record
+ * is a no-op and can never duplicate a local record.
+ */
+export function applyRemoteReferenceEntity(db: Db, entityType: SyncEntityType, p: ReferenceEntityPayload): RemoteApplyResult {
+  const existing = db.prepare('SELECT snapshot_version AS v FROM remote_reference_entities WHERE entity_type = ? AND uid = ?')
+    .get(entityType, p.entity_uid) as { v: number } | undefined;
+  if (existing && existing.v >= p.snapshot_version) return 'skipped';
+  db.prepare(`
+    INSERT INTO remote_reference_entities (entity_type, uid, organization_id, location_id, snapshot_version, payload, sync_origin, updated_at, applied_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'remote', ?, ?)
+    ON CONFLICT(entity_type, uid) DO UPDATE SET organization_id=excluded.organization_id, location_id=excluded.location_id,
+      snapshot_version=excluded.snapshot_version, payload=excluded.payload, updated_at=excluded.updated_at, applied_at=excluded.applied_at
+  `).run(entityType, p.entity_uid, p.organization_id, p.location_id, p.snapshot_version, JSON.stringify(p), p.updated_at, now());
+  // Deliberately NO appendOutboxEvent(...) — loop prevention.
+  return 'applied';
 }
 
 /** True if a newer-or-equal snapshot of this mirror row is already stored. */

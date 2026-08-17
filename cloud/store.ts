@@ -30,10 +30,26 @@ import Database from 'better-sqlite3';
 export type DeviceStatus = 'active' | 'revoked';
 export type CloudEntityType =
   | 'inventory_movement' | 'audit_event' | 'payment_event'
-  | 'order' | 'order_item' | 'bill';
+  | 'order' | 'order_item' | 'bill'
+  | 'product' | 'category' | 'product_variant' | 'addon_group' | 'addon'
+  | 'customer' | 'supplier' | 'purchase_order' | 'purchase_order_item'
+  | 'stock_transfer' | 'stock_transfer_item';
 
-/** Mutable sales entities: many snapshot events per entity_uid (SYNC-E). */
-export const MUTABLE_CLOUD_ENTITIES: ReadonlySet<string> = new Set(['order', 'order_item', 'bill']);
+/** Reference / operational entities: versioned snapshots keyed by ULID id (COMMERCIALIZATION). */
+export const REFERENCE_CLOUD_ENTITIES: ReadonlySet<string> = new Set([
+  'product', 'category', 'product_variant', 'addon_group', 'addon',
+  'customer', 'supplier', 'purchase_order', 'purchase_order_item',
+  'stock_transfer', 'stock_transfer_item',
+]);
+
+/**
+ * Mutable entities: many snapshot events per entity_uid — the sales entities
+ * (SYNC-E) plus the reference/operational entities (COMMERCIALIZATION). All
+ * dedupe by event_uid and keep a current-version projection.
+ */
+export const MUTABLE_CLOUD_ENTITIES: ReadonlySet<string> = new Set([
+  'order', 'order_item', 'bill', ...REFERENCE_CLOUD_ENTITIES,
+]);
 
 export interface CloudConflict {
   conflict_uid: string;

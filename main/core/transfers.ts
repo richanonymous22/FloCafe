@@ -15,6 +15,7 @@ import { getDatabase, now, withTxn } from '../db';
 import { ulid } from './ids';
 import { recordTransfer } from './inventory';
 import { getCurrentOrganizationId } from './location';
+import { snapshotStockTransfer } from './sync/reference-entities';
 
 export class TransferError extends Error {
   statusCode: number;
@@ -57,6 +58,7 @@ export function createTransfer(input: CreateTransferInput): any {
     VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
   `).run(id, getCurrentOrganizationId(), input.fromLocationId, input.toLocationId, input.referenceNumber || null, input.notes || null, input.createdBy || null, timestamp, timestamp);
 
+  snapshotStockTransfer(db, id); // COMMERCIALIZATION — best-effort transfer sync snapshot
   return db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(id);
 }
 
@@ -149,7 +151,9 @@ export function completeTransfer(transferId: string, actorUserId?: string | null
 
     db.prepare("UPDATE stock_transfers SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?")
       .run(now(), now(), transferId);
-    return db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(transferId);
+    snapshotStockTransfer(db, transferId); // COMMERCIALIZATION — best-effort transfer state sync snapshot
+    snapshotStockTransfer(db, transferId); // COMMERCIALIZATION — best-effort transfer state sync snapshot
+  return db.prepare('SELECT * FROM stock_transfers WHERE id = ?').get(transferId);
   });
 }
 

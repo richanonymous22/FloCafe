@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, generateShortId, getSettingValue } from '../db';
 import { requireRole, isBlockedSsrfTarget } from '../middleware/security';
+import { snapshotProduct } from '../core/sync/reference-entities';
 import { getActiveCountryPack, hasConfiguredTaxCategories } from '../services/tax';
 import * as crypto from 'crypto';
 import * as dns from 'dns';
@@ -600,6 +601,7 @@ router.post('/', requireRole('owner', 'manager'), (req: Request, res: Response) 
       }
     });
     insertProduct();
+    snapshotProduct(db, id); // COMMERCIALIZATION — best-effort catalog sync snapshot
 
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
     res.status(201).json({ product });
@@ -717,6 +719,7 @@ router.put('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
       updateAddons();
     }
 
+    snapshotProduct(db, String(req.params.id)); // COMMERCIALIZATION — best-effort catalog sync snapshot
     const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
     res.json({ product: updated });
   } catch (error: any) {

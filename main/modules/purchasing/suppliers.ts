@@ -7,6 +7,7 @@
 import { getDatabase, now } from '../../db';
 import { ulid } from '../../core/ids';
 import { getCurrentOrganizationId } from '../../core/location';
+import { snapshotSupplier } from '../../core/sync/reference-entities';
 
 export class SupplierError extends Error {
   statusCode: number;
@@ -50,6 +51,7 @@ export function createSupplier(input: SupplierInput): any {
     input.phone || null, input.email || null, input.address || null, input.notes || null,
     input.taxRegistrationNumber || null, input.isActive === false ? 0 : 1, timestamp, timestamp,
   );
+  snapshotSupplier(db, id); // COMMERCIALIZATION — best-effort supplier sync snapshot
   return db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id);
 }
 
@@ -80,6 +82,7 @@ export function updateSupplier(id: string, input: Partial<SupplierInput>): any {
     WHERE id = ?
   `).run(next.name, next.business_name, next.contact_person, next.phone, next.email, next.address, next.notes, next.tax_registration_number, next.is_active, now(), id);
 
+  snapshotSupplier(db, id); // COMMERCIALIZATION — best-effort supplier sync snapshot
   return db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id);
 }
 

@@ -5106,6 +5106,37 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 90,
+    name: 'commercialization_reference_mirror',
+    up: () => {
+      // COMMERCIALIZATION — catalog / customer / supplier / operations sync.
+      // One additive, generic MIRROR for every ULID-keyed reference entity
+      // synchronized as a versioned snapshot (product / category /
+      // product_variant / addon_group / addon / customer / supplier /
+      // purchase_order / purchase_order_item / stock_transfer /
+      // stock_transfer_item). A remote reference record lands here — NEVER the
+      // authoritative catalog/customer/supplier tables — so sync can never
+      // overwrite or duplicate the local authoritative model (identity is the
+      // ULID; promotion into the live catalog is a controlled Admin step). No
+      // existing data touched.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_reference_entities (
+          entity_type      TEXT NOT NULL,
+          uid              TEXT NOT NULL,
+          organization_id  TEXT,
+          location_id      TEXT,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          payload          TEXT NOT NULL,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          updated_at       TEXT,
+          applied_at       TEXT NOT NULL,
+          PRIMARY KEY (entity_type, uid)
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_reference_org ON remote_reference_entities(organization_id, entity_type);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

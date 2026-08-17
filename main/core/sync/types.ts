@@ -27,8 +27,29 @@
  */
 export type SyncEntityType =
   | 'inventory_movement' | 'audit_event' | 'payment_event'
-  | 'order' | 'order_item' | 'bill';
+  | 'order' | 'order_item' | 'bill'
+  // Reference / operational entities (COMMERCIALIZATION milestone). All are
+  // versioned mutable snapshots keyed by their ULID id, applied ONLY into a
+  // non-authoritative mirror (never overwriting the local catalog).
+  | 'product' | 'category' | 'product_variant' | 'addon_group' | 'addon'
+  | 'customer' | 'supplier' | 'purchase_order' | 'purchase_order_item'
+  | 'stock_transfer' | 'stock_transfer_item';
 export type SyncOperation = 'create' | 'update' | 'append';
+
+/**
+ * The reference / operational entity types (COMMERCIALIZATION). Unlike sales
+ * conflicts, these are LOW-RISK: their business identity is a stable ULID, so
+ * remote apply is idempotent by id, and their conflict policy is a versioned
+ * snapshot (see docs/COMMERCIAL_PLATFORM_COMPLETION.md, Part G). They are
+ * synchronized through the SAME mutable-snapshot seam as sales, into a generic
+ * mirror — never the authoritative catalog/customer/supplier tables.
+ */
+export const REFERENCE_ENTITIES: ReadonlySet<SyncEntityType> = new Set<SyncEntityType>([
+  'product', 'category', 'product_variant', 'addon_group', 'addon',
+  'customer', 'supplier', 'purchase_order', 'purchase_order_item',
+  'stock_transfer', 'stock_transfer_item',
+]);
+export function isReferenceEntity(t: SyncEntityType): boolean { return REFERENCE_ENTITIES.has(t); }
 export type OutboxStatus = 'pending' | 'uploading' | 'acked' | 'failed';
 
 /**
@@ -189,10 +210,28 @@ export interface BillEventPayload {
   updated_at: string;
 }
 
+/**
+ * A generic reference/operational entity snapshot (COMMERCIALIZATION). The
+ * authoritative row is a ULID-keyed reference record (product/customer/…); the
+ * snapshot carries its business fields verbatim under `fields` (no secrets —
+ * these tables hold none), plus lineage. Applied only into the generic mirror.
+ */
+export interface ReferenceEntityPayload {
+  schema_version: 1;
+  entity_type: string;
+  entity_uid: string;
+  organization_id: string | null;
+  location_id: string | null;
+  snapshot_version: number;
+  updated_at: string | null;
+  fields: Record<string, unknown>;
+}
+
 /** Any synchronized entity payload. */
 export type SyncEventPayload =
   | InventoryMovementEventPayload | AuditEventPayload | PaymentEventPayload
-  | OrderEventPayload | OrderItemEventPayload | BillEventPayload;
+  | OrderEventPayload | OrderItemEventPayload | BillEventPayload
+  | ReferenceEntityPayload;
 
 /** The wire shape of one outbox event handed to a transport for upload. */
 export interface OutboxEventDTO {

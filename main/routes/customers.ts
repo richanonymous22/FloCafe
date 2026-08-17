@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { getDatabase, now, getSettingValue } from '../db';
 import { requireRole } from '../middleware/security';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
+import { snapshotCustomer } from '../core/sync/reference-entities';
 
 export function parseCustomer(c: any): any {
   if (!c) return c;
@@ -271,6 +272,7 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
       timestamp
     );
 
+    snapshotCustomer(db, id); // COMMERCIALIZATION — best-effort customer sync snapshot
     const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
     res.status(201).json({ customer });
   } catch (error: any) {
@@ -324,6 +326,7 @@ router.put('/:id', requireRole('owner', 'manager', 'cashier'), (req: Request, re
       finalPhone, name, email, finalCountryCode, address, notes, now(), req.params.id
     );
 
+    snapshotCustomer(db, String(req.params.id)); // COMMERCIALIZATION — best-effort customer sync snapshot
     const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
     res.json({ customer: updated });
   } catch (error: any) {

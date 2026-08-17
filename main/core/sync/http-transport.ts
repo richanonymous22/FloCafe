@@ -122,6 +122,13 @@ export class HttpSyncTransport implements SyncTransport, SyncPullTransport {
     const data = await res.json().catch(() => ({})) as { deficits?: Array<Record<string, unknown>> };
     return data.deficits ?? [];
   }
+
+  /** Pulls the organization's server-side license (PLATFORM-HARDENING). Null when unlicensed. */
+  async pullLicense(): Promise<Record<string, unknown> | null> {
+    const res = await this.signedFetch('GET', '/sync/v1/license', '');
+    const data = await res.json().catch(() => ({})) as { license?: Record<string, unknown> | null };
+    return data.license ?? null;
+  }
 }
 
 /** A conflict as the cloud reports it to a device (SYNC-F). */

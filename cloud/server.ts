@@ -20,7 +20,7 @@
  */
 
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
+import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
 
@@ -44,6 +44,7 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   // Operator read models (SYNC-G).
   organizationHealth(organizationUid: string): OrganizationHealth | Promise<OrganizationHealth>;
   listDeficits(organizationUid: string): CloudInventoryDeficit[] | Promise<CloudInventoryDeficit[]>;
+  getLicense(organizationUid: string): CloudLicense | null | Promise<CloudLicense | null>;
 }
 
 /**
@@ -394,6 +395,16 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     const device = await authOrReject(req, res);
     if (!device) return;
     res.json({ deficits: await store.listDeficits(device.organization_uid) });
+  });
+
+  // ── PLATFORM-HARDENING: license verification (organization-scoped) ───────
+  // A device authenticates and receives ONLY its own org's license. No secret
+  // is ever sent to the client; the license is verifiable server state.
+  app.get('/sync/v1/license', async (req: Request, res: Response) => {
+    const device = await authOrReject(req, res);
+    if (!device) return;
+    const license = await store.getLicense(device.organization_uid);
+    res.json({ license });
   });
 
   return app;

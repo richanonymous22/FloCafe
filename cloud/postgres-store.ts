@@ -20,7 +20,7 @@ import type {
   CloudDevice, CloudEvent, CloudPullPage, CloudFeedItem,
   StoreResult, EnrollmentToken, CloudInventoryDeficit, OrganizationHealth,
   DeficitStatus, CloudInventoryMovement, CloudFeedEvent, CloudConflict,
-  ConflictResolutionInput,
+  ConflictResolutionInput, CloudLicense,
 } from './store';
 import { MUTABLE_CLOUD_ENTITIES } from './store';
 
@@ -161,6 +161,25 @@ export class PostgresCloudStore {
 
   async listConflictResolutions(conflictUid: string): Promise<Array<Record<string, unknown>>> {
     return (await this.pg.query('SELECT * FROM cloud_conflict_resolutions WHERE conflict_uid = $1 ORDER BY recorded_at ASC', [conflictUid])).rows;
+  }
+
+  async getLicense(organizationUid: string): Promise<CloudLicense | null> {
+    const row = (await this.pg.query<Omit<CloudLicense, 'features'> & { features: string }>('SELECT * FROM cloud_licenses WHERE organization_uid = $1', [organizationUid])).rows[0];
+    if (!row) return null;
+    let features: string[] = [];
+    try { features = JSON.parse(row.features); } catch { features = []; }
+    return { ...row, grace_days: Number(row.grace_days), device_limit: row.device_limit == null ? null : Number(row.device_limit), location_limit: row.location_limit == null ? null : Number(row.location_limit), features };
+  }
+  async upsertLicense(license: CloudLicense, at: string): Promise<void> {
+    await this.pg.query(
+      `INSERT INTO cloud_licenses (organization_uid, status, plan, issued_at, activated_at, expires_at, grace_days, device_limit, location_limit, features, signature, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (organization_uid) DO UPDATE SET status=EXCLUDED.status, plan=EXCLUDED.plan, issued_at=EXCLUDED.issued_at,
+         activated_at=EXCLUDED.activated_at, expires_at=EXCLUDED.expires_at, grace_days=EXCLUDED.grace_days,
+         device_limit=EXCLUDED.device_limit, location_limit=EXCLUDED.location_limit, features=EXCLUDED.features,
+         signature=EXCLUDED.signature, updated_at=EXCLUDED.updated_at`,
+      [license.organization_uid, license.status, license.plan, license.issued_at, license.activated_at, license.expires_at,
+        license.grace_days, license.device_limit, license.location_limit, JSON.stringify(license.features ?? []), license.signature, at]);
   }
 
   private inventoryFields(evt: CloudEvent): InventoryFields | null {

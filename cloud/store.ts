@@ -83,6 +83,21 @@ export interface ConflictResolutionInput {
   resolved_at?: string | null;
 }
 
+/** The server-side license an org's devices verify against (PLATFORM-HARDENING). */
+export interface CloudLicense {
+  organization_uid: string;
+  status: 'active' | 'expired' | 'suspended' | 'revoked' | 'unlicensed';
+  plan: string;
+  issued_at: string | null;
+  activated_at: string | null;
+  expires_at: string | null;
+  grace_days: number;
+  device_limit: number | null;
+  location_limit: number | null;
+  features: string[];
+  signature: string | null;
+}
+
 export interface CloudDevice {
   device_uid: string;
   organization_uid: string;
@@ -219,6 +234,10 @@ export interface CloudStore {
   recordConflictResolution(input: ConflictResolutionInput, at: string): void;
   listConflictResolutions(conflictUid: string): Array<Record<string, unknown>>;
 
+  // ── Licensing (PLATFORM-HARDENING) ────────────────────────────────────────
+  getLicense(organizationUid: string): CloudLicense | null;
+  upsertLicense(license: CloudLicense, at: string): void;
+
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void;
   observability(): { accepted: number; duplicate: number; rejected: number; authFailure: number };
   observabilityByEntity(): Record<string, { accepted: number; duplicate: number; rejected: number }>;
@@ -320,6 +339,15 @@ export class SqliteCloudStore implements CloudStore {
         recorded_at            TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cloud_conflict_resolutions ON cloud_conflict_resolutions(conflict_uid, recorded_at);
+      CREATE TABLE IF NOT EXISTS cloud_licenses (
+        organization_uid TEXT PRIMARY KEY,
+        status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','suspended','revoked','unlicensed')),
+        plan             TEXT NOT NULL DEFAULT 'pilot',
+        issued_at        TEXT, activated_at TEXT, expires_at TEXT,
+        grace_days       INTEGER NOT NULL DEFAULT 7,
+        device_limit     INTEGER, location_limit INTEGER,
+        features         TEXT NOT NULL DEFAULT '[]', signature TEXT, updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS cloud_feed_sequence (organization_uid TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS cloud_nonces (device_uid TEXT NOT NULL, nonce TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (device_uid, nonce));
       CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
@@ -597,6 +625,25 @@ export class SqliteCloudStore implements CloudStore {
 
   listConflictResolutions(conflictUid: string): Array<Record<string, unknown>> {
     return this.db.prepare('SELECT * FROM cloud_conflict_resolutions WHERE conflict_uid = ? ORDER BY recorded_at ASC').all(conflictUid) as Array<Record<string, unknown>>;
+  }
+
+  getLicense(organizationUid: string): CloudLicense | null {
+    const row = this.db.prepare('SELECT * FROM cloud_licenses WHERE organization_uid = ?').get(organizationUid) as (Omit<CloudLicense, 'features'> & { features: string }) | undefined;
+    if (!row) return null;
+    let features: string[] = [];
+    try { features = JSON.parse(row.features); } catch { features = []; }
+    return { ...row, features };
+  }
+  upsertLicense(license: CloudLicense, at: string): void {
+    this.db.prepare(`
+      INSERT INTO cloud_licenses (organization_uid, status, plan, issued_at, activated_at, expires_at, grace_days, device_limit, location_limit, features, signature, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(organization_uid) DO UPDATE SET status=excluded.status, plan=excluded.plan, issued_at=excluded.issued_at,
+        activated_at=excluded.activated_at, expires_at=excluded.expires_at, grace_days=excluded.grace_days,
+        device_limit=excluded.device_limit, location_limit=excluded.location_limit, features=excluded.features,
+        signature=excluded.signature, updated_at=excluded.updated_at
+    `).run(license.organization_uid, license.status, license.plan, license.issued_at, license.activated_at, license.expires_at,
+      license.grace_days, license.device_limit, license.location_limit, JSON.stringify(license.features ?? []), license.signature, at);
   }
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void {

@@ -185,3 +185,35 @@ export function activateLicense(license: License): License {
   setLicense(activated);
   return activated;
 }
+
+/**
+ * A `LicenseVerifier` backed by the cloud license endpoint
+ * (`GET /sync/v1/license`, PLATFORM-HARDENING). The org is resolved server-side
+ * from the authenticated device, so no secret is embedded in the client. A
+ * missing/unlicensed cloud record yields an `unlicensed` license; a network
+ * failure throws (so `refreshLicense` keeps the cached entitlement — offline
+ * grace). The real signed-payload check would be added here when the cloud
+ * license service signs its responses.
+ */
+export function createCloudLicenseVerifier(pullLicense: () => Promise<Record<string, unknown> | null>): LicenseVerifier {
+  return {
+    async verify(_organizationUid: string): Promise<License> {
+      const raw = await pullLicense();
+      if (!raw) return { ...UNLICENSED };
+      return {
+        ...UNLICENSED,
+        status: (raw.status as License['status']) ?? 'unlicensed',
+        plan: String(raw.plan ?? 'none'),
+        organization_uid: (raw.organization_uid as string) ?? null,
+        issued_at: (raw.issued_at as string) ?? null,
+        activated_at: (raw.activated_at as string) ?? null,
+        expires_at: (raw.expires_at as string) ?? null,
+        grace_days: Number(raw.grace_days ?? 0),
+        device_limit: raw.device_limit == null ? null : Number(raw.device_limit),
+        location_limit: raw.location_limit == null ? null : Number(raw.location_limit),
+        features: Array.isArray(raw.features) ? (raw.features as string[]) : [],
+        signature: (raw.signature as string) ?? null,
+      };
+    },
+  };
+}

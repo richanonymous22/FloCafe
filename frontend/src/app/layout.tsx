@@ -17,13 +17,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flo",
-  description: "Smart Point of Sale for restaurants",
+  title: "Plemmo EPOS",
+  description: "Offline-first EPOS for hospitality and retail",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Flo",
+    title: "Plemmo EPOS",
   },
   icons: {
     icon: [

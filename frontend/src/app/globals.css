@@ -4,41 +4,167 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * ============================================================================
+ * PLEMMO EPOS — DESIGN SYSTEM (Phase A)
+ * ============================================================================
+ * A deliberate, semantic token layer. Colours are never picked per component;
+ * every surface, border, text tone and state reads from a named token here so
+ * the product looks intentional across all routes — retail, hospitality, back
+ * office and admin alike.
+ *
+ * The token *names* below are compatible with the shadcn/ui components already
+ * in the tree (--background, --primary, --border …). Their *values* have been
+ * retuned to the Plemmo palette, so every existing screen inherits the new
+ * visual language without a per-page rewrite. New semantic tokens (surface,
+ * elevated, success, warning, info, and the Plemmo brand ramp) are layered on
+ * top for the rebuilt experiences.
+ *
+ * Palette intent: a confident Plemmo indigo primary on cool, near-neutral
+ * greys with a faint blue cast — the restrained, operational look of software
+ * businesses trust with money and stock. Not "AI teal + grey".
+ * ============================================================================
+ */
+
 :root {
   --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", monospace;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  /* Radius — restrained. Operational tools, not a marketing site. */
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+
+  /* ── Core surfaces & text (shadcn-compatible names, Plemmo values) ── */
+  --background: oklch(0.977 0.002 264);      /* app canvas: cool off-white */
+  --foreground: oklch(0.205 0.02 264);       /* near-black slate */
+  --card: oklch(1 0 0);                       /* white surface */
+  --card-foreground: oklch(0.205 0.02 264);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: #3248FF;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: #e8ebff;
-  --sidebar-accent-foreground: #3248FF;
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: #3248FF;
+  --popover-foreground: oklch(0.205 0.02 264);
+
+  --primary: oklch(0.53 0.243 268);           /* Plemmo indigo #3248FF */
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.004 264);        /* soft grey chip */
+  --secondary-foreground: oklch(0.28 0.02 264);
+  --muted: oklch(0.955 0.004 264);
+  --muted-foreground: oklch(0.505 0.02 264);  /* metadata slate */
+  --accent: oklch(0.955 0.02 268);            /* faint indigo tint */
+  --accent-foreground: oklch(0.44 0.2 268);
+  --destructive: oklch(0.577 0.226 27.2);     /* danger red */
+  --border: oklch(0.912 0.006 264);           /* subtle cool border */
+  --input: oklch(0.912 0.006 264);
+  --ring: oklch(0.53 0.243 268);
+
+  /* ── Extended semantic surfaces ── */
+  --surface: oklch(1 0 0);                     /* primary surface */
+  --surface-sunken: oklch(0.962 0.003 264);    /* wells, inset areas */
+  --surface-raised: oklch(1 0 0);              /* cards that float */
+  --border-strong: oklch(0.86 0.008 264);      /* dividers that must read */
+  --text-subtle: oklch(0.62 0.015 264);        /* tertiary text */
+
+  /* ── State colours (+ tint + foreground) ── */
+  --success: oklch(0.62 0.16 156);             /* money-safe green */
+  --success-foreground: oklch(0.99 0 0);
+  --success-tint: oklch(0.955 0.05 156);
+  --warning: oklch(0.72 0.16 70);              /* amber */
+  --warning-foreground: oklch(0.26 0.05 70);
+  --warning-tint: oklch(0.96 0.05 82);
+  --info: oklch(0.58 0.16 250);                /* blue info */
+  --info-foreground: oklch(0.99 0 0);
+  --info-tint: oklch(0.955 0.03 250);
+  --danger-tint: oklch(0.96 0.03 27);
+
+  /* ── Charts ── */
+  --chart-1: oklch(0.53 0.243 268);
+  --chart-2: oklch(0.62 0.16 156);
+  --chart-3: oklch(0.72 0.16 70);
+  --chart-4: oklch(0.58 0.16 250);
+  --chart-5: oklch(0.62 0.2 330);
+
+  /* ── Sidebar / shell chrome ── */
+  --sidebar: oklch(0.223 0.03 266);            /* deep indigo-slate rail */
+  --sidebar-foreground: oklch(0.9 0.01 264);
+  --sidebar-primary: oklch(0.53 0.243 268);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.3 0.04 266);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.32 0.03 266);
+  --sidebar-ring: oklch(0.53 0.243 268);
+
+  /* ── Brand ramp ── */
+  --brand: #3248ff;
+  --brand-strong: #2538d4;
+  --brand-soft: #eef1ff;
+  --brand-ring: #3248ff66;
+
+  /* ── Elevation ── */
+  --shadow-xs: 0 1px 2px 0 oklch(0.2 0.02 264 / 0.04);
+  --shadow-sm: 0 1px 2px 0 oklch(0.2 0.02 264 / 0.06), 0 1px 3px 0 oklch(0.2 0.02 264 / 0.04);
+  --shadow-md: 0 2px 4px -1px oklch(0.2 0.02 264 / 0.06), 0 6px 16px -4px oklch(0.2 0.02 264 / 0.08);
+  --shadow-lg: 0 12px 32px -8px oklch(0.2 0.02 264 / 0.16);
+}
+
+.dark {
+  --background: oklch(0.17 0.015 264);
+  --foreground: oklch(0.94 0.006 264);
+  --card: oklch(0.215 0.018 264);
+  --card-foreground: oklch(0.94 0.006 264);
+  --popover: oklch(0.215 0.018 264);
+  --popover-foreground: oklch(0.94 0.006 264);
+
+  --primary: oklch(0.62 0.22 268);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.28 0.02 264);
+  --secondary-foreground: oklch(0.94 0.006 264);
+  --muted: oklch(0.28 0.02 264);
+  --muted-foreground: oklch(0.68 0.015 264);
+  --accent: oklch(0.3 0.04 268);
+  --accent-foreground: oklch(0.9 0.02 268);
+  --destructive: oklch(0.65 0.2 27);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.62 0.22 268);
+
+  --surface: oklch(0.215 0.018 264);
+  --surface-sunken: oklch(0.19 0.015 264);
+  --surface-raised: oklch(0.25 0.02 264);
+  --border-strong: oklch(1 0 0 / 20%);
+  --text-subtle: oklch(0.6 0.015 264);
+
+  --success: oklch(0.68 0.15 156);
+  --success-foreground: oklch(0.15 0.02 156);
+  --success-tint: oklch(0.3 0.06 156);
+  --warning: oklch(0.78 0.15 78);
+  --warning-foreground: oklch(0.2 0.04 70);
+  --warning-tint: oklch(0.32 0.06 78);
+  --info: oklch(0.66 0.15 250);
+  --info-foreground: oklch(0.15 0.02 250);
+  --info-tint: oklch(0.3 0.05 250);
+  --danger-tint: oklch(0.3 0.05 27);
+
+  --chart-1: oklch(0.62 0.22 268);
+  --chart-2: oklch(0.68 0.15 156);
+  --chart-3: oklch(0.78 0.15 78);
+  --chart-4: oklch(0.66 0.15 250);
+  --chart-5: oklch(0.68 0.18 330);
+
+  --sidebar: oklch(0.185 0.016 264);
+  --sidebar-foreground: oklch(0.9 0.01 264);
+  --sidebar-primary: oklch(0.62 0.22 268);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.28 0.02 264);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.62 0.22 268);
+
+  --brand: #5468ff;
+  --brand-strong: #6d7dff;
+  --brand-soft: oklch(0.3 0.06 268);
+  --brand-ring: #5468ff66;
+
+  --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.4), 0 1px 3px 0 oklch(0 0 0 / 0.3);
+  --shadow-md: 0 2px 4px -1px oklch(0 0 0 / 0.4), 0 6px 16px -4px oklch(0 0 0 / 0.5);
+  --shadow-lg: 0 12px 32px -8px oklch(0 0 0 / 0.6);
 }
 
 body {
@@ -46,21 +172,21 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
+  background: color-mix(in oklch, var(--foreground) 18%, transparent);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: color-mix(in oklch, var(--foreground) 32%, transparent);
+  background-clip: content-box;
 }
 
 @theme inline {
@@ -71,6 +197,7 @@ body {
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -103,48 +230,36 @@ body {
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Brand colors */
-  --color-brand: #3248FF;
-  --color-brand-light: #e8ebff;
-  --color-brand-hover: #2538d4;
-  --color-brand-ring: #3248FF80;
-  --color-success: #00cc61;
-  --color-success-light: #dcfce7;
-  --color-success-hover: #00b355;
-}
+  /* ── Plemmo semantic surfaces ── */
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-strong: var(--border-strong);
+  --color-text-subtle: var(--text-subtle);
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: #3248FF;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: #3248FF;
+  /* ── Plemmo state colours ── */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-tint: var(--success-tint);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-tint: var(--warning-tint);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-tint: var(--info-tint);
+  --color-danger-tint: var(--danger-tint);
+
+  /* ── Plemmo brand ── */
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+
+  /* Back-compat aliases used by legacy screens */
+  --color-brand-light: var(--brand-soft);
+  --color-brand-hover: var(--brand-strong);
+  --color-brand-ring: var(--brand-ring);
+  --color-success-light: var(--success-tint);
+  --color-success-hover: var(--success);
 }
 
 @layer base {
@@ -153,7 +268,48 @@ body {
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
+}
+
+/*
+ * ── Typography helpers ──────────────────────────────────────────────────
+ * Tabular numerals for anything financial or identity-bearing: money totals,
+ * quantities, percentages, Business MID, Location/Terminal IDs. Numbers must
+ * align in columns and never jitter as they change.
+ */
+@layer utilities {
+  .tabular-nums,
+  .font-tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+  .numeric {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    letter-spacing: -0.01em;
+  }
+  /* Monospaced identity strings (MID, terminal, licence keys). */
+  .font-identity {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+}
+
+/*
+ * ── Density ─────────────────────────────────────────────────────────────
+ * TOUCH mode enlarges hit areas for till / scanning surfaces; COMFORTABLE is
+ * the back-office default. Screens opt in with data-density="touch".
+ */
+[data-density="touch"] {
+  --control-h: 3rem;
+  --tap: 3rem;
+}
+:root {
+  --control-h: 2.25rem;
+  --tap: 2.75rem;
 }
 
 @keyframes shake-centered {
@@ -174,9 +330,19 @@ body {
   animation: shake 0.4s ease-in-out;
 }
 
+@keyframes plemmo-pulse-ring {
+  0% { box-shadow: 0 0 0 0 var(--brand-ring); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.animate-pulse-ring {
+  animation: plemmo-pulse-ring 1.6s ease-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-shake,
-  .animate-shake-centered {
+  .animate-shake-centered,
+  .animate-pulse-ring {
     animation: none;
   }
 }

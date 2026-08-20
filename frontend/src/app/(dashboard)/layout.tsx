@@ -9,7 +9,8 @@ import GlobalNotifications from '@/components/layout/GlobalNotifications';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isPos = pathname === '/pos' || pathname === '/kds';
+  // Full-height, non-scrolling till/operational surfaces run edge-to-edge.
+  const isPos = pathname === '/pos' || pathname === '/kds' || pathname === '/retail';
 
   return (
     <AuthGuard>

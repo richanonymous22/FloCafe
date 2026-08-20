@@ -1,0 +1,224 @@
+'use client';
+
+/**
+ * LEGACY reference sidebar (pre-Plemmo-rebuild).
+ *
+ * Preserved intentionally during the Plemmo frontend rebuild so the previous
+ * flat navigation remains recoverable until the new grouped shell reaches full
+ * parity (see the rebuild brief §5). Not imported anywhere — the live shell is
+ * Sidebar.tsx. To fall back to the old navigation, re-point DashboardLayout's
+ * `AppSidebar` import at this file. Safe to delete once the new shell is signed
+ * off.
+ */
+
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import {
+  LayoutDashboard,
+  ShoppingCart,
+  Store,
+  Boxes,
+  Truck,
+  ArrowLeftRight,
+  MapPin,
+  ClipboardList,
+  Package,
+  Grid3X3,
+  Users,
+  UserCog,
+  Settings,
+  LogOut,
+  PanelLeft,
+  ChefHat,
+  UserCircle,
+  LifeBuoy,
+  Scale,
+} from 'lucide-react';
+import { useAuthStore } from '@/store/auth';
+import { usePosSettingsStore } from '@/store/pos-settings';
+import { getLandingPage } from '@/components/layout/AuthGuard';
+import api from '@/lib/api';
+import { useI18n } from '@/hooks/useI18n';
+import { useConfirm } from '@/hooks/use-confirm';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+  useSidebar,
+} from '@/components/ui/sidebar';
+
+// null = show for all business types
+const ALL_NAV_ITEMS = [
+  { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
+  { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
+  { href: '/inventory', labelKey: 'nav.inventory', icon: Boxes, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/purchasing', labelKey: 'nav.purchasing', icon: Truck, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/suppliers', labelKey: 'nav.suppliers', icon: Truck, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/transfers', labelKey: 'nav.transfers', icon: ArrowLeftRight, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/reconciliation', labelKey: 'nav.reconciliation', icon: Scale, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/locations', labelKey: 'nav.locations', icon: MapPin, roles: ['owner'], businessTypes: null },
+  { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, roles: ['owner'], businessTypes: null },
+  { href: '/orders', labelKey: 'nav.orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
+  { href: '/products', labelKey: 'nav.products', icon: Package, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/tables', labelKey: 'nav.tables', icon: Grid3X3, roles: ['owner', 'manager'], businessTypes: ['restaurant'] },
+  { href: '/settings?tab=kds', labelKey: 'nav.kds', icon: ChefHat, roles: ['owner', 'manager'], businessTypes: ['restaurant'] },
+  { href: '/customers', labelKey: 'nav.customers', icon: Users, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/staff', labelKey: 'nav.staff', icon: UserCog, roles: ['owner', 'manager'], businessTypes: null },
+  { href: '/settings', labelKey: 'nav.settings', icon: Settings, roles: ['owner', 'manager'], businessTypes: null },
+];
+
+export default function AppSidebar() {
+  const pathname = usePathname();
+  const { user, currentTenant, logout } = useAuthStore();
+  const { tablesRequired, kdsEnabled, setTablesRequired, setKdsEnabled } = usePosSettingsStore();
+  const { isMobile, setOpenMobile, toggleSidebar } = useSidebar();
+  const { t } = useI18n();
+  const { confirm, ConfirmDialog } = useConfirm();
+  const [emailNeedsAttention, setEmailNeedsAttention] = useState(false);
+  const closeMobile = () => { if (isMobile) setOpenMobile(false); };
+
+  const role = currentTenant?.role || 'cashier';
+  const businessType = currentTenant?.business_type || 'restaurant';
+  const navItems = ALL_NAV_ITEMS.filter((item) => {
+    if (item.href === '/tables' && !tablesRequired) return false;
+    // KDS disabled → hide the nav entry entirely (issue #133).
+    if (item.href === '/settings?tab=kds' && !kdsEnabled) return false;
+    return item.roles.includes(role)
+      && (item.businessTypes === null || item.businessTypes.includes(businessType));
+  });
+  const homeHref = getLandingPage();
+
+  useEffect(() => {
+    if (!currentTenant) return;
+    api.get('/settings/business')
+      .then((res) => {
+        setTablesRequired(typeof res.data.tables_required === 'boolean' ? res.data.tables_required : true);
+      })
+      .catch(() => { });
+    api.get('/settings/kds_enabled')
+      .then((res) => setKdsEnabled(res.data.setting?.value !== 'false'))
+      .catch(() => { });
+  }, [currentTenant, setTablesRequired, setKdsEnabled]);
+
+  useEffect(() => {
+    if (role !== 'owner') return;
+    let active = true;
+    const refreshCloudAttention = async () => {
+      try {
+        const [accountResponse, cloudResponse] = await Promise.all([
+          api.get('/settings/cloud/account'),
+          api.get('/settings/cloud'),
+        ]);
+        if (!active) return;
+        const deletionStatus = accountResponse.data?.deletion_request?.status || cloudResponse.data?.cloud_deletion_status;
+        setEmailNeedsAttention(
+          (accountResponse.data?.cloud_account_available !== false && Boolean(accountResponse.data?.email) && !accountResponse.data?.verified)
+          || ['pending', 'processing', 'failed'].includes(deletionStatus)
+        );
+      } catch {
+        if (active) setEmailNeedsAttention(false);
+      }
+    };
+    void refreshCloudAttention();
+    window.addEventListener('flo:cloud-account-status-changed', refreshCloudAttention);
+    return () => {
+      active = false;
+      window.removeEventListener('flo:cloud-account-status-changed', refreshCloudAttention);
+    };
+  }, [role]);
+
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" asChild>
+              <Link href={homeHref}>
+                <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground font-semibold">
+                  {(currentTenant?.business_name || t('common.brandName')).charAt(0).toUpperCase()}
+                </div>
+                <div className="flex flex-col gap-0.5 min-w-0 leading-none">
+                  <span className="font-semibold truncate">{currentTenant?.business_name || t('common.brandName')}</span>
+                </div>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {navItems.map((item) => {
+                const [hrefPath, hrefQuery] = item.href.split('?');
+                const isActive = !hrefQuery && (pathname === hrefPath || pathname?.startsWith(hrefPath + '/'));
+                return (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton asChild isActive={isActive} tooltip={t(item.labelKey)}>
+                      <Link href={item.href} onClick={closeMobile}>
+                        <span className="relative flex size-4 shrink-0 items-center justify-center">
+                          <item.icon className="size-4 shrink-0" />
+                          {item.href === '/settings' && emailNeedsAttention && (
+                            <span aria-label="Email verification required" className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-sidebar" />
+                          )}
+                        </span>
+                        <span>{t(item.labelKey)}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild isActive={pathname === '/support'} tooltip={t('nav.support')}>
+              <Link href="/support" onClick={closeMobile}>
+                <LifeBuoy />
+                <span>{t('nav.support')}</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={toggleSidebar} tooltip={t('nav.toggleSidebar')}>
+              <PanelLeft />
+              <span>{t('nav.collapse')}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            {/* Identity label, not a button — nothing to click through to, so it
+                deliberately skips SidebarMenuButton's interactive/hover styling. */}
+            <div
+              title={user?.name || user?.email || t('nav.user', { defaultValue: 'User' })}
+              className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-sidebar-foreground/70 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0"
+            >
+              <UserCircle />
+              <span className="truncate">{user?.name || user?.email || t('nav.user', { defaultValue: 'User' })}</span>
+            </div>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={async () => { if (await confirm(t('nav.confirmLogout', { defaultValue: 'Are you sure you want to log out?' }))) logout(); }} tooltip={t('nav.logoutTooltip')}>
+              <LogOut />
+              <span>{t('nav.logout')}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+      <SidebarRail />
+      {ConfirmDialog}
+    </Sidebar>
+  );
+}

@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { FoodSprite, FoodTile } from '@/components/brand/FoodSprite';
 import { ArrowLeft, ArrowRight, Check, Cloud, Database, KeyRound, Search, Sparkles, UtensilsCrossed, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { COUNTRIES, getCountryByCode, countryName, type Country } from '@/lib/countries';
@@ -245,11 +246,17 @@ export default function SetupPage() {
     <div className="min-h-screen bg-muted/30 lg:grid lg:grid-cols-[400px_1fr]">
       {/* Brand rail + vertical stepper */}
       <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary p-10 text-primary-foreground lg:flex">
+        <FoodSprite />
         <div className="pointer-events-none absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -left-16 size-96 rounded-full bg-black/10 blur-3xl" />
+        <FoodTile art="f-bowl" bg="#FFFFFF" size={104} className="absolute -right-6 top-24 rotate-6 opacity-95 shadow-[0_20px_52px_-18px_rgba(26,26,26,.5)]" />
+        <FoodTile art="f-coffee" bg="#FFF6E5" size={84} className="absolute -right-3 bottom-28 -rotate-6 opacity-95 shadow-[0_16px_40px_-14px_rgba(26,26,26,.45)]" />
         <div className="relative flex items-center gap-2.5">
-          <div className="grid size-9 place-items-center rounded-lg bg-white/15 text-sm font-semibold">P</div>
-          <span className="text-xl font-semibold tracking-tight">Plemmo</span>
+          <div className="grid size-9 place-items-center rounded-xl bg-white/15 text-base font-bold">P</div>
+          <div className="leading-tight">
+            <p className="text-[15px] font-bold">Plemmo</p>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/60">POS System</p>
+          </div>
         </div>
         <div className="relative">
           <h1 className="text-3xl font-semibold tracking-tight">{t('setup.welcome')}</h1>

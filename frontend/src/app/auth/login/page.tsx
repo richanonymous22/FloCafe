@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useI18n } from '@/hooks/useI18n';
 import { ROLE_LABEL_KEYS, BUSINESS_TYPE_LABEL_KEYS } from '@/lib/i18n-enums';
 import { Eye, EyeOff } from 'lucide-react';
+import { FoodSprite, FoodTile } from '@/components/brand/FoodSprite';
 
 function LoginContent() {
   const router = useRouter();
@@ -119,88 +120,97 @@ function LoginContent() {
 
   const shouldShowTenantSelect = !!(user && (tenants.length > 1 || searchParams.get('select_tenant') === 'true'));
 
-  const brandPanel = (
-    <div className="relative hidden flex-col justify-between overflow-hidden bg-primary p-12 text-primary-foreground lg:flex">
-      {/* subtle editorial depth */}
-      <div className="pointer-events-none absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-32 -left-16 size-96 rounded-full bg-black/10 blur-3xl" />
-      <div className="relative flex items-center gap-2.5">
-        <div className="grid size-9 place-items-center rounded-lg bg-white/15 text-sm font-semibold">P</div>
-        <span className="text-display text-2xl">Plemmo</span>
+  const servaPanel = (
+    <div className="relative hidden overflow-hidden bg-primary lg:block">
+      <div className="pointer-events-none absolute -right-24 -top-24 size-80 rounded-full bg-white/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-28 -left-20 size-80 rounded-full bg-black/10 blur-3xl" />
+      {/* floating food tiles — clustered on the right, clear of the copy */}
+      <FoodTile art="f-burger" bg="#FFFFFF" size={124} className="absolute right-6 top-8 rotate-6 shadow-[0_20px_52px_-18px_rgba(26,26,26,.5)]" />
+      <FoodTile art="f-shake" bg="#FFF6E5" size={96} className="absolute right-10 top-1/2 -translate-y-1/2 -rotate-6 shadow-[0_16px_40px_-14px_rgba(26,26,26,.45)]" />
+      <FoodTile art="f-fries" bg="#FFFFFF" size={108} className="absolute bottom-8 right-7 -rotate-3 shadow-[0_16px_40px_-14px_rgba(26,26,26,.45)]" />
+      <div className="relative z-10 flex h-full flex-col justify-between p-10 text-primary-foreground">
+        <div className="flex items-center gap-2.5">
+          <div className="grid size-9 place-items-center rounded-xl bg-white/15 text-base font-bold">P</div>
+          <div className="leading-tight">
+            <p className="text-[15px] font-bold">Plemmo</p>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/60">POS System</p>
+          </div>
+        </div>
+        <div className="max-w-xs">
+          <h1 className="text-[30px] font-bold leading-[1.15]">Run the whole counter from one calm screen.</h1>
+          <p className="mt-4 text-sm leading-relaxed text-white/75">Sales, stock, staff and reports — offline-first, running on your own machine.</p>
+        </div>
+        <p className="text-xs text-white/50">Plemmo EPOS</p>
       </div>
-      <div className="relative">
-        <p className="eyebrow text-primary-foreground/60">Point of sale</p>
-        <h1 className="mt-3 max-w-md text-display-lg text-4xl leading-[1.1]">
-          Software your business trusts with money and stock.
-        </h1>
-        <p className="mt-5 max-w-sm text-sm leading-relaxed text-primary-foreground/70">
-          Fast counter sales, inventory, reporting and end-of-day — offline-first,
-          running on your own machine.
-        </p>
-      </div>
-      <p className="relative text-xs text-primary-foreground/50">Plemmo EPOS</p>
     </div>
   );
 
   const mobileWordmark = (
-    <div className="mb-10 flex items-center gap-2.5 lg:hidden">
-      <div className="grid size-9 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">P</div>
-      <span className="text-display text-2xl text-foreground">Plemmo</span>
+    <div className="mb-8 flex items-center gap-2.5 lg:hidden">
+      <div className="grid size-9 place-items-center rounded-xl bg-primary text-base font-bold text-primary-foreground">P</div>
+      <div className="leading-tight">
+        <p className="text-[15px] font-bold text-foreground">Plemmo</p>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-text-subtle">POS System</p>
+      </div>
+    </div>
+  );
+
+  const shell = (children: React.ReactNode) => (
+    <div className="grid min-h-screen place-items-center bg-background p-4 sm:p-6">
+      <FoodSprite />
+      <div className="grid w-full max-w-[1000px] overflow-hidden rounded-[28px] border border-hairline bg-card shadow-lg lg:min-h-[600px] lg:grid-cols-[1.05fr_1fr]">
+        {servaPanel}
+        <div className="flex items-center justify-center p-8 sm:p-12">
+          <div className="w-full max-w-sm">{children}</div>
+        </div>
+      </div>
     </div>
   );
 
   if (shouldShowTenantSelect) {
-    return (
-      <div className="grid min-h-screen bg-background lg:grid-cols-2">
-        {brandPanel}
-        <div className="flex items-center justify-center p-6 sm:p-12">
-          <div className="w-full max-w-sm">
-            {mobileWordmark}
-            <p className="eyebrow">{t('auth.selectBusinessHint')}</p>
-            <h2 className="mb-8 mt-1 text-display-lg text-3xl text-foreground">{t('auth.selectBusiness')}</h2>
-            <div className="space-y-3">
-              {tenants.map((tenant) => (
-                <button
-                  key={tenant.id}
-                  onClick={() => handleTenantSelect(tenant.id)}
-                  disabled={loading}
-                  className="group w-full rounded-xl border border-border bg-surface p-4 text-left shadow-xs transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-sm"
-                >
-                  <div className="font-semibold text-foreground group-hover:text-primary">{tenant.business_name}</div>
-                  <div className="mt-0.5 text-sm text-muted-foreground">{t(BUSINESS_TYPE_LABEL_KEYS[tenant.business_type ?? ''] ?? tenant.business_type ?? '')} &middot; {t(ROLE_LABEL_KEYS[tenant.role ?? ''] ?? tenant.role ?? '')}</div>
-                </button>
-              ))}
-            </div>
-          </div>
+    return shell(
+      <>
+        {mobileWordmark}
+        <p className="text-xs font-bold uppercase tracking-widest text-text-subtle">{t('auth.selectBusinessHint')}</p>
+        <h2 className="mb-8 mt-1.5 text-2xl font-bold text-foreground">{t('auth.selectBusiness')}</h2>
+        <div className="space-y-3">
+          {tenants.map((tenant) => (
+            <button
+              key={tenant.id}
+              onClick={() => handleTenantSelect(tenant.id)}
+              disabled={loading}
+              className="group w-full rounded-2xl border border-hairline bg-surface p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+            >
+              <div className="font-bold text-foreground group-hover:text-primary">{tenant.business_name}</div>
+              <div className="mt-0.5 text-sm text-muted-foreground">{t(BUSINESS_TYPE_LABEL_KEYS[tenant.business_type ?? ''] ?? tenant.business_type ?? '')} &middot; {t(ROLE_LABEL_KEYS[tenant.role ?? ''] ?? tenant.role ?? '')}</div>
+            </button>
+          ))}
         </div>
-      </div>
+      </>
     );
   }
 
-  return (
-    <div className="grid min-h-screen bg-background lg:grid-cols-2">
-      {brandPanel}
-      <div className="flex items-center justify-center p-6 sm:p-12">
-        <div className="w-full max-w-sm">
-          {mobileWordmark}
-          <p className="eyebrow">{t('auth.signInTitle')}</p>
-          <h2 className="mb-8 mt-1 text-display-lg text-3xl text-foreground">{t('auth.signIn')}</h2>
+  return shell(
+    <>
+      {mobileWordmark}
+      <p className="text-xs font-bold uppercase tracking-widest text-text-subtle">{t('auth.signInTitle')}</p>
+      <h2 className="mb-8 mt-1.5 text-2xl font-bold text-foreground">{t('auth.signIn')}</h2>
 
-          {dbError && (
-            <div className="mb-5 rounded-lg border border-destructive/40 bg-danger-tint px-4 py-3 text-sm text-destructive">
-              <strong>{t('auth.dbErrorPrefix')}</strong> {dbError}
-            </div>
-          )}
+      {dbError && (
+        <div className="mb-5 rounded-xl border border-destructive/40 bg-danger-tint px-4 py-3 text-sm text-destructive">
+          <strong>{t('auth.dbErrorPrefix')}</strong> {dbError}
+        </div>
+      )}
 
-          <form onSubmit={handleLogin} className="space-y-5">
+      <form onSubmit={handleLogin} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="email">{t('auth.email')}</Label>
-              <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t('auth.emailPlaceholder')} required />
+              <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t('auth.emailPlaceholder')} className="h-12 rounded-xl" required />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">{t('auth.password')}</Label>
               <div className="relative">
-                <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t('auth.passwordPlaceholder')} className="pr-10" required />
+                <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t('auth.passwordPlaceholder')} className="h-12 rounded-xl pr-10" required />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
@@ -223,20 +233,18 @@ function LoginContent() {
             {loginError && (
               <p className="text-center text-sm text-destructive">{loginError}</p>
             )}
-            <Button type="submit" disabled={loading} className="w-full" size="lg">
+            <Button type="submit" disabled={loading} className="h-12 w-full rounded-xl text-base font-bold">
               {loading ? t('auth.signingIn') : t('auth.signIn')}
             </Button>
             <button
               type="button"
               onClick={() => router.push('/auth/recover')}
-              className="w-full text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
+              className="w-full text-center text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               {t('auth.forgotPasswordLink')}
             </button>
           </form>
-        </div>
-      </div>
-    </div>
+    </>
   );
 }
 

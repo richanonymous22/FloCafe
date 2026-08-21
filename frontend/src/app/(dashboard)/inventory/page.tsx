@@ -11,9 +11,13 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Search, Boxes, PackageSearch, TriangleAlert, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PageHeader, PageContainer } from '@/components/ui/page-header';
+import { StatusPill } from '@/components/ui/status-pill';
+import { EmptyState } from '@/components/ui/empty-state';
+import { parseDbTimestamp } from '@/lib/utils';
 import api from '@/lib/api';
 
 interface Product {
@@ -144,47 +148,66 @@ export default function InventoryPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
-      <h1 className="text-display-lg text-3xl text-foreground">Inventory</h1>
+    <PageContainer className="max-w-5xl">
+      <PageHeader
+        eyebrow="Operations"
+        title="Inventory"
+        description="See what's low, look up a product's balance and history, and record adjustments."
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Low stock</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1">
-          {lowStock.length === 0 && <p className="text-muted-foreground text-sm">Nothing is low right now.</p>}
-          {lowStock.map((row) => (
-            <div key={`${row.productId}:${row.variantId ?? ''}`} className="flex items-center justify-between text-sm border-b pb-1 last:border-0">
-              <span>{row.productName}{row.variantName ? ` — ${row.variantName}` : ''}</span>
-              <span className={row.quantity <= 0 ? 'text-destructive font-medium' : 'text-amber-600 font-medium'}>
-                {row.quantity} / {row.threshold}
+      <div className="animate-rise space-y-6">
+        {/* Low stock */}
+        <section className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+          <div className="flex items-center gap-2.5 border-b border-hairline px-5 py-4">
+            <TriangleAlert className="size-4 text-warning" />
+            <h2 className="eyebrow">Low stock</h2>
+            {lowStock.length > 0 && (
+              <span className="rounded-full bg-warning-tint px-2 py-0.5 text-xs font-semibold tabular-nums text-warning-foreground">
+                {lowStock.length}
               </span>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            )}
+          </div>
+          {lowStock.length === 0 ? (
+            <EmptyState compact icon={<Boxes className="size-5" />} title="Nothing is low right now" description="Stock levels are healthy across the catalogue." />
+          ) : (
+            <ul className="divide-y divide-hairline">
+              {lowStock.map((row) => (
+                <li key={`${row.productId}:${row.variantId ?? ''}`} className="flex items-center justify-between gap-3 px-5 py-3">
+                  <span className="text-sm font-medium text-foreground">
+                    {row.productName}{row.variantName ? ` — ${row.variantName}` : ''}
+                  </span>
+                  <StatusPill tone={row.quantity <= 0 ? 'danger' : 'warning'}>
+                    <span className="tabular-nums">{row.quantity} / {row.threshold}</span>
+                  </StatusPill>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Find a product</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
+        {/* Find a product */}
+        <section className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
+          <h2 className="eyebrow mb-3">Find a product</h2>
           <div className="flex gap-2">
-            <Input
-              placeholder="Search products"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') runSearch(); }}
-            />
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search products by name or SKU"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') runSearch(); }}
+                className="pl-9"
+              />
+            </div>
             <Button onClick={runSearch}>Search</Button>
           </div>
           {results.length > 0 && (
-            <div className="space-y-1">
+            <div className="mt-3 flex flex-wrap gap-2">
               {results.map((product) => (
                 <Button
                   key={product.id}
-                  variant={selectedProduct?.id === product.id ? 'secondary' : 'outline'}
-                  className="w-full justify-start"
+                  size="sm"
+                  variant={selectedProduct?.id === product.id ? 'default' : 'outline'}
                   onClick={() => selectProduct(product)}
                 >
                   {product.name}
@@ -192,68 +215,85 @@ export default function InventoryPage() {
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </section>
 
-      {error && <div className="text-destructive text-sm">{error}</div>}
+        {error && (
+          <div className="rounded-lg border border-destructive/30 bg-danger-tint px-4 py-3 text-sm text-destructive">{error}</div>
+        )}
 
-      {selectedProduct && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{selectedProduct.name}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {variants.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant={!selectedVariant ? 'secondary' : 'outline'} onClick={() => selectVariant(null)}>
-                  Base product
-                </Button>
-                {variants.map((variant) => (
-                  <Button
-                    key={variant.id}
-                    size="sm"
-                    variant={selectedVariant?.id === variant.id ? 'secondary' : 'outline'}
-                    onClick={() => selectVariant(variant)}
-                  >
-                    {variant.name || variant.sku || variant.id}
+        {selectedProduct && (
+          <section className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+            <div className="flex flex-col gap-4 border-b border-hairline p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="eyebrow mb-1">Selected product</p>
+                <h2 className="text-display text-xl text-foreground">{selectedProduct.name}</h2>
+              </div>
+              <div className="text-right">
+                <p className="eyebrow mb-0.5">Current stock</p>
+                <p className="figure text-3xl text-foreground">{balance ?? '—'}</p>
+              </div>
+            </div>
+
+            <div className="space-y-5 p-5">
+              {variants.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant={!selectedVariant ? 'default' : 'outline'} onClick={() => selectVariant(null)}>
+                    Base product
                   </Button>
-                ))}
-              </div>
-            )}
+                  {variants.map((variant) => (
+                    <Button
+                      key={variant.id}
+                      size="sm"
+                      variant={selectedVariant?.id === variant.id ? 'default' : 'outline'}
+                      onClick={() => selectVariant(variant)}
+                    >
+                      {variant.name || variant.sku || variant.id}
+                    </Button>
+                  ))}
+                </div>
+              )}
 
-            <div className="text-lg font-semibold">Current stock: {balance ?? '—'}</div>
+              <div className="flex flex-col gap-3 rounded-xl border border-hairline bg-surface-sunken p-4 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <label className="eyebrow mb-1.5 block">Adjustment (+/-)</label>
+                  <Input type="number" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} placeholder="e.g. -3" />
+                </div>
+                <div className="flex-1">
+                  <label className="eyebrow mb-1.5 block">Reason</label>
+                  <Input value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)} placeholder="e.g. Stock count correction" />
+                </div>
+                <Button disabled={busy || !adjustQty || !adjustReason.trim()} onClick={submitAdjustment}>
+                  Apply
+                </Button>
+              </div>
 
-            <div className="flex gap-2 items-end">
-              <div className="flex-1">
-                <label className="text-sm text-muted-foreground">Adjustment (+/-)</label>
-                <Input type="number" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} />
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <History className="size-4 text-muted-foreground" />
+                  <h3 className="eyebrow">Movement history</h3>
+                </div>
+                {history.length === 0 ? (
+                  <EmptyState compact icon={<PackageSearch className="size-5" />} title="No movements yet" />
+                ) : (
+                  <ul className="divide-y divide-hairline text-sm">
+                    {history.map((movement) => (
+                      <li key={movement.id} className="flex items-center justify-between gap-3 py-2.5">
+                        <span className="text-muted-foreground">
+                          {parseDbTimestamp(movement.created_at).toLocaleString()} · {movement.movement_type}
+                          {movement.reason ? ` (${movement.reason})` : ''}
+                        </span>
+                        <span className={`figure shrink-0 ${movement.quantity_delta < 0 ? 'text-destructive' : 'text-success'}`}>
+                          {movement.quantity_delta > 0 ? '+' : ''}{movement.quantity_delta} → {movement.balance_after}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              <div className="flex-1">
-                <label className="text-sm text-muted-foreground">Reason</label>
-                <Input value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)} placeholder="e.g. Stock count correction" />
-              </div>
-              <Button disabled={busy || !adjustQty || !adjustReason.trim()} onClick={submitAdjustment}>
-                Apply
-              </Button>
             </div>
-
-            <div>
-              <h3 className="font-medium mb-2">History</h3>
-              <div className="space-y-1 text-sm">
-                {history.length === 0 && <p className="text-muted-foreground">No movements yet.</p>}
-                {history.map((movement) => (
-                  <div key={movement.id} className="flex justify-between border-b pb-1 last:border-0">
-                    <span>{new Date(movement.created_at).toLocaleString()} — {movement.movement_type}{movement.reason ? ` (${movement.reason})` : ''}</span>
-                    <span className={movement.quantity_delta < 0 ? 'text-destructive' : 'text-green-600'}>
-                      {movement.quantity_delta > 0 ? '+' : ''}{movement.quantity_delta} → {movement.balance_after}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+          </section>
+        )}
+      </div>
+    </PageContainer>
   );
 }

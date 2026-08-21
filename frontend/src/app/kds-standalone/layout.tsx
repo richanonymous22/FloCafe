@@ -18,7 +18,7 @@ export default function KdsStandaloneLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning className="h-full">
-      <body className={`${inter.className} h-full bg-gray-100`}>
+      <body className={`${inter.className} h-full bg-secondary`}>
         <KdsHtmlLang />
         <Toaster position="top-right" />
         <div className="h-full flex flex-col p-4">

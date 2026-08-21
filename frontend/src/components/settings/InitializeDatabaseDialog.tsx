@@ -68,7 +68,7 @@ export function InitializeDatabaseDialog({ open, onOpenChange, onConfirm, onSucc
               <span className="block">
                 {t('settings.initializeDialogBody')}
               </span>
-              <span className="block font-medium text-gray-700">
+              <span className="block font-medium text-foreground">
                 {t('settings.initializeDialogBackup')}
               </span>
             </DialogDescription>

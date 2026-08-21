@@ -67,7 +67,7 @@ export default function ProductGrid({
     <div data-testid="pos-product-grid" className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
       <div className="shrink-0 mb-3">
         <div className="relative mb-2">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -85,14 +85,14 @@ export default function ProductGrid({
               }
             }}
             placeholder={t('pos.searchProducts')}
-            className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl focus:border-brand outline-none transition-colors text-sm"
+            className="w-full pl-9 pr-4 py-2 bg-surface border border-border rounded-xl focus:border-brand outline-none transition-colors text-sm"
           />
         </div>
         <div className="flex flex-wrap gap-2 pb-1">
           <button
             onClick={() => setSelectedCategory(null)}
             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-              !selectedCategory ? 'bg-brand text-white' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+              !selectedCategory ? 'bg-brand text-white' : 'bg-surface text-foreground border border-border hover:bg-surface-sunken'
             }`}
           >
             {t('pos.allCategories')}
@@ -111,7 +111,7 @@ export default function ProductGrid({
                       : 'bg-brand text-white'
                     : colorClasses
                       ? `${colorClasses.bg} ${colorClasses.text} border ${colorClasses.border} hover:opacity-80`
-                      : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                      : 'bg-surface text-foreground border border-border hover:bg-surface-sunken'
                 }`}
               >
                 {cat.name}
@@ -138,7 +138,7 @@ export default function ProductGrid({
                 key={product.id}
                 data-testid="pos-product-card"
                 onClick={() => onProductClick(product)}
-                className="bg-white rounded-xl p-2.5 border border-gray-100 hover:border-brand/40 hover:shadow-md transition-all text-left relative group cursor-pointer overflow-hidden"
+                className="bg-surface rounded-xl p-2.5 border border-hairline hover:border-brand/40 hover:shadow-md transition-all text-left relative group cursor-pointer overflow-hidden"
               >
                 {!!product.track_inventory && (
                   <>
@@ -191,7 +191,7 @@ export default function ProductGrid({
                   </div>
                 )}
 
-                <h3 className="font-medium text-gray-900 text-sm line-clamp-2 leading-snug">{product.name}</h3>
+                <h3 className="font-medium text-foreground text-sm line-clamp-2 leading-snug">{product.name}</h3>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-brand font-bold">
                     {fmt(Number(product.price))}
@@ -206,7 +206,7 @@ export default function ProductGrid({
                           e.stopPropagation();
                           onProductClick(product);
                         }}
-                        className="text-gray-400 hover:text-gray-600 transition-colors"
+                        className="text-muted-foreground hover:text-muted-foreground transition-colors"
                         title={t('pos.customisable')}
                       >
                         <SlidersHorizontal size={12} />

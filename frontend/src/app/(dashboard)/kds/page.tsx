@@ -64,9 +64,9 @@ export default function KdsPage() {
   if (kdsEnabled === false) {
     return (
       <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-3 text-center px-6">
-        <ChefHat size={40} className="text-gray-300" />
-        <h1 className="text-lg font-semibold text-gray-900">Kitchen Display is disabled</h1>
-        <p className="text-sm text-gray-500 max-w-sm">
+        <ChefHat size={40} className="text-text-subtle" />
+        <h1 className="text-lg font-semibold text-foreground">Kitchen Display is disabled</h1>
+        <p className="text-sm text-muted-foreground max-w-sm">
           This business has turned off the Kitchen Display System. An owner or manager can turn it back on from Settings.
         </p>
         <Link href="/settings?tab=kds" className="text-sm text-brand hover:underline mt-1">

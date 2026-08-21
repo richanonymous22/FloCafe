@@ -36,7 +36,7 @@ export default function UpdateBadge() {
         <Button
           variant="outline"
           size="sm"
-          className={`flex items-center gap-1.5 h-7 px-2 ${isReady ? 'text-brand border-brand/30' : 'text-gray-500 border-current/30'}`}
+          className={`flex items-center gap-1.5 h-7 px-2 ${isReady ? 'text-brand border-brand/30' : 'text-muted-foreground border-current/30'}`}
         >
           {isReady ? (
             <span className="relative flex h-2 w-2">
@@ -53,20 +53,20 @@ export default function UpdateBadge() {
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel className="text-xs text-gray-500">
+        <DropdownMenuLabel className="text-xs text-muted-foreground">
           {t('update.sectionLabel')}
         </DropdownMenuLabel>
 
-        <div className="px-2 py-1.5 text-xs text-gray-500">
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">
           {isReady ? (
-            <p className="flex items-center gap-1.5 text-gray-700">
+            <p className="flex items-center gap-1.5 text-foreground">
               <Sparkles size={13} className="text-brand" />
               {t('update.versionReady', { version: updateStatus?.version || '' })}
             </p>
           ) : (
             <div>
-              <p className="text-gray-700">{t('update.downloadingDetail', { version: updateStatus?.version || '' })}</p>
-              <div className="w-full bg-gray-200 rounded-full h-1.5 mt-2">
+              <p className="text-foreground">{t('update.downloadingDetail', { version: updateStatus?.version || '' })}</p>
+              <div className="w-full bg-secondary rounded-full h-1.5 mt-2">
                 <div
                   className="bg-brand h-1.5 rounded-full transition-all"
                   style={{ width: `${updateStatus?.percent || 0}%` }}
@@ -74,7 +74,7 @@ export default function UpdateBadge() {
               </div>
             </div>
           )}
-          <p className="mt-1.5 text-gray-400">{t('update.currentVersion', { version: appVersion })}</p>
+          <p className="mt-1.5 text-muted-foreground">{t('update.currentVersion', { version: appVersion })}</p>
         </div>
 
         {isReady && (

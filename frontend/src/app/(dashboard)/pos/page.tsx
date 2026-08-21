@@ -757,17 +757,17 @@ export default function POSPage() {
   return (
     <>
       {supportError && (
-        <div className="fixed bottom-4 left-4 z-50 w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-red-200 bg-white p-4 shadow-xl">
+        <div className="fixed bottom-4 left-4 z-50 w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-red-200 bg-surface p-4 shadow-xl">
           {sentTicketId ? (
             <>
               <p className="font-semibold text-red-800">{t('support.requestQueued')}</p>
               {delivery.status === 'delivered' && delivery.supportCode ? (
                 <>
-                  <p className="mt-1 text-sm font-semibold text-gray-800">{t('support.supportCode')}: <span className="font-mono">{delivery.supportCode}</span></p>
-                  <p className="mt-0.5 text-xs text-gray-500">{t('support.supportCodeHint')}</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{t('support.supportCode')}: <span className="font-mono">{delivery.supportCode}</span></p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{t('support.supportCodeHint')}</p>
                 </>
               ) : (
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-muted-foreground">
                   {delivery.status === 'failed' ? t('support.stillQueuedLocally') : t('support.confirmingDelivery')}
                 </p>
               )}
@@ -778,10 +778,10 @@ export default function POSPage() {
           ) : (
             <>
               <p className="font-semibold text-red-800">Printing failed</p>
-              <p className="mt-1 text-sm text-gray-600">{supportError.message}</p>
-              <details className="mt-2 text-xs text-gray-500">
+              <p className="mt-1 text-sm text-muted-foreground">{supportError.message}</p>
+              <details className="mt-2 text-xs text-muted-foreground">
                 <summary className="cursor-pointer">{t('support.showPayload')}</summary>
-                <pre className="mt-2 max-h-32 overflow-auto rounded bg-gray-50 p-2">{JSON.stringify(
+                <pre className="mt-2 max-h-32 overflow-auto rounded bg-surface-sunken p-2">{JSON.stringify(
                   diagnosticsPreview
                     ? { ...supportError.payload, diagnostics: { ...(supportError.payload.diagnostics as Record<string, unknown> | undefined), ...diagnosticsPreview } }
                     : supportError.payload,
@@ -917,14 +917,14 @@ export default function POSPage() {
 
       {showCustomerPrompt && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-5 w-full max-w-sm">
+          <div className="bg-surface rounded-2xl p-5 w-full max-w-sm">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold">{t('pos.selectCustomer')}</h3>
-              <button onClick={() => setShowCustomerPrompt(false)} className="text-gray-400 hover:text-gray-600">
+              <button onClick={() => setShowCustomerPrompt(false)} className="text-muted-foreground hover:text-muted-foreground">
                 <X size={20} />
               </button>
             </div>
-            <p className="text-sm text-gray-500 mb-4">{t('pos.customerRequiredBeforeOrder')}</p>
+            <p className="text-sm text-muted-foreground mb-4">{t('pos.customerRequiredBeforeOrder')}</p>
             <CustomerSearch onSelected={() => setShowCustomerPrompt(false)} />
           </div>
         </div>

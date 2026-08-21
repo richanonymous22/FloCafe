@@ -38,7 +38,7 @@ const orderStatusBadge: Record<string, { bg: string; text: string; labelKey: str
   preparing: { bg: 'bg-blue-100', text: 'text-blue-700', labelKey: 'orders.preparing' },
   ready: { bg: 'bg-green-100', text: 'text-green-700', labelKey: 'orders.ready' },
   served: { bg: 'bg-purple-100', text: 'text-purple-700', labelKey: 'orders.served' },
-  completed: { bg: 'bg-gray-100', text: 'text-gray-600', labelKey: 'orders.completed' },
+  completed: { bg: 'bg-secondary', text: 'text-muted-foreground', labelKey: 'orders.completed' },
   cancelled: { bg: 'bg-red-100', text: 'text-red-700', labelKey: 'orders.cancelled' },
 };
 
@@ -714,7 +714,7 @@ export default function OrdersPage() {
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold text-gray-900">{t('nav.orders')}</h1>
+        <h1 className="text-display-lg text-3xl text-foreground">{t('nav.orders')}</h1>
         <div className="flex gap-2">
           {(['all', 'active', 'unpaid', 'held'] as FilterType[]).map((f) => (
             <button
@@ -723,7 +723,7 @@ export default function OrdersPage() {
               className={`px-4 py-1.5 rounded-lg text-sm font-medium ${
                 tabFilter === f
                   ? 'bg-brand text-white'
-                  : 'bg-white text-gray-600 border border-gray-200 hover:border-gray-400'
+                  : 'bg-surface text-muted-foreground border border-border hover:border-gray-400'
               }`}
             >
               {t(tabLabelKey[f])}
@@ -736,13 +736,13 @@ export default function OrdersPage() {
       <div className="flex flex-wrap items-center gap-3 mb-4">
         {/* Search by order number */}
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             placeholder={t('orders.search')}
             value={filters.search}
             onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-            className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand bg-white"
+            className="w-full pl-9 pr-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand bg-surface"
           />
         </div>
 
@@ -750,7 +750,7 @@ export default function OrdersPage() {
         <select
           value={filters.table}
           onChange={(e) => setFilters(prev => ({ ...prev, table: e.target.value }))}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
         >
           <option value="">{t('orders.allTables')}</option>
           {tables.map((table: Table) => (
@@ -764,7 +764,7 @@ export default function OrdersPage() {
         <select
           value={filters.type}
           onChange={(e) => setFilters(prev => ({ ...prev, type: e.target.value }))}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
         >
           <option value="">{t('orders.allTypes')}</option>
           <option value="dine_in">{t('orders.dineIn')}</option>
@@ -777,7 +777,7 @@ export default function OrdersPage() {
         <select
           value={filters.status}
           onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
         >
           <option value="">{t('orders.allStatuses')}</option>
           <option value="active">{t('orders.active')}</option>
@@ -793,33 +793,33 @@ export default function OrdersPage() {
             <div className="w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin" />
           </div>
         ) : Object.keys(heldOrdersStore.orders).length === 0 ? (
-          <div className="flex items-center justify-center flex-1 text-gray-400">
+          <div className="flex items-center justify-center flex-1 text-muted-foreground">
             <p>{t('orders.heldEmpty')}</p>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 content-start items-start auto-rows-max">
             {Object.values(heldOrdersStore.orders).map((heldOrder) => (
-              <div key={heldOrder.tableId} className="bg-white rounded-xl border border-blue-200 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-shadow">
-                 <div className="p-4 border-b border-gray-100 bg-blue-50/50 flex justify-between items-center">
+              <div key={heldOrder.tableId} className="bg-surface rounded-xl border border-blue-200 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-shadow">
+                 <div className="p-4 border-b border-hairline bg-blue-50/50 flex justify-between items-center">
                    <div>
-                     <p className="font-bold text-gray-900">{tables.find(t => t.id === heldOrder.tableId)?.name || t('common.tableFallback')}</p>
-                     <p className="text-xs text-gray-500">{formatTime(heldOrder.heldAt)}</p>
+                     <p className="font-bold text-foreground">{tables.find(t => t.id === heldOrder.tableId)?.name || t('common.tableFallback')}</p>
+                     <p className="text-xs text-muted-foreground">{formatTime(heldOrder.heldAt)}</p>
                    </div>
                    <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold tracking-wide">{t('orders.held')}</span>
                  </div>
                  <div className="p-4 flex-1">
                    {heldOrder.items.map((item, idx) => (
-                     <div key={idx} className="flex justify-between text-sm py-1 text-gray-700">
+                     <div key={idx} className="flex justify-between text-sm py-1 text-foreground">
                        <span>{item.quantity}x {item.product.name}</span>
                      </div>
                    ))}
                    {heldOrder.orderNotes && (
-                     <div className="mt-3 text-sm italic text-gray-500 bg-gray-50 p-2 rounded-lg">
+                     <div className="mt-3 text-sm italic text-muted-foreground bg-surface-sunken p-2 rounded-lg">
                        &quot;{heldOrder.orderNotes}&quot;
                      </div>
                    )}
                  </div>
-                 <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-2">
+                 <div className="p-4 bg-surface-sunken border-t border-hairline flex gap-2">
                     <Button onClick={async () => {
                       const held = await heldOrdersStore.restoreOrder(heldOrder.tableId);
                       if (held) {
@@ -850,7 +850,7 @@ export default function OrdersPage() {
           <div className="w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin" />
         </div>
       ) : filteredOrders.length === 0 ? (
-        <div className="flex items-center justify-center flex-1 text-gray-400">
+        <div className="flex items-center justify-center flex-1 text-muted-foreground">
           <p>{t('orders.empty')}</p>
         </div>
       ) : (
@@ -870,22 +870,22 @@ export default function OrdersPage() {
             return (
               <div
                 key={order.id}
-                className={`bg-white rounded-xl border overflow-hidden flex flex-col ${
-                  order.status === 'cancelled' ? 'border-red-200 opacity-75' : 'border-gray-100'
+                className={`bg-surface rounded-xl border overflow-hidden flex flex-col ${
+                  order.status === 'cancelled' ? 'border-red-200 opacity-75' : 'border-hairline'
                 }`}
               >
                 {/* Top bar: order id/status on the left, payment badge + reprint on the right */}
-                <div className="flex items-center justify-between gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100">
+                <div className="flex items-center justify-between gap-2 px-4 py-3 bg-surface-sunken border-b border-hairline">
                   <div className="flex items-center gap-2 flex-wrap min-w-0">
-                    <span className="font-bold text-gray-900">#{order.order_number}</span>
+                    <span className="font-bold text-foreground">#{order.order_number}</span>
                     {(() => { const badge = orderStatusBadge[order.status]; return badge ? (
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${badge.bg} ${badge.text}`}>{t(badge.labelKey)}</span>
                     ) : null; })()}
-                    <span className="text-sm text-gray-500 capitalize">{t(orderTypeLabel[order.type] ?? order.type)}</span>
+                    <span className="text-sm text-muted-foreground capitalize">{t(orderTypeLabel[order.type] ?? order.type)}</span>
                     {order.table && (
                       <span className="text-sm text-orange-600 font-medium">{order.table.name}</span>
                     )}
-                    <span className="flex items-center gap-1 text-xs text-gray-400">
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock size={12} />
                       {getTimeSince(order.created_at)}
                     </span>
@@ -900,7 +900,7 @@ export default function OrdersPage() {
                       <button
                         onClick={() => setConfirmPrintBillId(order.bill!.id)}
                         disabled={printingBillId === order.bill.id}
-                        className="p-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                        className="p-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary disabled:opacity-50 transition-colors"
                         title={(printHistory[order.bill.id]?.length ?? 0) > 0 ? t('common.reprint') : t('common.print')}
                       >
                         <Printer size={14} />
@@ -937,7 +937,7 @@ export default function OrdersPage() {
                     </button>
                   </div>
                 ) : isOwnerOrManager && !['completed', 'cancelled'].includes(order.status) ? (
-                  <div className="px-4 py-2 bg-gray-50 border-b border-gray-100">
+                  <div className="px-4 py-2 bg-surface-sunken border-b border-hairline">
                     {linkCustomerOrderId === order.id ? (
                       <div className="flex items-center gap-2">
                         <input
@@ -948,7 +948,7 @@ export default function OrdersPage() {
                             searchCustomersForLink(e.target.value);
                           }}
                           placeholder={t('orders.searchCustomer')}
-                          className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          className="flex-1 px-3 py-1.5 text-sm border border-border-strong rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                           autoFocus
                         />
                         <button
@@ -957,7 +957,7 @@ export default function OrdersPage() {
                             setLinkCustomerSearch('');
                             setLinkCustomerResults([]);
                           }}
-                          className="text-gray-400 hover:text-gray-600"
+                          className="text-muted-foreground hover:text-muted-foreground"
                         >
                           <XCircle size={16} />
                         </button>
@@ -965,7 +965,7 @@ export default function OrdersPage() {
                     ) : (
                       <button
                         onClick={() => setLinkCustomerOrderId(order.id)}
-                        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-600 transition-colors"
+                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-blue-600 transition-colors"
                       >
                         <UserPlus size={14} />
                         {t('orders.linkCustomer')}
@@ -978,15 +978,15 @@ export default function OrdersPage() {
                             key={customer.id}
                             onClick={() => handleLinkCustomer(order.id, String(customer.id))}
                             disabled={linkingCustomer}
-                            className="w-full flex items-center justify-between px-3 py-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors text-left disabled:opacity-50"
+                            className="w-full flex items-center justify-between px-3 py-2 bg-surface rounded-lg border border-border hover:border-blue-300 hover:bg-blue-50 transition-colors text-left disabled:opacity-50"
                           >
                             <div>
-                              <span className="text-sm font-medium text-gray-900">{customer.name}</span>
+                              <span className="text-sm font-medium text-foreground">{customer.name}</span>
                               {customer.phone && (
-                                <span className="text-xs text-gray-500 ml-2">{customer.phone}</span>
+                                <span className="text-xs text-muted-foreground ml-2">{customer.phone}</span>
                               )}
                             </div>
-                            {linkingCustomer && <span className="text-xs text-gray-400">{t('orders.linking')}</span>}
+                            {linkingCustomer && <span className="text-xs text-muted-foreground">{t('orders.linking')}</span>}
                           </button>
                         ))}
                       </div>
@@ -996,7 +996,7 @@ export default function OrdersPage() {
 
                 {/* Items — presented like a bill */}
                 <div className="px-4 py-3 flex-1">
-                  <div className="divide-y divide-gray-50">
+                  <div className="divide-y divide-hairline">
                     {activeItems.map((item: OrderItem) => {
                       const config = itemStatusConfig[item.status] || itemStatusConfig.pending;
                       return (
@@ -1007,13 +1007,13 @@ export default function OrdersPage() {
                               <span className={`text-sm font-medium ${config.color}`}>
                                 {item.quantity}x
                               </span>
-                              <span className="text-sm text-gray-900 truncate">{item.product_name}</span>
+                              <span className="text-sm text-foreground truncate">{item.product_name}</span>
                               {item.special_instructions && (
                                 <span className="text-xs text-red-500 italic break-words">&quot;{item.special_instructions}&quot;</span>
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-sm text-gray-600">{fmt(Number(item.total))}</span>
+                              <span className="text-sm text-muted-foreground">{fmt(Number(item.total))}</span>
                               {item.status === 'pending' && isOwnerOrManager && !paid && (
                                 <button
                                   onClick={() => deleteItem(order.id, item.id)}
@@ -1037,7 +1037,7 @@ export default function OrdersPage() {
                           {item.addons && item.addons.length > 0 && (
                             <div className="pl-4 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
                               {item.addons.map((addon, idx) => (
-                                <span key={addon.id ?? `${item.id}-${idx}`} className="text-xs text-gray-400">
+                                <span key={addon.id ?? `${item.id}-${idx}`} className="text-xs text-muted-foreground">
                                   + {addon.name}{(addon.quantity || 1) > 1 ? ` ×${addon.quantity}` : ''}{addon.price ? ` (${fmt(Number(addon.price) * (addon.quantity || 1))})` : ''}
                                 </span>
                               ))}
@@ -1049,10 +1049,10 @@ export default function OrdersPage() {
                   </div>
 
                   {/* Bill summary */}
-                  <div className="mt-3 pt-3 border-t border-dashed border-gray-200 space-y-1">
+                  <div className="mt-3 pt-3 border-t border-dashed border-border space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">{t('common.subtotal')}</span>
-                      <span className="text-gray-700">{fmt(subtotal)}</span>
+                      <span className="text-muted-foreground">{t('common.subtotal')}</span>
+                      <span className="text-foreground">{fmt(subtotal)}</span>
                     </div>
                     {discount > 0 && (
                       <div className="flex justify-between text-sm">
@@ -1062,16 +1062,16 @@ export default function OrdersPage() {
                     )}
                     {tax > 0 && (
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-500">{t('common.tax')}</span>
-                        <span className="text-gray-700">{fmt(tax)}</span>
+                        <span className="text-muted-foreground">{t('common.tax')}</span>
+                        <span className="text-foreground">{fmt(tax)}</span>
                       </div>
                     )}
-                    <div className="flex justify-between text-base font-bold pt-1 border-t border-gray-100">
-                      <span className="text-gray-900">{t('common.total')}</span>
-                      <span className="text-gray-900">{fmt(total)}</span>
+                    <div className="flex justify-between text-base font-bold pt-1 border-t border-hairline">
+                      <span className="text-foreground">{t('common.total')}</span>
+                      <span className="text-foreground">{fmt(total)}</span>
                     </div>
                     {bill && payStatus === 'partial' && (
-                      <div className="flex justify-between text-xs text-gray-500 pt-0.5">
+                      <div className="flex justify-between text-xs text-muted-foreground pt-0.5">
                         <span>{t('orders.paid')} {fmt(Number(bill.paid_amount))}</span>
                         <span>{t('orders.balance')} {fmt(Number(bill.balance))}</span>
                       </div>
@@ -1085,7 +1085,7 @@ export default function OrdersPage() {
                         <div key={item.id} className="flex items-center justify-between py-1 opacity-50">
                           <div className="flex items-center gap-2">
                             <span className="text-xs">❌</span>
-                            <span className="text-xs text-gray-400 line-through">
+                            <span className="text-xs text-muted-foreground line-through">
                               {item.quantity}x {item.product_name}
                             </span>
                           </div>
@@ -1104,12 +1104,12 @@ export default function OrdersPage() {
                   )}
 
                   {order.bill && printHistory[order.bill.id]?.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-100">
+                    <div className="mt-3 pt-3 border-t border-hairline">
                       <button
                         onClick={() => {
                           setPrintHistoryExpanded(prev => ({ ...prev, [order.bill!.id]: !prev[order.bill!.id] }));
                         }}
-                        className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+                        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
                       >
                         {printHistoryExpanded[order.bill!.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         {t('orders.printHistory')}
@@ -1118,7 +1118,7 @@ export default function OrdersPage() {
                       {printHistoryExpanded[order.bill!.id] && (
                         <div className="mt-2 pl-4 space-y-1">
                           {printHistory[order.bill!.id].map((print, index) => (
-                            <div key={print.id} className="text-xs text-gray-500">
+                            <div key={print.id} className="text-xs text-muted-foreground">
                               {index + 1}. {t('orders.printHistoryEntry', { printedType: print.print_type === 'reprint' ? t('orders.reprint') : t('orders.printed'), user: print.user_name, time: formatDateTime(print.printed_at) })}
                             </div>
                           ))}
@@ -1129,7 +1129,7 @@ export default function OrdersPage() {
                 </div>
 
                 {/* Footer with actions */}
-                <div className="px-4 py-3 border-t border-gray-100 flex flex-wrap gap-2">
+                <div className="px-4 py-3 border-t border-hairline flex flex-wrap gap-2">
                     {showCheckout(order) && (
                       <Button
                         onClick={() => handleCheckout(order.id)}
@@ -1205,11 +1205,11 @@ export default function OrdersPage() {
       {/* Print Confirmation Modal */}
       {confirmPrintBillId !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">
+          <div className="bg-surface rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h2 className="text-lg font-bold text-foreground mb-2">
               {(printHistory[confirmPrintBillId]?.length ?? 0) > 0 ? t('orders.reprintReceiptTitle') : t('orders.printReceiptTitle')}
             </h2>
-            <p className="text-sm text-gray-600 mb-6">
+            <p className="text-sm text-muted-foreground mb-6">
               {(printHistory[confirmPrintBillId]?.length ?? 0) > 0
                 ? t('orders.reprintReceiptWarning')
                 : t('orders.printReceiptConfirm')}
@@ -1255,12 +1255,12 @@ export default function OrdersPage() {
       {/* Cancel Order Modal */}
       {cancelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">{t('orders.cancel')} #{cancelModal.order.order_number}</h2>
+          <div className="bg-surface rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h2 className="text-lg font-bold text-foreground mb-4">{t('orders.cancel')} #{cancelModal.order.order_number}</h2>
 
             <div className="space-y-4">
               <div>
-                <label htmlFor="cancelReason" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="cancelReason" className="block text-sm font-medium text-foreground mb-1">
                   {t('common.reasonOptional')}
                 </label>
                 <input
@@ -1269,7 +1269,7 @@ export default function OrdersPage() {
                   value={cancelModal.reason}
                   onChange={(e) => updateCancelModal({ reason: e.target.value })}
                   placeholder={t('orders.cancelReason')}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>
 
@@ -1280,9 +1280,9 @@ export default function OrdersPage() {
                     type="checkbox"
                     checked={cancelModal.freeTable}
                     onChange={(e) => updateCancelModal({ freeTable: e.target.checked })}
-                    className="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                    className="h-4 w-4 rounded border-border-strong text-red-600 focus:ring-red-500"
                   />
-                  <label htmlFor="freeTable" className="text-sm text-gray-700">
+                  <label htmlFor="freeTable" className="text-sm text-foreground">
                     {t('orders.freeTable', { name: cancelModal.order.table.name })}
                   </label>
                 </div>
@@ -1290,7 +1290,7 @@ export default function OrdersPage() {
 
               {(cancelModal.order.status !== 'pending' || cancelModal.order.items?.some((i) => ['preparing', 'ready', 'served', 'completed'].includes(i.status))) && (
                 <div>
-                  <label htmlFor="overridePin" className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="overridePin" className="block text-sm font-medium text-foreground mb-1">
                     {t('orders.overridePinLabel')}
                   </label>
                   <input
@@ -1299,7 +1299,7 @@ export default function OrdersPage() {
                     value={cancelModal.overridePin}
                     onChange={(e) => updateCancelModal({ overridePin: e.target.value })}
 placeholder={t('orders.managerPin')}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
                   />
                 </div>
               )}
@@ -1329,12 +1329,12 @@ placeholder={t('orders.managerPin')}
       {/* Void In-Progress Item Modal */}
       {voidItemModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h2 className="text-lg font-bold text-gray-900 mb-1">{t('orders.voidItem')}</h2>
-            <p className="text-sm text-gray-500 mb-4">{t('orders.voidItemConfirm', { name: voidItemModal.productName })}</p>
+          <div className="bg-surface rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h2 className="text-lg font-bold text-foreground mb-1">{t('orders.voidItem')}</h2>
+            <p className="text-sm text-muted-foreground mb-4">{t('orders.voidItemConfirm', { name: voidItemModal.productName })}</p>
 
             <div>
-              <label htmlFor="voidOverridePin" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="voidOverridePin" className="block text-sm font-medium text-foreground mb-1">
                 {t('orders.overridePinLabel')}
               </label>
               <input
@@ -1344,7 +1344,7 @@ placeholder={t('orders.managerPin')}
                 value={voidItemModal.overridePin}
                 onChange={(e) => setVoidItemModal({ ...voidItemModal, overridePin: e.target.value })}
                 placeholder={t('orders.managerPin')}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
             </div>
 
@@ -1372,18 +1372,18 @@ placeholder={t('orders.managerPin')}
       {/* Discount Modal */}
       {discountModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">{t('orders.applyDiscountTitle', { number: discountModal.order.order_number })}</h2>
+          <div className="bg-surface rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h2 className="text-lg font-bold text-foreground mb-4">{t('orders.applyDiscountTitle', { number: discountModal.order.order_number })}</h2>
 
             <div className="space-y-4">
               {/* Discount Type Toggle */}
-              <div className="flex rounded-lg overflow-hidden border border-gray-200">
+              <div className="flex rounded-lg overflow-hidden border border-border">
                 <button
                   onClick={() => updateDiscountModal({ type: 'percentage', value: 0 })}
                   className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
                     discountModal.type === 'percentage'
                       ? 'bg-purple-600 text-white'
-                      : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      : 'bg-surface-sunken text-muted-foreground hover:bg-secondary'
                   }`}
                 >
                   <Percent size={14} />
@@ -1394,7 +1394,7 @@ placeholder={t('orders.managerPin')}
                   className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors ${
                     discountModal.type === 'amount'
                       ? 'bg-purple-600 text-white'
-                      : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      : 'bg-surface-sunken text-muted-foreground hover:bg-secondary'
                   }`}
                 >
                   <Banknote size={14} />
@@ -1404,11 +1404,11 @@ placeholder={t('orders.managerPin')}
 
               {/* Discount Value */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
                   {discountModal.type === 'percentage' ? t('orders.discountPercentageLabel') : t('orders.discountAmountLabel')}
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
                     {discountModal.type === 'percentage' ? '%' : currency}
                   </span>
                   <input
@@ -1419,14 +1419,14 @@ placeholder={t('orders.managerPin')}
                     value={discountModal.value || ''}
                     onChange={(e) => updateDiscountModal({ value: Number(e.target.value) })}
                     placeholder={discountModal.type === 'percentage' ? '0' : '0.00'}
-                    className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    className="w-full pl-8 pr-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   />
                 </div>
               </div>
 
               {/* Discount Reason */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-foreground mb-1">
                   Reason (optional)
                 </label>
                 <input
@@ -1434,25 +1434,25 @@ placeholder={t('orders.managerPin')}
                   value={discountModal.reason}
                   onChange={(e) => updateDiscountModal({ reason: e.target.value })}
                   placeholder={t('orders.discountReason')}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
               </div>
 
               {/* Preview */}
-              <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+              <div className="bg-surface-sunken rounded-lg p-3 space-y-1.5">
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">{t('common.subtotal')}</span>
-                  <span className="text-gray-900">{fmt(Number(discountModal.order.subtotal))}</span>
+                  <span className="text-muted-foreground">{t('common.subtotal')}</span>
+                  <span className="text-foreground">{fmt(Number(discountModal.order.subtotal))}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">{t('common.tax')}</span>
-                  <span className="text-gray-900">{fmt(Number(discountModal.order.tax_amount || 0))}</span>
+                  <span className="text-muted-foreground">{t('common.tax')}</span>
+                  <span className="text-foreground">{fmt(Number(discountModal.order.tax_amount || 0))}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-purple-600">
                     {t('common.discount')}
                     {discountModal.type === 'percentage' && discountModal.value > 0 && (
-                      <span className="text-gray-400 ml-1">{t('orders.percentOnSubtotal', { value: discountModal.value })}</span>
+                      <span className="text-muted-foreground ml-1">{t('orders.percentOnSubtotal', { value: discountModal.value })}</span>
                     )}
                   </span>
                   <span className="text-purple-600">
@@ -1463,9 +1463,9 @@ placeholder={t('orders.managerPin')}
                     )}
                   </span>
                 </div>
-                <div className="border-t border-gray-200 pt-1.5 flex justify-between text-sm font-bold">
-                  <span className="text-gray-900">{t('orders.newTotal')}</span>
-                  <span className="text-gray-900">
+                <div className="border-t border-border pt-1.5 flex justify-between text-sm font-bold">
+                  <span className="text-foreground">{t('orders.newTotal')}</span>
+                  <span className="text-foreground">
                     {fmt(
                       discountModal.type === 'percentage'
                         ? Number(discountModal.order.subtotal) * (1 - discountModal.value / 100) + Number(discountModal.order.tax_amount || 0)
@@ -1478,14 +1478,14 @@ placeholder={t('orders.managerPin')}
 
             {discountRequiresApproval && discountModal.value > 0 && (
               <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('orders.managerPinLabel')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('orders.managerPinLabel')}</label>
                 <input
                   type="password"
                   value={discountPin}
                   onChange={(e) => setDiscountPin(e.target.value)}
 placeholder={t('orders.managerPin')}
                 maxLength={6}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-border-strong rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
               </div>
             )}
@@ -1515,23 +1515,23 @@ placeholder={t('orders.managerPin')}
       {/* Add Item Modal */}
       {addItemsOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">{t('orders.addItems')} #{addItemsOrder.order_number}</h2>
+          <div className="bg-surface rounded-xl shadow-xl p-6 w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
+            <h2 className="text-lg font-bold text-foreground mb-4">{t('orders.addItems')} #{addItemsOrder.order_number}</h2>
 
             {/* Search */}
             <div className="relative mb-3">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
                 placeholder={t('orders.searchMenu')}
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className="w-full pl-9 pr-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
               />
             </div>
 
             {/* Product list */}
-            <div className="flex-1 overflow-y-auto border border-gray-200 rounded-lg mb-3 max-h-48">
+            <div className="flex-1 overflow-y-auto border border-border rounded-lg mb-3 max-h-48">
               {products
                 .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
                 .map((product: Product) => (
@@ -1541,9 +1541,9 @@ placeholder={t('orders.managerPin')}
                     className="w-full flex items-center justify-between px-3 py-2 hover:bg-green-50 text-left border-b border-gray-50 last:border-0 transition-colors"
                   >
                     <div>
-                      <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                      <span className="text-sm font-medium text-foreground">{product.name}</span>
                       {product.price && (
-                        <span className="text-xs text-gray-500 ml-2">{fmt(Number(product.price))}</span>
+                        <span className="text-xs text-muted-foreground ml-2">{fmt(Number(product.price))}</span>
                       )}
                     </div>
                     <Plus size={14} className="text-green-500" />
@@ -1551,36 +1551,36 @@ placeholder={t('orders.managerPin')}
                 ))
               }
               {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
-                <div className="px-3 py-4 text-sm text-gray-400 text-center">{t('orders.noItemsFound')}</div>
+                <div className="px-3 py-4 text-sm text-muted-foreground text-center">{t('orders.noItemsFound')}</div>
               )}
             </div>
 
             {/* Selected items */}
             {selectedItems.length > 0 && (
               <div className="space-y-2 mb-3">
-                <p className="text-xs font-medium text-gray-500 uppercase">{t('orders.selectedItems')}</p>
+                <p className="text-xs font-medium text-muted-foreground uppercase">{t('orders.selectedItems')}</p>
                 {selectedItems.map(item => (
-                  <div key={item.product_id} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                  <div key={item.product_id} className="flex items-center gap-2 bg-surface-sunken rounded-lg p-2">
                     <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium text-gray-900 truncate block">{item.product_name}</span>
+                      <span className="text-sm font-medium text-foreground truncate block">{item.product_name}</span>
                       <input
                         type="text"
                         placeholder={t('orders.notesOptional')}
                         value={item.special_instructions}
                         maxLength={100}
                         onChange={(e) => handleUpdateSelectionNotes(item.product_id, e.target.value.slice(0, 100))}
-                        className="w-full text-xs text-gray-500 bg-transparent border-0 p-0 focus:outline-none placeholder:text-gray-300"
+                        className="w-full text-xs text-muted-foreground bg-transparent border-0 p-0 focus:outline-none placeholder:text-text-subtle"
                       />
                     </div>
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleUpdateSelectionQty(item.product_id, item.quantity - 1)}
-                        className="w-6 h-6 rounded bg-gray-200 text-gray-600 text-xs hover:bg-gray-300"
+                        className="w-6 h-6 rounded bg-secondary text-muted-foreground text-xs hover:bg-gray-300"
                       >-</button>
                       <span className="w-6 text-center text-sm font-medium">{item.quantity}</span>
                       <button
                         onClick={() => handleUpdateSelectionQty(item.product_id, item.quantity + 1)}
-                        className="w-6 h-6 rounded bg-gray-200 text-gray-600 text-xs hover:bg-gray-300"
+                        className="w-6 h-6 rounded bg-secondary text-muted-foreground text-xs hover:bg-gray-300"
                       >+</button>
                     </div>
                     <button
@@ -1595,7 +1595,7 @@ placeholder={t('orders.managerPin')}
             )}
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <div className="flex justify-end gap-2 pt-2 border-t border-hairline">
               <Button
                 variant="outline"
                 size="sm"

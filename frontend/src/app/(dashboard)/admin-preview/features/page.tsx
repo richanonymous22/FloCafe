@@ -69,7 +69,7 @@ export default function FeaturesPreviewPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-4">
-      <h1 className="text-2xl font-semibold">Feature entitlements (preview)</h1>
+      <h1 className="text-display-lg text-3xl text-foreground">Feature entitlements (preview)</h1>
       <p className="text-sm text-muted-foreground">
         Development preview of the feature model — not the final Plemmo Admin.
       </p>

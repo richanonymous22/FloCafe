@@ -68,43 +68,43 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-12">
+    <div className="min-h-screen flex items-center justify-center bg-surface-sunken px-4 py-12">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <img src="/logo.svg" alt="Flo" width={120} height={77} className="mx-auto mb-3" />
-          <p className="text-gray-500 mt-2">{t('auth.registerSubtitle')}</p>
+          <p className="text-muted-foreground mt-2">{t('auth.registerSubtitle')}</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-lg p-8">
+        <div className="bg-surface rounded-2xl shadow-lg p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.yourName')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.yourName')}</label>
                 <input
                   type="text"
                   name="name"
                   value={form.name}
                   onChange={handleChange}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                  className="w-full px-4 py-2.5 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                   required
                 />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.email')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.email')}</label>
                 <input
                   type="email"
                   name="email"
                   autoComplete="email"
                   value={form.email}
                   onChange={handleChange}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                  className="w-full px-4 py-2.5 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.password')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.password')}</label>
                 <div className="relative">
                   <input
                     type={showPassword ? 'text' : 'password'}
@@ -112,13 +112,13 @@ export default function RegisterPage() {
                     autoComplete="new-password"
                     value={form.password}
                     onChange={handleChange}
-                    className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                    className="w-full px-4 py-2.5 pr-10 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-gray-700 focus:outline-none"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
                     tabIndex={-1}
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -127,7 +127,7 @@ export default function RegisterPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.confirmPassword')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.confirmPassword')}</label>
                 <div className="relative">
                   <input
                     type={showConfirmPassword ? 'text' : 'password'}
@@ -135,13 +135,13 @@ export default function RegisterPage() {
                     autoComplete="new-password"
                     value={form.password_confirmation}
                     onChange={handleChange}
-                    className="w-full px-4 py-2.5 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                    className="w-full px-4 py-2.5 pr-10 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-gray-700 focus:outline-none"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
                     tabIndex={-1}
                   >
                     {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -157,26 +157,26 @@ export default function RegisterPage() {
                 </div>
               )}
 
-              <div className="col-span-2 border-t border-gray-200 pt-5 mt-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.businessNameLabel')}</label>
+              <div className="col-span-2 border-t border-border pt-5 mt-1">
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.businessNameLabel')}</label>
                 <input
                   type="text"
                   name="business_name"
                   value={form.business_name}
                   onChange={handleChange}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                  className="w-full px-4 py-2.5 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                   placeholder={t('auth.businessNamePlaceholder')}
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t('auth.countryLabel')}</label>
+                <label className="block text-sm font-medium text-foreground mb-1">{t('auth.countryLabel')}</label>
                 <select
                   name="country"
                   value={form.country}
                   onChange={handleChange}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
+                  className="w-full px-4 py-2.5 border border-border-strong rounded-lg focus:ring-2 focus:ring-brand focus:border-brand outline-none"
                 >
                   <option value="IN">{t('auth.countryIndia')}</option>
                   <option value="TH">{t('auth.countryThailand')}</option>
@@ -189,7 +189,7 @@ export default function RegisterPage() {
             </Button>
           </form>
 
-          <p className="text-center text-sm text-gray-500 mt-6">
+          <p className="text-center text-sm text-muted-foreground mt-6">
             {t('auth.haveAccount')}{' '}
             <Link href="/auth/login" className="text-brand hover:text-brand-hover font-medium">
               {t('auth.signIn')}

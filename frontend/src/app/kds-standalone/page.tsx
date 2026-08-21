@@ -74,7 +74,7 @@ export default function KdsStandalonePage() {
     return (
       <div className="flex flex-col items-center justify-center h-screen gap-3 text-center px-6 bg-gray-900 text-white">
         <h1 className="text-lg font-semibold">Kitchen Display is disabled</h1>
-        <p className="text-sm text-gray-400 max-w-sm">
+        <p className="text-sm text-muted-foreground max-w-sm">
           This business has turned off the Kitchen Display System. Ask an owner or manager to re-enable it from Settings.
         </p>
       </div>

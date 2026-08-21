@@ -271,7 +271,7 @@ export default function SetupPage() {
                         key={option}
                         onClick={() => setLanguage(option)}
                         className={`p-4 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'
+                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3">
@@ -293,7 +293,7 @@ export default function SetupPage() {
                   </div>
 
                   <div className="relative">
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                     <Input
                       value={countryQuery}
                       onChange={(e) => setCountryQuery(e.target.value)}
@@ -311,7 +311,7 @@ export default function SetupPage() {
                         key={c.code}
                         onClick={() => setCountry(c.code)}
                         className={`p-3 rounded-xl border-2 text-left transition-all flex items-center justify-between ${
-                          selected ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'
+                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
                         }`}
                       >
                         <div>
@@ -325,7 +325,7 @@ export default function SetupPage() {
                     );
                   })}
                   {q && filteredCountries.length === 0 && (
-                    <p className="text-center text-gray-500 py-6 text-sm">{t('setup.noMatches').replace('{query}', countryQuery)}</p>
+                    <p className="text-center text-muted-foreground py-6 text-sm">{t('setup.noMatches').replace('{query}', countryQuery)}</p>
                   )}
                 </div>
 
@@ -535,7 +535,7 @@ export default function SetupPage() {
                       type="checkbox"
                       checked={termsAccepted}
                       onChange={(e) => setTermsAccepted(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                      className="mt-0.5 h-4 w-4 rounded border-border-strong"
                       required
                     />
                     <span>
@@ -562,11 +562,11 @@ export default function SetupPage() {
                     <p className="font-medium text-foreground">Email communication</p>
                     <p className="text-muted-foreground">We will send a welcome email immediately so you can verify this address. Essential account, service, and security notices are not promotional and cannot be disabled here.</p>
                     <label className="flex items-start gap-2">
-                      <input type="checkbox" checked={productUpdates} onChange={(e) => setProductUpdates(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300" />
+                      <input type="checkbox" checked={productUpdates} onChange={(e) => setProductUpdates(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-border-strong" />
                       <span>Receive product updates and release notes (optional)</span>
                     </label>
                     <label className="flex items-start gap-2">
-                      <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300" />
+                      <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-border-strong" />
                       <span>Receive marketing messages, offers, and surveys (optional)</span>
                     </label>
                   </div>
@@ -602,7 +602,7 @@ export default function SetupPage() {
                         key={item.value}
                         onClick={() => setProfile(item.value)}
                         className={`p-4 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'
+                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
                         }`}
                       >
                         <div className="flex items-start gap-4">
@@ -651,12 +651,12 @@ export default function SetupPage() {
                   <p className="text-muted-foreground text-sm">{t('setup.cloudSubtitle')}</p>
                 </div>
 
-                <label className="flex items-start gap-3 cursor-pointer p-4 rounded-xl border-2 border-gray-200">
+                <label className="flex items-start gap-3 cursor-pointer p-4 rounded-xl border-2 border-border">
                   <input
                     type="checkbox"
                     checked={cloudEnabled}
                     disabled
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                    className="mt-0.5 h-4 w-4 rounded border-border-strong"
                   />
                   <span>
                     <span className="font-medium text-foreground">Cloud Services are enabled automatically</span>
@@ -710,7 +710,7 @@ export default function SetupPage() {
                         key={item.value}
                         onClick={() => setServiceModel(item.value)}
                         className={`p-5 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-gray-200 hover:border-gray-300'
+                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">

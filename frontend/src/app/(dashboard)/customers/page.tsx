@@ -18,8 +18,8 @@ import { useI18n } from '@/hooks/useI18n';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 
 function SortIcon({ field, sortField, sortOrder }: { field: string; sortField: string; sortOrder: 'asc' | 'desc' }) {
-  if (sortField !== field) return <span className="text-gray-300 w-3 inline-block ml-1 opacity-0 group-hover:opacity-100 transition-opacity">↕</span>;
-  return sortOrder === 'asc' ? <TrendingUp size={12} className="inline ml-1 text-gray-500" /> : <TrendingDown size={12} className="inline ml-1 text-gray-500" />;
+  if (sortField !== field) return <span className="text-text-subtle w-3 inline-block ml-1 opacity-0 group-hover:opacity-100 transition-opacity">↕</span>;
+  return sortOrder === 'asc' ? <TrendingUp size={12} className="inline ml-1 text-muted-foreground" /> : <TrendingDown size={12} className="inline ml-1 text-muted-foreground" />;
 }
 
 export default function CustomersPage() {
@@ -136,7 +136,7 @@ export default function CustomersPage() {
     <div>
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold text-gray-900">{t('nav.customers')}</h1>
+          <h1 className="text-display-lg text-3xl text-foreground">{t('nav.customers')}</h1>
           {filter === 'invalid_phones' && (
             <span className="bg-red-100 text-red-800 text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1.5">
               <AlertCircle size={14} /> Action Required
@@ -150,48 +150,48 @@ export default function CustomersPage() {
       </div>
 
       <div className="relative mb-4">
-        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <input
           type="text" value={search} onChange={(e) => setSearch(e.target.value)}
           placeholder={t('customer.search')}
-          className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-brand outline-none"
+          className="w-full pl-10 pr-4 py-2.5 bg-surface border border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
         />
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+      <div className="bg-surface rounded-xl border border-hairline overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50">
+          <thead className="bg-surface-sunken">
             <tr>
-              <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('name')}>
+              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('name')}>
                 {t('customers.columnCustomer')} <SortIcon field="name" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('phone')}>
+              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('phone')}>
                 {t('customer.phone')} <SortIcon field="phone" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('last_visit')}>
+              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('last_visit')}>
                 Last Visit <SortIcon field="last_visit" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('visits')}>
+              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('visits')}>
                 {t('customer.visits')} <SortIcon field="visits" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-right p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('spent')}>
+              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('spent')}>
                 {t('customer.totalSpent')} <SortIcon field="spent" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-right p-4 text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100 group transition-colors" onClick={() => onSort('loyalty')}>
+              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('loyalty')}>
                 {t('customer.loyalty')} <SortIcon field="loyalty" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-gray-500 uppercase">{t('customers.columnActions')}</th>
-              <th className="text-center p-4 text-xs font-medium text-gray-500 uppercase">{t('customers.columnLedger')}</th>
+              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('customers.columnActions')}</th>
+              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('customers.columnLedger')}</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-hairline">
             {customers.map((c) => (
-              <tr key={c.id} className="hover:bg-gray-50">
+              <tr key={c.id} className="hover:bg-surface-sunken">
                 <td className="p-4">
-                  <p className="font-medium text-gray-900">{c.name}</p>
-                  <p className="text-xs text-gray-500">{c.email || '—'}</p>
+                  <p className="font-medium text-foreground">{c.name}</p>
+                  <p className="text-xs text-muted-foreground">{c.email || '—'}</p>
                 </td>
-                <td className="p-4 text-sm text-gray-600">
+                <td className="p-4 text-sm text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <span>
                       {c.phone ? (c.country_code && !c.phone.startsWith(c.country_code) ? `${c.country_code}${c.phone}` : c.phone) : '—'}
@@ -203,7 +203,7 @@ export default function CustomersPage() {
                     )}
                   </div>
                 </td>
-                <td className="p-4 text-center text-sm text-gray-500 whitespace-nowrap">
+                <td className="p-4 text-center text-sm text-muted-foreground whitespace-nowrap">
                   {c.last_visit_at ? fmtDate(c.last_visit_at) : '—'}
                 </td>
                 <td className="p-4 text-center text-sm">{c.visits_count}</td>
@@ -215,7 +215,7 @@ export default function CustomersPage() {
                       {Number(c.wallet_balance).toLocaleString()} {t('customer.ptsSuffix')}
                     </span>
                   ) : (
-                    <span className="text-gray-400 text-sm">—</span>
+                    <span className="text-muted-foreground text-sm">—</span>
                   )}
                 </td>
                 <td className="p-4 text-center">
@@ -232,55 +232,55 @@ export default function CustomersPage() {
             ))}
           </tbody>
         </table>
-        {customers.length === 0 && <p className="text-center text-gray-500 py-12">{t('customers.empty')}</p>}
-        {customers.length >= 200 && <p className="text-center text-xs text-gray-400 py-3">{t('customers.first200')}</p>}
+        {customers.length === 0 && <p className="text-center text-muted-foreground py-12">{t('customers.empty')}</p>}
+        {customers.length >= 200 && <p className="text-center text-xs text-muted-foreground py-3">{t('customers.first200')}</p>}
       </div>
 
       {/* Loyalty Ledger Modal */}
       {ledgerCustomer && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
-            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+          <div className="bg-surface rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-xl">
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-hairline">
               <div>
-                <h2 className="text-lg font-bold text-gray-900">{t('customers.loyaltyLedger')}</h2>
-                <p className="text-sm text-gray-500">{ledgerCustomer.name}</p>
+                <h2 className="text-lg font-bold text-foreground">{t('customers.loyaltyLedger')}</h2>
+                <p className="text-sm text-muted-foreground">{ledgerCustomer.name}</p>
               </div>
-              <button onClick={() => setLedgerCustomer(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200">
-                <X size={16} className="text-gray-500" />
+              <button onClick={() => setLedgerCustomer(null)} className="w-8 h-8 flex items-center justify-center rounded-full bg-secondary hover:bg-secondary">
+                <X size={16} className="text-muted-foreground" />
               </button>
             </div>
 
             {ledgerLoading ? (
-              <div className="flex-1 flex items-center justify-center py-12 text-gray-400">{t('customer.loadingLedger')}</div>
+              <div className="flex-1 flex items-center justify-center py-12 text-muted-foreground">{t('customer.loadingLedger')}</div>
             ) : ledgerData ? (
               <>
                 {/* Summary row */}
-                <div className="flex items-center gap-6 px-6 py-4 bg-gray-50 border-b border-gray-100">
+                <div className="flex items-center gap-6 px-6 py-4 bg-surface-sunken border-b border-hairline">
                   <div>
-                    <p className="text-xs text-gray-500 mb-0.5">{t('customers.totalBalance')}</p>
-                    <p className="text-2xl font-bold text-gray-900">{ledgerData.balance} <span className="text-sm font-normal text-gray-500">{t('customer.ptsSuffix')}</span></p>
+                    <p className="text-xs text-muted-foreground mb-0.5">{t('customers.totalBalance')}</p>
+                    <p className="text-display-lg text-3xl text-foreground">{ledgerData.balance} <span className="text-sm font-normal text-muted-foreground">{t('customer.ptsSuffix')}</span></p>
                   </div>
                 </div>
 
                 {/* Ledger table */}
                 <div className="flex-1 overflow-y-auto">
                   {ledgerData.transactions.length === 0 ? (
-                    <p className="text-center text-gray-400 py-12">{t('customers.noTransactions')}</p>
+                    <p className="text-center text-muted-foreground py-12">{t('customers.noTransactions')}</p>
                   ) : (
                     <table className="w-full text-sm">
-                      <thead className="bg-gray-50 sticky top-0">
+                      <thead className="bg-surface-sunken sticky top-0">
                         <tr>
-                          <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500">{t('customers.columnDate')}</th>
-                          <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500">{t('customers.columnDescription')}</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-medium text-gray-500">{t('customers.columnPoints')}</th>
-                          <th className="text-right px-4 py-2.5 text-xs font-medium text-gray-500">{t('customers.columnExpires')}</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{t('customers.columnDate')}</th>
+                          <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">{t('customers.columnDescription')}</th>
+                          <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">{t('customers.columnPoints')}</th>
+                          <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">{t('customers.columnExpires')}</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-50">
+                      <tbody className="divide-y divide-hairline">
                         {ledgerData.transactions.map((t: { id: number; type: string; amount: number; description: string; created_at: string; expires_at?: string }) => (
-                          <tr key={t.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{fmtDate(t.created_at)}</td>
-                            <td className="px-4 py-3 text-gray-700">{t.description || '—'}</td>
+                          <tr key={t.id} className="hover:bg-surface-sunken">
+                            <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{fmtDate(t.created_at)}</td>
+                            <td className="px-4 py-3 text-foreground">{t.description || '—'}</td>
                             <td className="px-4 py-3 text-right font-semibold whitespace-nowrap">
                               <span className={`inline-flex items-center gap-1 ${
                                 t.type === 'credit' ? 'text-green-600' : 'text-red-500'
@@ -291,7 +291,7 @@ export default function CustomersPage() {
                                 {t.type === 'credit' ? '+' : '-'}{t.amount}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right text-xs text-gray-400 whitespace-nowrap">
+                            <td className="px-4 py-3 text-right text-xs text-muted-foreground whitespace-nowrap">
                               {t.expires_at ? fmtDate(t.expires_at) : '—'}
                             </td>
                           </tr>
@@ -308,10 +308,10 @@ export default function CustomersPage() {
 
       {showForm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+          <div className="bg-surface rounded-2xl p-6 w-full max-w-sm">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold">{editingCustomer ? t('customer.edit') : t('customer.add')}</h2>
-              <button onClick={() => setShowForm(false)}><X size={20} className="text-gray-400" /></button>
+              <button onClick={() => setShowForm(false)}><X size={20} className="text-muted-foreground" /></button>
             </div>
             <form onSubmit={handleSave} className="space-y-4">
               <input type="text" placeholder={t('customer.name')} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}

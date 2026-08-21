@@ -31,8 +31,8 @@ export function KdsHeader({
       <div className="flex items-center gap-3 mb-3">
         <ChefHat size={24} className="text-brand" />
         <div>
-          <h1 className="text-xl font-bold text-gray-900">{t('kds.title')}</h1>
-          <p className="text-xs text-gray-500">
+          <h1 className="text-xl font-bold text-foreground">{t('kds.title')}</h1>
+          <p className="text-xs text-muted-foreground">
             {userName} ({userRole})
           </p>
         </div>
@@ -47,7 +47,7 @@ export function KdsHeader({
             </span>
           ) : null}
           <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-muted-foreground">
             {connected
               ? connectionMode === 'websocket'
                 ? t('kds.connectionLive')
@@ -55,14 +55,14 @@ export function KdsHeader({
               : t('kds.connectionConnecting')}
           </span>
 
-          <div className="flex items-center bg-gray-100 rounded-lg p-0.5 ml-2" role="tablist">
+          <div className="flex items-center bg-secondary rounded-lg p-0.5 ml-2" role="tablist">
             <button
               onClick={() => onChangeView('tabs')}
               aria-pressed={viewMode === 'tabs'}
               className={`min-w-11 min-h-11 px-2.5 py-1 text-xs font-medium rounded-md transition ${
                 viewMode === 'tabs'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'bg-surface text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {t('kds.viewTabs')}
@@ -72,8 +72,8 @@ export function KdsHeader({
               aria-pressed={viewMode === 'kanban'}
               className={`min-w-11 min-h-11 px-2.5 py-1 text-xs font-medium rounded-md transition ${
                 viewMode === 'kanban'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+                  ? 'bg-surface text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {t('kds.viewKanban')}
@@ -82,7 +82,7 @@ export function KdsHeader({
 
           <button
             onClick={onLogout}
-            className="min-w-11 min-h-11 p-2 hover:bg-gray-100 rounded-lg text-gray-500 ml-2"
+            className="min-w-11 min-h-11 p-2 hover:bg-secondary rounded-lg text-muted-foreground ml-2"
             title={t('nav.logout')}
           >
             <LogOut size={20} />

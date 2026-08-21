@@ -81,7 +81,7 @@ export default function SupportPage() {
       <div className="flex items-start gap-3">
         <div className="rounded-xl bg-brand/10 p-3 text-brand"><LifeBuoy className="size-6" /></div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('support.title')}</h1>
+          <h1 className="text-display-lg text-3xl text-foreground tracking-tight">{t('support.title')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('support.subtitle')}</p>
         </div>
       </div>

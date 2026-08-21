@@ -54,13 +54,13 @@ export function tagLabel(tag: string): string {
 
 // First tag's bg colour for card background tinting
 export function firstTagBg(tags: string[] | null | undefined): string {
-  if (!tags?.length) return 'bg-gray-100';
-  return TAG_CONFIG[normalizeTag(tags[0])]?.bg ?? 'bg-gray-100';
+  if (!tags?.length) return 'bg-secondary';
+  return TAG_CONFIG[normalizeTag(tags[0])]?.bg ?? 'bg-secondary';
 }
 
 export default function TagBadge({ tag }: { tag: string }) {
   const { t } = useI18n();
-  const cfg = TAG_CONFIG[normalizeTag(tag)] ?? { color: 'text-gray-600', bg: 'bg-gray-100', dot: 'bg-gray-400' };
+  const cfg = TAG_CONFIG[normalizeTag(tag)] ?? { color: 'text-muted-foreground', bg: 'bg-secondary', dot: 'bg-gray-400' };
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${cfg.color} ${cfg.bg}`}>
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cfg.dot}`} />

@@ -67,7 +67,7 @@ export default function ReconciliationPage() {
   return (
     <div className="p-4 md:p-6 space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold">Reconciliation</h1>
+        <h1 className="text-display-lg text-3xl text-foreground">Reconciliation</h1>
         <p className="text-sm text-muted-foreground">Sales, cross-device conflicts, inventory discrepancies, and sync health for this organization.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>

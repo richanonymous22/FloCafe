@@ -213,13 +213,13 @@ function KanbanOrderCard({
         isDragging ? 'opacity-40' : ''
       } ${busy ? 'pointer-events-none opacity-60' : ''}`}
     >
-      <div className={`rounded-xl border-2 ${config.border} bg-white p-3 flex flex-col shadow-sm`}>
+      <div className={`rounded-xl border-2 ${config.border} bg-surface p-3 flex flex-col shadow-sm`}>
         <div className="flex justify-between items-center mb-2 gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span className="font-bold text-sm shrink-0">#{order.order_number}</span>
             <Badge
               variant="outline"
-              className={ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-gray-50 text-gray-700 border-gray-200'}
+              className={ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-surface-sunken text-foreground border-border'}
             >
               {t(ORDER_TYPE_LABEL_KEYS[order.type] ?? order.type)}
             </Badge>
@@ -227,7 +227,7 @@ function KanbanOrderCard({
               <Badge variant="secondary">{t('kds.tableLabel', { name: order.table.name })}</Badge>
             )}
           </div>
-          <div className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0">
+          <div className="flex items-center gap-1 text-sm text-muted-foreground font-mono shrink-0">
             <Clock size={12} />
             {timeSince(order.created_at)}
           </div>
@@ -253,7 +253,7 @@ function KanbanOrderCard({
             >
               <div className="flex items-center gap-2">
                 <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>{item.quantity}×</span>
-                <span className="text-lg text-gray-900 font-medium flex-1 truncate">{item.product_name}</span>
+                <span className="text-lg text-foreground font-medium flex-1 truncate">{item.product_name}</span>
                 {item.addons && item.addons.length > 0 && (
                   <span className="text-[10px] text-blue-600">+{item.addons.length}</span>
                 )}
@@ -291,16 +291,16 @@ function VoidedColumn({
       <div className={`flex items-center gap-2 px-3 py-2 ${config.bg} rounded-t-lg border-2 ${config.border} border-b-0`}>
         <div className={`w-2 h-2 rounded-full ${config.color}`} />
         <span className={`text-base font-semibold ${config.text}`}>{t(config.labelKey)}</span>
-        <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full bg-white/70 text-gray-700 font-medium tabular-nums">
+        <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full bg-surface/70 text-foreground font-medium tabular-nums">
           {count}
         </span>
       </div>
       <div
-        className={`flex-1 border-2 ${config.border} border-t-0 rounded-b-lg p-2 space-y-2 overflow-y-auto bg-gray-50/40`}
+        className={`flex-1 border-2 ${config.border} border-t-0 rounded-b-lg p-2 space-y-2 overflow-y-auto bg-surface-sunken/40`}
         style={{ minHeight: '60vh', maxHeight: 'calc(100vh - 220px)' }}
       >
         {groups.map(({ order, items }) => (
-          <div key={order.id} className={`rounded-xl border-2 ${config.border} bg-white p-3 flex flex-col shadow-sm opacity-80`}>
+          <div key={order.id} className={`rounded-xl border-2 ${config.border} bg-surface p-3 flex flex-col shadow-sm opacity-80`}>
             <div className="flex items-center gap-1.5 min-w-0 flex-wrap mb-2">
               <span className="font-bold text-sm shrink-0">#{order.order_number}</span>
               {order.table?.name && (
@@ -317,7 +317,7 @@ function VoidedColumn({
                 >
                   <div className="flex items-center gap-2">
                     <span className={`text-base font-bold w-6 shrink-0 ${config.text}`}>{item.quantity}×</span>
-                    <span className="text-lg text-gray-400 line-through font-medium flex-1 truncate">{item.product_name}</span>
+                    <span className="text-lg text-muted-foreground line-through font-medium flex-1 truncate">{item.product_name}</span>
                   </div>
                 </button>
               ))}
@@ -325,7 +325,7 @@ function VoidedColumn({
           </div>
         ))}
         {count === 0 && (
-          <div className="flex flex-col items-center justify-center py-6 text-gray-400 text-xs">
+          <div className="flex flex-col items-center justify-center py-6 text-muted-foreground text-xs">
             <span>{t('kds.emptyColumn')}</span>
           </div>
         )}

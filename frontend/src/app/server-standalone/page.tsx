@@ -36,7 +36,7 @@ function itemStatusIcon(status: string) {
   if (status === 'preparing') return <Flame size={15} className="text-orange-500" aria-label="Preparing" />;
   if (status === 'ready') return <Bell size={15} className="text-emerald-600" aria-label="Ready" />;
   if (status === 'served') return <CheckCircle2 size={15} className="text-blue-600" aria-label="Served" />;
-  return <Circle size={15} className="text-gray-400" aria-label="Waiting" />;
+  return <Circle size={15} className="text-muted-foreground" aria-label="Waiting" />;
 }
 
 function money(value: number | string) {
@@ -258,9 +258,9 @@ export default function ServerStandalonePage() {
   if (disabled) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center">
-        <Smartphone size={44} className="text-gray-400" />
-        <h1 className="text-lg font-semibold text-gray-900">Server App is disabled</h1>
-        <p className="max-w-sm text-sm text-gray-500">Ask an owner or manager to re-enable Tableside Ordering from Settings.</p>
+        <Smartphone size={44} className="text-muted-foreground" />
+        <h1 className="text-lg font-semibold text-foreground">Server App is disabled</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">Ask an owner or manager to re-enable Tableside Ordering from Settings.</p>
       </div>
     );
   }
@@ -268,17 +268,17 @@ export default function ServerStandalonePage() {
   if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
-        <form onSubmit={handleLogin} className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <form onSubmit={handleLogin} className="w-full max-w-sm rounded-xl border border-border bg-surface p-6 shadow-sm">
           <div className="mb-6 text-center">
             <UserRound size={42} className="mx-auto mb-3 text-brand" />
-            <h1 className="text-2xl font-bold text-gray-900">Server App</h1>
-            <p className="mt-1 text-sm text-gray-500">Tableside ordering for service staff</p>
+            <h1 className="text-display-lg text-3xl text-foreground">Server App</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Tableside ordering for service staff</p>
           </div>
           <div className="space-y-3">
-            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="server@flo.local" required className="h-11 w-full rounded-lg border border-gray-300 px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20" />
-            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Password" required className="h-11 w-full rounded-lg border border-gray-300 px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20" />
-            <label className="flex items-center gap-2 text-sm text-gray-600">
-              <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} className="rounded border-gray-300 text-brand focus:ring-brand" />
+            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="server@flo.local" required className="h-11 w-full rounded-lg border border-border-strong px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20" />
+            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Password" required className="h-11 w-full rounded-lg border border-border-strong px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20" />
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} className="rounded border-border-strong text-brand focus:ring-brand" />
               Keep me logged in
             </label>
             <button disabled={loginLoading} className="h-11 w-full rounded-lg bg-brand font-semibold text-white disabled:opacity-60">
@@ -291,49 +291,49 @@ export default function ServerStandalonePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-gray-900">
-      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white/95 px-3 py-2 backdrop-blur">
+    <div className="min-h-screen bg-slate-50 text-foreground">
+      <header className="sticky top-0 z-20 border-b border-border bg-surface/95 px-3 py-2 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand text-white"><ChefHat size={18} /></div>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-semibold">Server App</h1>
-            <p className="truncate text-xs text-gray-500">{activeTable ? `Table ${activeTable.name || activeTable.number}` : 'Select a table'}</p>
+            <p className="truncate text-xs text-muted-foreground">{activeTable ? `Table ${activeTable.name || activeTable.number}` : 'Select a table'}</p>
           </div>
-          <button onClick={() => loadAll().catch(() => toast.error('Refresh failed'))} className="rounded-lg border border-gray-200 p-2 text-gray-600"><RefreshCw size={17} /></button>
-          <button onClick={logout} className="rounded-lg border border-gray-200 p-2 text-gray-600"><LogOut size={17} /></button>
+          <button onClick={() => loadAll().catch(() => toast.error('Refresh failed'))} className="rounded-lg border border-border p-2 text-muted-foreground"><RefreshCw size={17} /></button>
+          <button onClick={logout} className="rounded-lg border border-border p-2 text-muted-foreground"><LogOut size={17} /></button>
         </div>
       </header>
 
       <main className="mx-auto grid max-w-6xl gap-3 p-3 lg:grid-cols-[220px_1fr_340px]">
-        <section className="rounded-lg border border-gray-200 bg-white p-3">
-          <h2 className="mb-2 text-xs font-semibold uppercase text-gray-500">Tables</h2>
+        <section className="rounded-lg border border-border bg-surface p-3">
+          <h2 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Tables</h2>
           <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
             {tables.map((table) => {
               const selected = table.id === selectedTableId;
               const order = table.activeOrder || table.current_order;
               return (
                 <button key={table.id} onClick={() => setSelectedTableId(table.id)}
-                  className={`min-h-14 rounded-lg border px-2 py-2 text-left ${selected ? 'border-brand bg-brand/5' : 'border-gray-200 bg-white'}`}>
+                  className={`min-h-14 rounded-lg border px-2 py-2 text-left ${selected ? 'border-brand bg-brand/5' : 'border-border bg-surface'}`}>
                   <span className="block truncate text-sm font-semibold">{table.name || table.number}</span>
-                  <span className="text-xs text-gray-500">{order ? 'Open order' : 'Available'}</span>
+                  <span className="text-xs text-muted-foreground">{order ? 'Open order' : 'Available'}</span>
                 </button>
               );
             })}
           </div>
         </section>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-3">
+        <section className="rounded-lg border border-border bg-surface p-3">
           <div className="mb-3 flex gap-2">
             <div className="relative flex-1">
-              <Search size={16} className="absolute left-3 top-3 text-gray-400" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search menu" className="h-10 w-full rounded-lg border border-gray-200 pl-9 pr-3 text-sm focus:border-brand focus:outline-none" />
+              <Search size={16} className="absolute left-3 top-3 text-muted-foreground" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search menu" className="h-10 w-full rounded-lg border border-border pl-9 pr-3 text-sm focus:border-brand focus:outline-none" />
             </div>
           </div>
           <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-            <button onClick={() => setSelectedCategoryId('all')} className={`h-9 shrink-0 rounded-lg px-3 text-sm ${selectedCategoryId === 'all' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'}`}>All</button>
+            <button onClick={() => setSelectedCategoryId('all')} className={`h-9 shrink-0 rounded-lg px-3 text-sm ${selectedCategoryId === 'all' ? 'bg-brand text-white' : 'bg-secondary text-foreground'}`}>All</button>
             {categories.map((category) => (
               <button key={category.id} onClick={() => setSelectedCategoryId(category.id)}
-                className={`h-9 shrink-0 rounded-lg px-3 text-sm ${selectedCategoryId === category.id ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'}`}>
+                className={`h-9 shrink-0 rounded-lg px-3 text-sm ${selectedCategoryId === category.id ? 'bg-brand text-white' : 'bg-secondary text-foreground'}`}>
                 {category.name}
               </button>
             ))}
@@ -341,24 +341,24 @@ export default function ServerStandalonePage() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
             {filteredProducts.map((product) => (
               <button key={product.id} onClick={() => addProduct(product)}
-                className="min-h-24 rounded-lg border border-gray-200 bg-white p-3 text-left hover:border-brand">
+                className="min-h-24 rounded-lg border border-border bg-surface p-3 text-left hover:border-brand">
                 <span className="line-clamp-2 text-sm font-semibold">{product.name}</span>
-                <span className="mt-2 block text-sm text-gray-500">{money(product.price)}</span>
+                <span className="mt-2 block text-sm text-muted-foreground">{money(product.price)}</span>
               </button>
             ))}
           </div>
         </section>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-3 lg:sticky lg:top-16 lg:self-start">
+        <section className="rounded-lg border border-border bg-surface p-3 lg:sticky lg:top-16 lg:self-start">
           <h2 className="text-sm font-semibold">Current ticket</h2>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="Customer name" className="h-10 rounded-lg border border-gray-200 px-3 text-sm focus:border-brand focus:outline-none" />
-            <input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} placeholder="Phone" className="h-10 rounded-lg border border-gray-200 px-3 text-sm focus:border-brand focus:outline-none" />
+            <input value={customerName} onChange={(event) => setCustomerName(event.target.value)} placeholder="Customer name" className="h-10 rounded-lg border border-border px-3 text-sm focus:border-brand focus:outline-none" />
+            <input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} placeholder="Phone" className="h-10 rounded-lg border border-border px-3 text-sm focus:border-brand focus:outline-none" />
           </div>
 
           {currentOrder?.items && currentOrder.items.length > 0 && (
-            <div className="mt-4 border-t border-gray-100 pt-3">
-              <p className="mb-2 text-xs font-semibold uppercase text-gray-500">Kitchen</p>
+            <div className="mt-4 border-t border-hairline pt-3">
+              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Kitchen</p>
               <div className="space-y-2">
                 {currentOrder.items.map((item) => (
                   <div key={item.id} className="flex items-center gap-2 text-sm">
@@ -370,30 +370,30 @@ export default function ServerStandalonePage() {
             </div>
           )}
 
-          <div className="mt-4 border-t border-gray-100 pt-3">
-            <p className="mb-2 text-xs font-semibold uppercase text-gray-500">New items</p>
+          <div className="mt-4 border-t border-hairline pt-3">
+            <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">New items</p>
             {draft.length === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-400">Tap menu items to add them here.</p>
+              <p className="py-6 text-center text-sm text-muted-foreground">Tap menu items to add them here.</p>
             ) : (
               <div className="space-y-3">
                 {draft.map((line) => (
-                  <div key={line.product.id} className="rounded-lg border border-gray-100 p-2">
+                  <div key={line.product.id} className="rounded-lg border border-hairline p-2">
                     <div className="flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{line.product.name}</span>
-                      <button onClick={() => changeQty(line.product.id, -1)} className="rounded-md border border-gray-200 p-1"><Minus size={14} /></button>
+                      <button onClick={() => changeQty(line.product.id, -1)} className="rounded-md border border-border p-1"><Minus size={14} /></button>
                       <span className="w-6 text-center text-sm font-semibold">{line.quantity}</span>
-                      <button onClick={() => changeQty(line.product.id, 1)} className="rounded-md border border-gray-200 p-1"><Plus size={14} /></button>
+                      <button onClick={() => changeQty(line.product.id, 1)} className="rounded-md border border-border p-1"><Plus size={14} /></button>
                     </div>
                     <input value={line.note} onChange={(event) => setDraft((lines) => lines.map((draftLine) => draftLine.product.id === line.product.id ? { ...draftLine, note: event.target.value } : draftLine))}
-                      placeholder="Item note" className="mt-2 h-9 w-full rounded-md border border-gray-200 px-2 text-sm focus:border-brand focus:outline-none" />
+                      placeholder="Item note" className="mt-2 h-9 w-full rounded-md border border-border px-2 text-sm focus:border-brand focus:outline-none" />
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3">
-            <span className="text-sm text-gray-500">Draft total</span>
+          <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
+            <span className="text-sm text-muted-foreground">Draft total</span>
             <span className="text-lg font-bold">{money(draftTotal)}</span>
           </div>
           <button onClick={sendDraft} disabled={!selectedTableId || draft.length === 0 || sending}

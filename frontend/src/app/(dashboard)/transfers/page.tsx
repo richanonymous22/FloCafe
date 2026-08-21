@@ -131,7 +131,7 @@ export default function TransfersPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
-      <h1 className="text-2xl font-semibold">Stock transfers</h1>
+      <h1 className="text-display-lg text-3xl text-foreground">Stock transfers</h1>
       {error && <div className="text-destructive text-sm">{error}</div>}
 
       <Card>

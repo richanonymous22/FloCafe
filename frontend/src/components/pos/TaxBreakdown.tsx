@@ -39,12 +39,12 @@ export default function TaxBreakdown({ taxAmount, taxBreakdown, theme = 'dark' }
       >
         {hasBreakdown && (
           expanded
-            ? <ChevronDown size={12} className={theme === 'light' ? 'text-gray-400' : 'text-slate-400'} />
-            : <ChevronRight size={12} className={theme === 'light' ? 'text-gray-400' : 'text-slate-400'} />
+            ? <ChevronDown size={12} className={theme === 'light' ? 'text-muted-foreground' : 'text-slate-400'} />
+            : <ChevronRight size={12} className={theme === 'light' ? 'text-muted-foreground' : 'text-slate-400'} />
         )}
-        <span className={`text-xs ${theme === 'light' ? 'text-gray-500' : 'text-slate-300'}`}>{t('pos.tax')}</span>
+        <span className={`text-xs ${theme === 'light' ? 'text-muted-foreground' : 'text-slate-300'}`}>{t('pos.tax')}</span>
         <span className="flex-1" />
-        <span className={`text-xs ${theme === 'light' ? 'text-gray-500' : 'text-slate-300'}`}>{fmt(taxAmount)}</span>
+        <span className={`text-xs ${theme === 'light' ? 'text-muted-foreground' : 'text-slate-300'}`}>{fmt(taxAmount)}</span>
       </button>
       {expanded && hasBreakdown && (
         <div className="ml-4 mt-1 space-y-0.5">
@@ -53,7 +53,7 @@ export default function TaxBreakdown({ taxAmount, taxBreakdown, theme = 'dark' }
             const rate = typeof line?.rate === 'number' ? line.rate : 0;
             const amount = typeof line?.amount === 'number' ? line.amount : 0;
             return (
-              <div key={`${title}_${rate}_${i}`} className={`flex justify-between text-xs ${theme === 'light' ? 'text-gray-400' : 'text-slate-400'}`}>
+              <div key={`${title}_${rate}_${i}`} className={`flex justify-between text-xs ${theme === 'light' ? 'text-muted-foreground' : 'text-slate-400'}`}>
                 <span>{t('pos.taxLine', { title, rate })}</span>
                 <span>{fmt(amount)}</span>
               </div>

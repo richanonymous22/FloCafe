@@ -161,14 +161,14 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
   if (mode === 'cropping' && cropSrc) {
     return (
       <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl max-w-lg w-full overflow-hidden">
+        <div className="bg-surface rounded-2xl max-w-lg w-full overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b">
-            <h3 className="font-semibold text-gray-900">{t('products.cropImage')}</h3>
-            <button type="button" onClick={() => { setMode('idle'); setCropSrc(null); }} className="text-gray-400 hover:text-gray-600">
+            <h3 className="font-semibold text-foreground">{t('products.cropImage')}</h3>
+            <button type="button" onClick={() => { setMode('idle'); setCropSrc(null); }} className="text-muted-foreground hover:text-muted-foreground">
               <X size={20} />
             </button>
           </div>
-          <div className="relative w-full aspect-square bg-gray-100">
+          <div className="relative w-full aspect-square bg-secondary">
             <Cropper
               image={cropSrc}
               crop={crop}
@@ -212,7 +212,7 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
             placeholder="https://example.com/photo.jpg"
-            className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-brand outline-none"
+            className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:border-brand outline-none"
             onKeyDown={(e) => e.key === 'Enter' && handleUrlFetch()}
           />
           <button type="button"
@@ -224,12 +224,12 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
           </button>
           <button type="button"
             onClick={() => { setMode('idle'); setUrlInput(''); }}
-            className="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm"
+            className="px-3 py-2 text-muted-foreground hover:text-foreground text-sm"
           >
             Cancel
           </button>
         </div>
-        <p className="text-xs text-gray-400">Only HTTPS URLs supported. Image will be fetched, cropped, and stored locally.</p>
+        <p className="text-xs text-muted-foreground">Only HTTPS URLs supported. Image will be fetched, cropped, and stored locally.</p>
       </div>
     );
   }
@@ -243,7 +243,7 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
     <div className="space-y-2">
       {/* Current image preview */}
       {previewUrl && (
-        <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-gray-200">
+        <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-border">
           <img src={previewUrl} alt="Product" className="w-full h-full object-cover" />
           <button type="button"
             onClick={handleRemove}
@@ -260,27 +260,27 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
         <div
           {...getRootProps()}
           className={`w-full flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${
-            isDragActive ? 'border-brand bg-brand/5 text-brand' : 'border-gray-300 text-gray-500 hover:border-brand hover:bg-gray-50'
+            isDragActive ? 'border-brand bg-brand/5 text-brand' : 'border-border-strong text-muted-foreground hover:border-brand hover:bg-surface-sunken'
           }`}
         >
           <input {...getInputProps()} />
-          <Upload size={24} className="mb-2 text-gray-400" />
+          <Upload size={24} className="mb-2 text-muted-foreground" />
           <p className="text-sm font-medium text-center">
             {isDragActive ? 'Drop image here...' : 'Drag & drop an image here, or click to browse'}
           </p>
         </div>
 
         <div className="flex items-center gap-2 justify-center">
-          <div className="flex-1 h-px bg-gray-200"></div>
-          <span className="text-xs text-gray-400 font-medium uppercase px-2">OR USE</span>
-          <div className="flex-1 h-px bg-gray-200"></div>
+          <div className="flex-1 h-px bg-secondary"></div>
+          <span className="text-xs text-muted-foreground font-medium uppercase px-2">OR USE</span>
+          <div className="flex-1 h-px bg-secondary"></div>
         </div>
 
         <div className="flex flex-wrap gap-2 justify-center">
           {/* Camera button (tablet POS) */}
           <button type="button"
             onClick={() => cameraInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm text-foreground hover:bg-surface-sunken hover:border-border-strong transition-colors"
           >
             <Camera size={16} />
             Camera
@@ -301,7 +301,7 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
           {/* URL paste */}
           <button type="button"
             onClick={() => setMode('url-input')}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm text-foreground hover:bg-surface-sunken hover:border-border-strong transition-colors"
           >
             <Link size={16} />
             Paste URL
@@ -309,7 +309,7 @@ export default function ImageUploader({ value, onChange, productId }: ImageUploa
         </div>
       </div>
 
-      <p className="text-xs text-gray-400 text-center mt-4">
+      <p className="text-xs text-muted-foreground text-center mt-4">
         Max {MAX_RAW_FILE_SIZE / 1024 / 1024} MB. Images are compressed to WebP.
       </p>
     </div>

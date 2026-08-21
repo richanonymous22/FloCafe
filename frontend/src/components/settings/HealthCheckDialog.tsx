@@ -23,21 +23,21 @@ interface HealthCheckDialogProps {
 
 function FindingRow({ finding }: { finding: HealthFinding }) {
   return (
-    <div className="rounded-lg border border-gray-100 p-3 text-sm">
+    <div className="rounded-lg border border-hairline p-3 text-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <span className="font-mono text-gray-900">
+          <span className="font-mono text-foreground">
             {finding.table}{finding.column ? `.${finding.column}` : ''}{finding.index !== undefined ? ` (index: ${finding.index})` : ''}
           </span>
-          <p className="text-gray-500 mt-0.5">{finding.description}</p>
+          <p className="text-muted-foreground mt-0.5">{finding.description}</p>
           {(finding.currentState || finding.idealState) && (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               {finding.currentState && <>Current: <span className="font-mono">{finding.currentState}</span>&nbsp;&nbsp;</>}
               {finding.idealState && <>Expected: <span className="font-mono">{finding.idealState}</span></>}
             </p>
           )}
           {finding.suggestedDdl && (
-            <code className="block mt-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-600 overflow-x-auto">
+            <code className="block mt-2 rounded bg-surface-sunken px-2 py-1 text-xs text-muted-foreground overflow-x-auto">
               {finding.suggestedDdl}
             </code>
           )}
@@ -65,7 +65,7 @@ export function HealthCheckDialog({ open, onOpenChange, report, applying, onAppl
 
         <div className="flex-1 overflow-y-auto space-y-6 py-2">
           {!report && (
-            <p className="text-sm text-gray-500 text-center py-10">{t('common.loading')}</p>
+            <p className="text-sm text-muted-foreground text-center py-10">{t('common.loading')}</p>
           )}
 
           {isClean && (
@@ -79,7 +79,7 @@ export function HealthCheckDialog({ open, onOpenChange, report, applying, onAppl
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <Wrench size={16} className="text-brand" />
-                <h3 className="font-medium text-gray-900">{t('settings.healthCheckSafeHeader', { count: safeFindings.length })}</h3>
+                <h3 className="font-medium text-foreground">{t('settings.healthCheckSafeHeader', { count: safeFindings.length })}</h3>
               </div>
               <div className="space-y-2">
                 {safeFindings.map((f) => <FindingRow key={f.id} finding={f} />)}
@@ -91,9 +91,9 @@ export function HealthCheckDialog({ open, onOpenChange, report, applying, onAppl
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle size={16} className="text-amber-600" />
-                <h3 className="font-medium text-gray-900">{t('settings.healthCheckReviewHeader', { count: reviewFindings.length })}</h3>
+                <h3 className="font-medium text-foreground">{t('settings.healthCheckReviewHeader', { count: reviewFindings.length })}</h3>
               </div>
-              <p className="text-xs text-gray-500 mb-2">
+              <p className="text-xs text-muted-foreground mb-2">
                 {t('settings.healthCheckReviewHint')}
               </p>
               <div className="space-y-2">

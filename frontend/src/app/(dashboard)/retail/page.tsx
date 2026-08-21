@@ -338,7 +338,6 @@ function Tile({ product, tint, inBasket, fmt, onSelect }: {
       <span className="relative mb-[11px] flex h-[106px] w-full items-center justify-center overflow-hidden rounded-xl" style={{ background: tint.bg }}>
         <span className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(circle at 50% 38%, rgba(255,255,255,.75), transparent 62%)' }} />
         {imgSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img src={imgSrc} alt={product.name} loading="lazy" className="absolute inset-0 h-full w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
         ) : (
           <span className="relative text-3xl font-extrabold tracking-tight" style={{ color: tint.fg, opacity: 0.9 }}>

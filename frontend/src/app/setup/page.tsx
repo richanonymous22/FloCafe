@@ -8,47 +8,43 @@ import { usePosSettingsStore } from '@/store/pos-settings';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { FoodSprite, FoodTile } from '@/components/brand/FoodSprite';
-import { ArrowLeft, ArrowRight, Check, Cloud, Database, KeyRound, Search, Sparkles, UtensilsCrossed, Eye, EyeOff } from 'lucide-react';
+import {
+  ArrowLeft, ArrowRight, Check, Cloud, Database, KeyRound, Search, Sparkles,
+  UtensilsCrossed, Eye, EyeOff, Languages, UserPlus, Zap, Wine, type LucideIcon,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import { COUNTRIES, getCountryByCode, countryName, type Country } from '@/lib/countries';
 import { getBrowserLanguage, t as translate, type Language } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 
 type SetupProfile = 'empty' | 'express' | 'demo';
 type ServiceModel = 'qsr' | 'finedine';
 
 const SETUP_PROFILES: Array<{ value: SetupProfile; badge?: 'express' | null }> = [
-  { value: 'empty' },
-  { value: 'express', badge: 'express' },
-  { value: 'demo' },
+  { value: 'empty' }, { value: 'express', badge: 'express' }, { value: 'demo' },
 ];
+const SERVICE_MODELS: Array<{ value: ServiceModel }> = [{ value: 'qsr' }, { value: 'finedine' }];
 
-const SERVICE_MODELS: Array<{ value: ServiceModel }> = [
-  { value: 'qsr' },
-  { value: 'finedine' },
-];
-
-// Mirrors main/services/cloud-sync.ts DEFAULT_CLOUD_SERVER_URL — kept in sync
-// manually since the frontend can't import backend TS modules directly.
-// Upstream FloCafe endpoint. Retained only so an operator who explicitly opts
-// into cloud coordination gets a syntactically valid default; Plemmo installs
-// ship with cloud sync OFF (see main/db.ts migration v67) so this is inert.
-// Replace when Plemmo Cloud exists.
 const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
 
-/**
- * Renders a legal document link, or plain text when no URL is configured.
- * A dead or third-party legal link is worse than no link — see lib/brand.ts.
- */
+const STEP_ICONS: LucideIcon[] = [Languages, KeyRound, UserPlus, Database, Cloud, UtensilsCrossed];
+const STEP_SHORT = ['Language', 'Security', 'Account', 'Data', 'Cloud', 'Service'];
+const PROFILE_ICON: Record<SetupProfile, LucideIcon> = { empty: UtensilsCrossed, express: Sparkles, demo: Database };
+const SERVICE_ICON: Record<ServiceModel, LucideIcon> = { qsr: Zap, finedine: Wine };
+const LANG_FLAG: Record<string, string> = { en: '🇬🇧', es: '🇪🇸', pt: '🇵🇹', fa: '🇮🇷' };
+
+/** ISO 3166-1 alpha-2 code → emoji flag (regional indicator symbols). */
+function flagEmoji(code: string): string {
+  if (!code || code.length !== 2) return '🏳️';
+  const base = 0x1f1e6;
+  return String.fromCodePoint(...[...code.toUpperCase()].map((ch) => base + ch.charCodeAt(0) - 65));
+}
+
 function LegalLink({ href, children }: { href: string; children: React.ReactNode }) {
   if (!href) return <span className="font-medium text-foreground">{children}</span>;
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
-      {children}
-    </a>
-  );
+  return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline">{children}</a>;
 }
 
 export default function SetupPage() {
@@ -65,13 +61,7 @@ export default function SetupPage() {
   const [browserLanguage] = useState<Language>(() => getBrowserLanguage());
   const [country, setCountry] = useState<string>('IN');
   const [countryQuery, setCountryQuery] = useState<string>('');
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    business_name: '',
-  });
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', business_name: '' });
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [productUpdates, setProductUpdates] = useState(false);
   const [marketing, setMarketing] = useState(false);
@@ -101,9 +91,6 @@ export default function SetupPage() {
       .then(({ data }) => {
         if (!mounted) return;
         setMasterPinAvailable(!!data.masterPinAvailable);
-        // An owner already exists — /auth/setup/initialize is disabled server-side,
-        // so bail out immediately instead of letting the user fill the whole wizard
-        // and only find out at the final submit.
         if (!data.needsSetup) {
           toast.error('Setup has already been completed on this install. Redirecting to login…');
           window.location.replace('/auth/login');
@@ -123,10 +110,8 @@ export default function SetupPage() {
   const filteredCountries = COUNTRIES.filter((c) => {
     if (!q) return true;
     return (
-      countryName(c.code).toLowerCase().includes(q) ||
-      c.code.toLowerCase().includes(q) ||
-      c.currency.toLowerCase().includes(q) ||
-      (c.locale ?? '').toLowerCase().includes(q)
+      countryName(c.code).toLowerCase().includes(q) || c.code.toLowerCase().includes(q) ||
+      c.currency.toLowerCase().includes(q) || (c.locale ?? '').toLowerCase().includes(q)
     );
   });
 
@@ -134,7 +119,6 @@ export default function SetupPage() {
 
   const completeSetup = () => {
     usePosSettingsStore.getState().setLanguage(language);
-    // Persist language server-side so the standalone KDS inherits it.
     api.put(`/settings/language`, { value: language }).catch((err: unknown) => {
       console.warn('[Setup] Failed to persist language setting:', err);
     });
@@ -144,644 +128,387 @@ export default function SetupPage() {
   };
 
   const validateOwner = () => {
-    if (!form.name.trim() || !form.email.trim() || !form.password) {
-      toast.error(t('setup.errorNameRequired'));
-      return false;
-    }
-    if (!isPasswordValid(form.password)) {
-      toast.error(t('setup.errorPasswordRequirementsNotMet'));
-      return false;
-    }
-    if (form.password !== form.confirmPassword) {
-      toast.error(t('setup.errorPasswordMismatch'));
-      return false;
-    }
-    if (!termsAccepted) {
-      toast.error(t('setup.errorTermsRequired'));
-      return false;
-    }
+    if (!form.name.trim() || !form.email.trim() || !form.password) { toast.error(t('setup.errorNameRequired')); return false; }
+    if (!isPasswordValid(form.password)) { toast.error(t('setup.errorPasswordRequirementsNotMet')); return false; }
+    if (form.password !== form.confirmPassword) { toast.error(t('setup.errorPasswordMismatch')); return false; }
+    if (!termsAccepted) { toast.error(t('setup.errorTermsRequired')); return false; }
     return true;
   };
 
-  const handleOwnerSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (validateOwner()) setStep(4);
-  };
+  const handleOwnerSubmit = (e: React.FormEvent) => { e.preventDefault(); if (validateOwner()) setStep(4); };
 
   const handleCompleteSetup = async () => {
     if (loading) return;
-    if (!validateOwner()) {
-      setStep(3);
-      return;
-    }
-    if (masterPinAvailable && !masterPinValid) {
-      toast.error(t('setup.masterPinRequired'));
-      setStep(2);
-      return;
-    }
-
+    if (!validateOwner()) { setStep(3); return; }
+    if (masterPinAvailable && !masterPinValid) { toast.error(t('setup.masterPinRequired')); setStep(2); return; }
     if (cloudEnabled && cloudServerUrl.trim()) {
       try {
         const parsed = new URL(cloudServerUrl.trim());
-        const localHttp = parsed.protocol === 'http:'
-          && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname);
-        if (parsed.protocol !== 'https:' && !localHttp) {
-          toast.error('Cloud server URL must use HTTPS (or local HTTP for development)');
-          setStep(5);
-          return;
-        }
-      } catch {
-        toast.error('Please enter a valid Cloud server URL');
-        setStep(5);
-        return;
-      }
+        const localHttp = parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname);
+        if (parsed.protocol !== 'https:' && !localHttp) { toast.error('Cloud server URL must use HTTPS (or local HTTP for development)'); setStep(5); return; }
+      } catch { toast.error('Please enter a valid Cloud server URL'); setStep(5); return; }
     }
-
     setLoading(true);
     try {
       const countryProfile = selectedCountry;
       const countryCode = countryProfile?.code || country;
-      const countryPayload = {
-        country: countryCode,
-        currency: countryProfile?.currency,
-        timezone: countryProfile?.timezone,
-        language,
-      };
-
       await api.post('/auth/setup/initialize', {
-        name: form.name,
-        email: form.email,
-        password: form.password,
-        business_type: 'restaurant',
-        business_name: form.business_name || undefined,
-        setup_profile: profile,
-        service_model: serviceModel,
-        terms_accepted: termsAccepted,
+        name: form.name, email: form.email, password: form.password,
+        business_type: 'restaurant', business_name: form.business_name || undefined,
+        setup_profile: profile, service_model: serviceModel, terms_accepted: termsAccepted,
         master_pin: masterPinAvailable ? masterPin : undefined,
-        cloud_sync_enabled: true,
-        cloud_server_url: cloudServerUrl.trim() || DEFAULT_CLOUD_SERVER_URL,
-        email_product_updates: productUpdates,
-        email_marketing: marketing,
-        ...countryPayload,
+        cloud_sync_enabled: true, cloud_server_url: cloudServerUrl.trim() || DEFAULT_CLOUD_SERVER_URL,
+        email_product_updates: productUpdates, email_marketing: marketing,
+        country: countryCode, currency: countryProfile?.currency, timezone: countryProfile?.timezone, language,
       });
       completeSetup();
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } };
       toast.error(axiosErr.response?.data?.error || t('setup.errorGeneric'));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  const stepMeta = [
-    t('setup.chooseLanguage'),
-    t('setup.setMasterPinTitle'),
-    t('setup.createOwner'),
-    t('setup.setupDataTitle'),
-    t('setup.cloudTitle'),
-    t('setup.flowTitle'),
-  ];
+  const StepIcon = STEP_ICONS[step - 1];
 
   return (
-    <div className="min-h-screen bg-muted/30 lg:grid lg:grid-cols-[400px_1fr]">
-      {/* Brand rail + vertical stepper */}
-      <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary p-10 text-primary-foreground lg:flex">
-        <FoodSprite />
-        <div className="pointer-events-none absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-32 -left-16 size-96 rounded-full bg-black/10 blur-3xl" />
-        <FoodTile art="f-bowl" bg="#FFFFFF" size={104} className="absolute -right-6 top-24 rotate-6 opacity-95 shadow-[0_20px_52px_-18px_rgba(26,26,26,.5)]" />
-        <FoodTile art="f-coffee" bg="#FFF6E5" size={84} className="absolute -right-3 bottom-28 -rotate-6 opacity-95 shadow-[0_16px_40px_-14px_rgba(26,26,26,.45)]" />
-        <div className="relative flex items-center gap-2.5">
-          <div className="grid size-9 place-items-center rounded-xl bg-white/15 text-base font-bold">P</div>
-          <div className="leading-tight">
-            <p className="text-[15px] font-bold">Plemmo</p>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-white/60">POS System</p>
+    <div className="relative min-h-screen overflow-hidden bg-background">
+      <FoodSprite />
+      {/* faint decorative tiles */}
+      <FoodTile art="f-burger" bg="#FFFFFF" size={150} className="pointer-events-none absolute -left-10 bottom-16 hidden -rotate-12 opacity-[0.05] xl:block" />
+      <FoodTile art="f-bowl" bg="#FFFFFF" size={130} className="pointer-events-none absolute -right-8 top-44 hidden rotate-12 opacity-[0.05] xl:block" />
+
+      {/* Top bar */}
+      <header className="sticky top-0 z-20 border-b border-hairline bg-background/80 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-center gap-6 px-6 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="grid size-9 place-items-center rounded-xl bg-primary text-base font-bold text-primary-foreground">P</div>
+            <div className="leading-tight">
+              <p className="text-[15px] font-bold">Plemmo</p>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-text-subtle">POS System</p>
+            </div>
+          </div>
+          <div className="mx-auto hidden lg:block"><TopStepper step={step} /></div>
+          <div className="ml-auto text-sm font-semibold text-foreground lg:ml-0">
+            Step {step} <span className="text-text-subtle">/ 6</span>
           </div>
         </div>
-        <div className="relative">
-          <h1 className="text-3xl font-semibold tracking-tight">{t('setup.welcome')}</h1>
-          <p className="mt-2 max-w-xs text-sm text-primary-foreground/70">{t('setup.tagline')}</p>
-          <ol className="mt-8 space-y-1">
-            {stepMeta.map((label, i) => {
-              const n = i + 1;
-              const active = n === step;
-              const done = n < step;
-              return (
-                <li key={n} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors ${active ? 'bg-white/10' : ''}`}>
-                  <span className={`grid size-7 shrink-0 place-items-center rounded-full border text-xs font-semibold ${done ? 'border-transparent bg-white text-primary' : active ? 'border-white' : 'border-white/30 text-primary-foreground/60'}`}>
-                    {done ? <Check className="size-4" /> : n}
-                  </span>
-                  <span className={`truncate text-sm ${active ? 'font-medium' : 'text-primary-foreground/60'}`}>{label}</span>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-        <p className="relative text-xs text-primary-foreground/50">Plemmo EPOS</p>
-      </aside>
+        <div className="px-6 pb-3 lg:hidden"><Progress value={(step / 6) * 100} /></div>
+      </header>
 
       {/* Content */}
-      <main className="flex min-h-screen items-center justify-center p-6 sm:p-10">
-        <div className="w-full max-w-xl">
-          <div className="mb-6 lg:hidden">
-            <div className="mb-3 flex items-center gap-2.5">
-              <div className="grid size-8 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">P</div>
-              <span className="font-semibold">Plemmo</span>
-            </div>
-            <Progress value={(step / 6) * 100} />
-          </div>
+      <main className="relative z-10 mx-auto max-w-[720px] px-6 pb-28 pt-12">
+        <div key={step} className="animate-rise">
+          <StepHeader icon={StepIcon} title={stepTitle(step, t)} subtitle={stepSubtitle(step, t)} />
 
-          <Card>
-            <CardContent className="p-6 sm:p-8">
-            {step === 1 && (
-              <div className="space-y-6">
-                <div className="text-center">
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.chooseLanguage')}</h2>
-                  <p className="text-muted-foreground text-sm">
-                    {t('setup.chooseLanguageHint')}
-                  </p>
-                </div>
+          {/* Step 1 — Language + Country */}
+          {step === 1 && (
+            <div className="space-y-8">
+              <div className="grid grid-cols-3 gap-3">
+                {languageOptions.map((option) => {
+                  const selected = language === option;
+                  const label = option === 'es' ? t('setup.languageSpanish') : option === 'pt' ? t('setup.languagePortuguese') : t('setup.languageEnglish');
+                  return (
+                    <button key={option} onClick={() => setLanguage(option)} className={cn(selCls(selected), 'flex flex-col items-center gap-2 py-5')}>
+                      {selected && <Badge />}
+                      <span className="text-4xl leading-none">{LANG_FLAG[option] ?? '🌐'}</span>
+                      <span className="text-sm font-bold">{label}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-text-subtle">{option}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {languageOptions.map((option) => {
-                    const selected = language === option;
-                    const label = option === 'es' ? t('setup.languageSpanish') : option === 'pt' ? t('setup.languagePortuguese') : t('setup.languageEnglish');
-                    return (
-                      <button
-                        key={option}
-                        onClick={() => setLanguage(option)}
-                        className={`p-4 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-semibold">{label}</div>
-                            <div className="text-xs text-muted-foreground mt-1">{option.toUpperCase()}</div>
-                          </div>
-                          {selected && <Check className="w-5 h-5 text-primary shrink-0" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="space-y-3">
+              <div>
+                <div className="mb-3 flex items-end justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-medium">{t('setup.chooseCountry')}</h3>
-                    <p className="text-muted-foreground text-sm mt-1">{t('setup.chooseCountryHint')}</p>
+                    <h3 className="text-sm font-bold">{t('setup.chooseCountry')}</h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{t('setup.chooseCountryHint')}</p>
                   </div>
-
-                  <div className="relative">
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                    <Input
-                      value={countryQuery}
-                      onChange={(e) => setCountryQuery(e.target.value)}
-                      placeholder={t('setup.searchPlaceholder')}
-                      className="pl-9"
-                    />
-                  </div>
+                  <span className="hidden items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-bold text-primary sm:inline-flex">
+                    <span className="text-base leading-none">{flagEmoji(country)}</span> {countryName(country)}
+                  </span>
                 </div>
-
-                <div className="grid gap-2 max-h-72 overflow-y-auto">
+                <div className="relative mb-3">
+                  <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-subtle" />
+                  <Input value={countryQuery} onChange={(e) => setCountryQuery(e.target.value)} placeholder={t('setup.searchPlaceholder')} className="h-12 rounded-xl pl-11" />
+                </div>
+                <div className="grid max-h-[320px] grid-cols-1 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-2">
                   {filteredCountries.map((c) => {
                     const selected = country === c.code;
                     return (
-                      <button
-                        key={c.code}
-                        onClick={() => setCountry(c.code)}
-                        className={`p-3 rounded-xl border-2 text-left transition-all flex items-center justify-between ${
-                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-semibold">{countryName(c.code)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {c.currency} · {c.taxIdLabel || t('setup.noTaxId')} · {c.locale}
-                          </div>
-                        </div>
-                        {selected && <Check className="w-5 h-5 text-primary" />}
+                      <button key={c.code} onClick={() => setCountry(c.code)} className={cn(selCls(selected), 'flex items-center gap-3 !p-3')}>
+                        <span className="text-2xl leading-none">{flagEmoji(c.code)}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold">{countryName(c.code)}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{c.currency} · {c.locale}</span>
+                        </span>
+                        {selected && <Check className="size-4 shrink-0 text-primary" />}
                       </button>
                     );
                   })}
                   {q && filteredCountries.length === 0 && (
-                    <p className="text-center text-muted-foreground py-6 text-sm">{t('setup.noMatches').replace('{query}', countryQuery)}</p>
+                    <p className="col-span-full py-8 text-center text-sm text-muted-foreground">{t('setup.noMatches').replace('{query}', countryQuery)}</p>
                   )}
                 </div>
-
-                <Button onClick={() => setStep(2)} className="w-full" size="lg">
-                  {t('setup.continue')} <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
               </div>
-            )}
 
-            {step === 2 && (
-              <div className="space-y-6">
-                <button
-                  onClick={() => setStep(1)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> {t('setup.back')}
-                </button>
+              <NavRow onNext={() => setStep(2)} nextLabel={t('setup.continue')} />
+            </div>
+          )}
 
-                <div className="text-center">
-                  <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
-                    <KeyRound className="w-5 h-5 text-primary" />
-                  </div>
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.setMasterPinTitle')}</h2>
-                  <p className="text-muted-foreground text-sm">
-                    {t('setup.setMasterPinDescription')}
-                  </p>
-                  <p className="text-muted-foreground text-xs mt-2 bg-muted rounded-lg p-3">
-                    {t('setup.masterPinRecoveryNote')}
-                  </p>
+          {/* Step 2 — Security PIN */}
+          {step === 2 && (
+            <div className="space-y-6">
+              <p className="mx-auto max-w-md rounded-xl bg-muted px-4 py-3 text-center text-xs text-muted-foreground">{t('setup.masterPinRecoveryNote')}</p>
+              {masterPinAvailable === false ? (
+                <p className="mx-auto max-w-md rounded-xl bg-muted p-4 text-center text-sm text-muted-foreground">{t('setup.masterPinNotAvailable')}</p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <PinField id="master-pin" label={t('setup.pinLabel')} value={masterPin} onChange={(v) => setMasterPin(v)} show={showMasterPin} onToggle={() => setShowMasterPin(!showMasterPin)} />
+                  <PinField id="master-pin-confirm" label={t('setup.confirmPinLabel')} value={masterPinConfirm} onChange={(v) => setMasterPinConfirm(v)} show={showConfirmMasterPin} onToggle={() => setShowConfirmMasterPin(!showConfirmMasterPin)} />
                 </div>
+              )}
+              <NavRow onBack={() => setStep(1)} backLabel={t('setup.back')} onNext={() => setStep(3)} nextLabel={t('setup.continue')} nextDisabled={masterPinAvailable === true && !masterPinValid} />
+            </div>
+          )}
 
-                {masterPinAvailable === false ? (
-                  <p className="text-sm text-center text-muted-foreground bg-muted rounded-lg p-4">
-                    {t('setup.masterPinNotAvailable')}
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="master-pin">{t('setup.pinLabel')}</Label>
-                      <div className="relative">
-                        <Input
-                          id="master-pin"
-                          type={showMasterPin ? "text" : "password"}
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={4}
-                          value={masterPin}
-                          onChange={(e) => setMasterPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                          placeholder="••••"
-                          className="text-center text-lg tracking-[0.5em] pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowMasterPin(!showMasterPin)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                          tabIndex={-1}
-                        >
-                          {showMasterPin ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="master-pin-confirm">{t('setup.confirmPinLabel')}</Label>
-                      <div className="relative">
-                        <Input
-                          id="master-pin-confirm"
-                          type={showConfirmMasterPin ? "text" : "password"}
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          maxLength={4}
-                          value={masterPinConfirm}
-                          onChange={(e) => setMasterPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                          placeholder="••••"
-                          className="text-center text-lg tracking-[0.5em] pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowConfirmMasterPin(!showConfirmMasterPin)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                          tabIndex={-1}
-                        >
-                          {showConfirmMasterPin ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <Button
-                  onClick={() => setStep(3)}
-                  disabled={masterPinAvailable === true && !masterPinValid}
-                  className="w-full"
-                  size="lg"
-                >
-                  {t('setup.continue')} <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
+          {/* Step 3 — Owner account */}
+          {step === 3 && (
+            <form onSubmit={handleOwnerSubmit} className="space-y-5">
+              <Field label={t('setup.ownerName')} htmlFor="name">
+                <Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('setup.ownerNamePlaceholder')} className="h-12 rounded-xl" required />
+              </Field>
+              <Field label={t('setup.ownerEmail')} htmlFor="email">
+                <Input id="email" type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={t('setup.ownerEmailPlaceholder')} className="h-12 rounded-xl" required />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label={t('setup.password')} htmlFor="password">
+                  <PwField id="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} placeholder={t('setup.passwordPlaceholder')} show={showPassword} onToggle={() => setShowPassword(!showPassword)} autoComplete="new-password" />
+                </Field>
+                <Field label={t('setup.confirmPassword')} htmlFor="confirmPassword">
+                  <PwField id="confirmPassword" value={form.confirmPassword} onChange={(v) => setForm({ ...form, confirmPassword: v })} placeholder={t('setup.confirmPasswordPlaceholder')} show={showConfirmPassword} onToggle={() => setShowConfirmPassword(!showConfirmPassword)} autoComplete="new-password" />
+                </Field>
               </div>
-            )}
+              {!passwordMeetsRequirements && (
+                <p className="text-xs font-semibold text-destructive">Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.</p>
+              )}
+              {passwordsEntered && (
+                <p className={cn('text-xs font-semibold', passwordsMatch ? 'text-success' : 'text-destructive')}>{passwordsMatch ? t('setup.passwordsMatch') : t('setup.passwordsMismatch')}</p>
+              )}
+              <Field label={t('setup.businessName')} htmlFor="business_name">
+                <Input id="business_name" value={form.business_name} onChange={(e) => setForm({ ...form, business_name: e.target.value })} placeholder={t('setup.businessNamePlaceholder')} className="h-12 rounded-xl" />
+              </Field>
 
-            {step === 3 && (
-              <div className="space-y-6">
-                <button
-                  onClick={() => setStep(2)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> {t('setup.back')}
-                </button>
+              <label className="flex items-start gap-2.5 text-sm text-muted-foreground">
+                <input type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} className="mt-0.5 size-4 rounded border-border-strong text-primary" required />
+                <span>{t('setup.termsIntro')}{' '}<LegalLink href={BRAND_TERMS_URL}>{t('setup.terms')}</LegalLink>, <LegalLink href={BRAND_PRIVACY_URL}>{t('setup.privacy')}</LegalLink>, and <LegalLink href={BRAND_DISCLAIMER_URL}>{t('setup.disclaimer')}</LegalLink>.</span>
+              </label>
 
-                <div className="text-center">
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.createOwner')}</h2>
-                  <p className="text-muted-foreground text-sm">{t('setup.ownerSubtitle')}</p>
-                </div>
+              <div className="rounded-2xl border border-hairline bg-surface-sunken px-4 py-3.5 text-sm text-muted-foreground">
+                <p className="font-bold text-foreground">{t('setup.anonymousDataTitle')}</p>
+                <p className="mt-1">{t('setup.anonymousDataDescription')}</p>
+                <details className="mt-2"><summary className="cursor-pointer font-medium text-primary">{t('setup.anonymousDataDetails')}</summary><p className="mt-1">{t('setup.anonymousDataFields')}</p></details>
+              </div>
 
-                <form onSubmit={handleOwnerSubmit} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="name">{t('setup.ownerName')}</Label>
-                    <Input
-                      id="name"
-                      value={form.name}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      placeholder={t('setup.ownerNamePlaceholder')}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="email">{t('setup.ownerEmail')}</Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      autoComplete="email"
-                      value={form.email}
-                      onChange={(e) => setForm({ ...form, email: e.target.value })}
-                      placeholder={t('setup.ownerEmailPlaceholder')}
-                      required
-                    />
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="password">{t('setup.password')}</Label>
-                      <div className="relative">
-                        <Input
-                          id="password"
-                          type={showPassword ? "text" : "password"}
-                          autoComplete="new-password"
-                          value={form.password}
-                          onChange={(e) => setForm({ ...form, password: e.target.value })}
-                          placeholder={t('setup.passwordPlaceholder')}
-                          className="pr-10"
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                          tabIndex={-1}
-                        >
-                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="confirmPassword">{t('setup.confirmPassword')}</Label>
-                      <div className="relative">
-                        <Input
-                          id="confirmPassword"
-                          type={showConfirmPassword ? "text" : "password"}
-                          autoComplete="new-password"
-                          value={form.confirmPassword}
-                          onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
-                          placeholder={t('setup.confirmPasswordPlaceholder')}
-                          className="pr-10"
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                          tabIndex={-1}
-                        >
-                          {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  {!passwordMeetsRequirements && (
-                    <p className="text-xs font-medium text-red-600">
-                      Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number.
-                    </p>
-                  )}
-                  {passwordsEntered && (
-                    <p className={`text-xs font-medium ${passwordsMatch ? 'text-green-600' : 'text-red-600'}`}>
-                      {passwordsMatch ? t('setup.passwordsMatch') : t('setup.passwordsMismatch')}
-                    </p>
-                  )}
-                  <div className="space-y-2">
-                    <Label htmlFor="business_name">{t('setup.businessName')}</Label>
-                    <Input
-                      id="business_name"
-                      value={form.business_name}
-                      onChange={(e) => setForm({ ...form, business_name: e.target.value })}
-                      placeholder={t('setup.businessNamePlaceholder')}
-                    />
-                  </div>
+              <div className="space-y-3 rounded-2xl border border-hairline px-4 py-3.5 text-sm">
+                <p className="font-bold text-foreground">Email communication</p>
+                <p className="text-muted-foreground">We&rsquo;ll send a welcome email so you can verify this address. Essential account, service and security notices cannot be disabled here.</p>
+                <label className="flex items-start gap-2.5"><input type="checkbox" checked={productUpdates} onChange={(e) => setProductUpdates(e.target.checked)} className="mt-0.5 size-4 rounded border-border-strong text-primary" /><span>Product updates and release notes (optional)</span></label>
+                <label className="flex items-start gap-2.5"><input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="mt-0.5 size-4 rounded border-border-strong text-primary" /><span>Marketing messages, offers and surveys (optional)</span></label>
+              </div>
 
-                  <label className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={termsAccepted}
-                      onChange={(e) => setTermsAccepted(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 rounded border-border-strong"
-                      required
-                    />
-                    <span>
-                      {t('setup.termsIntro')}{' '}
-                      <LegalLink href={BRAND_TERMS_URL}>{t('setup.terms')}</LegalLink>
-                      ,{' '}
-                      <LegalLink href={BRAND_PRIVACY_URL}>{t('setup.privacy')}</LegalLink>
-                      , and{' '}
-                      <LegalLink href={BRAND_DISCLAIMER_URL}>{t('setup.disclaimer')}</LegalLink>
-                      .
+              <NavRow onBack={() => setStep(2)} backLabel={t('setup.back')} submit nextLabel={t('setup.continue')} nextDisabled={!passwordsMatch || !termsAccepted || !isPasswordValid(form.password)} />
+            </form>
+          )}
+
+          {/* Step 4 — Starter data */}
+          {step === 4 && (
+            <div className="space-y-4">
+              {SETUP_PROFILES.map((item) => {
+                const selected = profile === item.value;
+                const Icon = PROFILE_ICON[item.value];
+                return (
+                  <button key={item.value} onClick={() => setProfile(item.value)} className={cn(selCls(selected), 'flex w-full items-start gap-4')}>
+                    <span className={cn('flex size-12 shrink-0 items-center justify-center rounded-xl', selected ? 'bg-primary text-primary-foreground' : 'bg-accent text-primary')}>
+                      <Icon className="size-6" />
                     </span>
-                  </label>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="font-bold">{t(`setup.${item.value}Label`)}</span>
+                        {item.badge && <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-bold text-primary-foreground">{t('setup.expressBadge')}</span>}
+                      </span>
+                      <span className="mt-1 block text-sm text-muted-foreground">{t(`setup.${item.value}Desc`)}</span>
+                      <span className="mt-1.5 block text-xs text-text-subtle">{t(`setup.${item.value}Details`)}</span>
+                    </span>
+                    {selected && <Check className="size-5 shrink-0 text-primary" />}
+                  </button>
+                );
+              })}
+              <NavRow onBack={() => setStep(3)} backLabel={t('setup.back')} onNext={() => setStep(5)} nextLabel={t('setup.continue')} />
+            </div>
+          )}
 
-                  <div className="rounded-lg border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
-                    <p className="font-medium text-foreground">{t('setup.anonymousDataTitle')}</p>
-                    <p className="mt-1">{t('setup.anonymousDataDescription')}</p>
-                    <details className="mt-2">
-                      <summary className="cursor-pointer text-primary">{t('setup.anonymousDataDetails')}</summary>
-                      <p className="mt-1">{t('setup.anonymousDataFields')}</p>
-                    </details>
-                  </div>
-
-                  <div className="space-y-3 rounded-lg border border-border px-3 py-3 text-sm">
-                    <p className="font-medium text-foreground">Email communication</p>
-                    <p className="text-muted-foreground">We will send a welcome email immediately so you can verify this address. Essential account, service, and security notices are not promotional and cannot be disabled here.</p>
-                    <label className="flex items-start gap-2">
-                      <input type="checkbox" checked={productUpdates} onChange={(e) => setProductUpdates(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-border-strong" />
-                      <span>Receive product updates and release notes (optional)</span>
-                    </label>
-                    <label className="flex items-start gap-2">
-                      <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-border-strong" />
-                      <span>Receive marketing messages, offers, and surveys (optional)</span>
-                    </label>
-                  </div>
-
-
-                  <Button type="submit" disabled={!passwordsMatch || !termsAccepted || !isPasswordValid(form.password)} className="w-full" size="lg">
-                    {t('setup.continue')} <ArrowRight className="w-4 h-4 ml-2" />
-                  </Button>
-                </form>
+          {/* Step 5 — Cloud */}
+          {step === 5 && (
+            <div className="space-y-5">
+              <div className="flex items-start gap-3 rounded-2xl border-2 border-primary bg-accent p-4">
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground"><Check className="size-4" /></span>
+                <span>
+                  <span className="font-bold text-foreground">Cloud services are enabled automatically</span>
+                  <span className="mt-1 block text-sm text-muted-foreground">Plemmo connects so device pairing and support work without a manual approval step.</span>
+                </span>
               </div>
-            )}
+              <Field label={t('setup.cloudUrlLabel')} htmlFor="cloud-server-url" hint={t('setup.cloudUrlHint')}>
+                <Input id="cloud-server-url" type="url" value={cloudServerUrl} onChange={(e) => setCloudServerUrl(e.target.value)} placeholder={DEFAULT_CLOUD_SERVER_URL} className="h-12 rounded-xl" />
+              </Field>
+              <p className="rounded-xl bg-muted px-4 py-3 text-xs text-muted-foreground">{t('setup.cloudRecoveryNoteEnabled')}</p>
+              <NavRow onBack={() => setStep(4)} backLabel={t('setup.back')} onNext={() => setStep(6)} nextLabel={t('setup.continue')} />
+            </div>
+          )}
 
-            {step === 4 && (
-              <div className="space-y-6">
-                <button
-                  onClick={() => setStep(3)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> {t('setup.back')}
-                </button>
-
-                <div className="text-center">
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.setupDataTitle')}</h2>
-                  <p className="text-muted-foreground text-sm">{t('setup.setupDataSubtitle')}</p>
-                </div>
-
-                <div className="grid gap-4">
-                  {SETUP_PROFILES.map((item) => {
-                    const selected = profile === item.value;
-                    const Icon = item.value === 'demo' ? Database : item.value === 'express' ? Sparkles : UtensilsCrossed;
-                    return (
-                      <button
-                        key={item.value}
-                        onClick={() => setProfile(item.value)}
-                        className={`p-4 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
-                        }`}
-                      >
-                        <div className="flex items-start gap-4">
-                          <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">
-                            <Icon className="w-5 h-5 text-primary" />
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold">{t(`setup.${item.value}Label`)}</span>
-                              {item.badge && (
-                                <span className="rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
-                                  {t('setup.expressBadge')}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-sm text-muted-foreground mt-1">{t(`setup.${item.value}Desc`)}</div>
-                            <div className="text-xs text-muted-foreground mt-2">{t(`setup.${item.value}Details`)}</div>
-                          </div>
-                          {selected && <Check className="w-5 h-5 text-primary" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <Button onClick={() => setStep(5)} className="w-full" size="lg">
-                  {t('setup.continue')} <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
+          {/* Step 6 — Service model */}
+          {step === 6 && (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                {SERVICE_MODELS.map((item) => {
+                  const selected = serviceModel === item.value;
+                  const Icon = SERVICE_ICON[item.value];
+                  return (
+                    <button key={item.value} onClick={() => setServiceModel(item.value)} className={cn(selCls(selected), 'flex flex-col gap-3 !p-5')}>
+                      {selected && <Badge />}
+                      <span className={cn('flex size-12 items-center justify-center rounded-xl', selected ? 'bg-primary text-primary-foreground' : 'bg-accent text-primary')}>
+                        <Icon className="size-6" />
+                      </span>
+                      <span className="text-lg font-bold">{t(`setup.${item.value}Label`)}</span>
+                      <span className="text-sm text-muted-foreground">{t(`setup.${item.value}Desc`)}</span>
+                      <span className="text-xs text-text-subtle">{t(`setup.${item.value}Details`)}</span>
+                    </button>
+                  );
+                })}
               </div>
-            )}
-
-            {step === 5 && (
-              <div className="space-y-6">
-                <button
-                  onClick={() => setStep(4)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> {t('setup.back')}
-                </button>
-
-                <div className="text-center">
-                  <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
-                    <Cloud className="w-5 h-5 text-primary" />
-                  </div>
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.cloudTitle')}</h2>
-                  <p className="text-muted-foreground text-sm">{t('setup.cloudSubtitle')}</p>
-                </div>
-
-                <label className="flex items-start gap-3 cursor-pointer p-4 rounded-xl border-2 border-border">
-                  <input
-                    type="checkbox"
-                    checked={cloudEnabled}
-                    disabled
-                    className="mt-0.5 h-4 w-4 rounded border-border-strong"
-                  />
-                  <span>
-                    <span className="font-medium text-foreground">Cloud Services are enabled automatically</span>
-                    <span className="block text-sm text-muted-foreground mt-1">FloCafe connects automatically so RevFlo pairing and support work without a manual approval step.</span>
-                  </span>
-                </label>
-
-                {cloudEnabled && (
-                  <div className="space-y-2">
-                    <Label htmlFor="cloud-server-url">{t('setup.cloudUrlLabel')}</Label>
-                    <Input
-                      id="cloud-server-url"
-                      type="url"
-                      value={cloudServerUrl}
-                      onChange={(e) => setCloudServerUrl(e.target.value)}
-                      placeholder={DEFAULT_CLOUD_SERVER_URL}
-                    />
-                    <p className="text-xs text-muted-foreground">{t('setup.cloudUrlHint')}</p>
-                  </div>
-                )}
-
-                <p className="text-xs text-muted-foreground bg-muted rounded-lg p-3">
-                  {cloudEnabled ? t('setup.cloudRecoveryNoteEnabled') : t('setup.cloudRecoveryNoteDisabled')}
-                </p>
-
-                <Button onClick={() => setStep(6)} className="w-full" size="lg">
-                  {t('setup.continue')} <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
-              </div>
-            )}
-
-            {step === 6 && (
-              <div className="space-y-6">
-                <button
-                  onClick={() => setStep(5)}
-                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> {t('setup.back')}
-                </button>
-
-                <div className="text-center">
-                  <h2 className="text-xl font-semibold mb-2">{t('setup.flowTitle')}</h2>
-                  <p className="text-muted-foreground text-sm">{t('setup.flowSubtitle')}</p>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  {SERVICE_MODELS.map((item) => {
-                    const selected = serviceModel === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        onClick={() => setServiceModel(item.value)}
-                        className={`p-5 rounded-xl border-2 text-left transition-all ${
-                          selected ? 'border-primary bg-primary/5' : 'border-border hover:border-border-strong'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-semibold text-lg">{t(`setup.${item.value}Label`)}</div>
-                            <div className="text-sm text-muted-foreground mt-1">{t(`setup.${item.value}Desc`)}</div>
-                            <div className="text-xs text-muted-foreground mt-3">{t(`setup.${item.value}Details`)}</div>
-                          </div>
-                          {selected && <Check className="w-5 h-5 text-primary shrink-0" />}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <Button onClick={handleCompleteSetup} disabled={loading} className="w-full" size="lg">
-                  {loading ? t('setup.completingSetup') : (
-                    <>
-                      {t('setup.completeSetup')} <ArrowRight className="w-4 h-4 ml-2" />
-                    </>
-                  )}
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-          <p className="mt-4 hidden text-center text-xs text-muted-foreground lg:block">
-            {stepMeta[step - 1]} · {step} / 6
-          </p>
+              <NavRow onBack={() => setStep(5)} backLabel={t('setup.back')} onNext={handleCompleteSetup} loading={loading} nextLabel={loading ? t('setup.completingSetup') : t('setup.completeSetup')} nextDisabled={loading} />
+            </div>
+          )}
         </div>
       </main>
+    </div>
+  );
+}
+
+/* ── Localised step titles / subtitles ─────────────────────────────────── */
+function stepTitle(step: number, t: (k: string) => string) {
+  return [t('setup.chooseLanguage'), t('setup.setMasterPinTitle'), t('setup.createOwner'), t('setup.setupDataTitle'), t('setup.cloudTitle'), t('setup.flowTitle')][step - 1];
+}
+function stepSubtitle(step: number, t: (k: string) => string) {
+  return [t('setup.chooseLanguageHint'), t('setup.setMasterPinDescription'), t('setup.ownerSubtitle'), t('setup.setupDataSubtitle'), t('setup.cloudSubtitle'), t('setup.flowSubtitle')][step - 1];
+}
+
+/* ── Presentational helpers ────────────────────────────────────────────── */
+const selCls = (on: boolean) => cn(
+  'relative rounded-2xl border-2 p-4 text-left transition-all',
+  on ? 'border-primary bg-accent shadow-sm' : 'border-hairline bg-card hover:border-border-strong hover:shadow-sm'
+);
+
+function Badge() {
+  return <span className="absolute right-3 top-3 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground"><Check className="size-3.5" /></span>;
+}
+
+function TopStepper({ step }: { step: number }) {
+  return (
+    <ol className="flex items-center gap-1.5">
+      {STEP_SHORT.map((label, i) => {
+        const n = i + 1;
+        const done = n < step;
+        const active = n === step;
+        return (
+          <li key={label} className="flex items-center gap-1.5">
+            <span className={cn(
+              'flex items-center gap-2 rounded-full py-1 pl-1 pr-3 text-xs font-bold transition-colors',
+              active ? 'bg-accent text-primary' : 'text-text-subtle'
+            )}>
+              <span className={cn(
+                'flex size-6 items-center justify-center rounded-full text-[11px]',
+                done ? 'bg-primary text-primary-foreground' : active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+              )}>
+                {done ? <Check className="size-3.5" /> : n}
+              </span>
+              <span className={cn(!active && 'hidden xl:inline')}>{label}</span>
+            </span>
+            {n < STEP_SHORT.length && <span className={cn('h-px w-4', done ? 'bg-primary' : 'bg-border')} />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepHeader({ icon: Icon, title, subtitle }: { icon: LucideIcon; title: string; subtitle: string }) {
+  return (
+    <div className="mb-8 text-center">
+      <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-accent text-primary shadow-sm">
+        <Icon className="size-7" />
+      </div>
+      <h2 className="text-[26px] font-bold tracking-tight">{title}</h2>
+      <p className="mx-auto mt-1.5 max-w-md text-sm text-muted-foreground">{subtitle}</p>
+    </div>
+  );
+}
+
+function NavRow({ onBack, backLabel, onNext, nextLabel, nextDisabled, loading, submit }: {
+  onBack?: () => void; backLabel?: string; onNext?: () => void; nextLabel: string;
+  nextDisabled?: boolean; loading?: boolean; submit?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3 pt-2">
+      {onBack && (
+        <button type="button" onClick={onBack} className="inline-flex h-12 items-center gap-1.5 rounded-xl border border-hairline px-5 text-sm font-semibold transition-colors hover:bg-hover">
+          <ArrowLeft className="size-4" /> {backLabel}
+        </button>
+      )}
+      <Button type={submit ? 'submit' : 'button'} onClick={submit ? undefined : onNext} disabled={nextDisabled} className="h-12 flex-1 rounded-xl text-base font-bold">
+        {nextLabel}{!loading && <ArrowRight className="size-4" />}
+      </Button>
+    </div>
+  );
+}
+
+function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={htmlFor}>{label}</Label>
+      {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+function PwField({ id, value, onChange, placeholder, show, onToggle, autoComplete }: {
+  id: string; value: string; onChange: (v: string) => void; placeholder: string; show: boolean; onToggle: () => void; autoComplete?: string;
+}) {
+  return (
+    <div className="relative">
+      <Input id={id} type={show ? 'text' : 'password'} autoComplete={autoComplete} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="h-12 rounded-xl pr-10" required />
+      <button type="button" onClick={onToggle} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground">
+        {show ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </div>
+  );
+}
+
+function PinField({ id, label, value, onChange, show, onToggle }: {
+  id: string; label: string; value: string; onChange: (v: string) => void; show: boolean; onToggle: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="relative">
+        <Input id={id} type={show ? 'text' : 'password'} inputMode="numeric" pattern="[0-9]*" maxLength={4}
+          value={value} onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="••••"
+          className="h-12 rounded-xl pr-10 text-center text-lg tracking-[0.5em]" />
+        <button type="button" onClick={onToggle} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground">
+          {show ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,16 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth';
 import api from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Banknote, ChefHat, Clock, LayoutGrid, TrendingUp, ClipboardList, ArrowRight, Timer, Trophy, Tags, BarChart3, Wallet } from 'lucide-react';
 import { useI18n } from '@/hooks/useI18n';
 import toast from 'react-hot-toast';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import { getCountryByCode } from '@/lib/countries';
 import { PAYMENT_METHODS } from '@/lib/payment-methods';
+import { PageHeader, PageContainer } from '@/components/ui/page-header';
+import { StatusPill } from '@/components/ui/status-pill';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface PaymentMethodBreakdown {
   method: string | null;
@@ -111,13 +115,13 @@ function formatWeekdayLabel(dayIndex: number, locale: string): string {
   return new Intl.DateTimeFormat(locale, { weekday: 'long' }).format(reference);
 }
 
-const orderStatusColor: Record<string, string> = {
-  pending: 'text-yellow-600',
-  preparing: 'text-blue-600',
-  ready: 'text-green-600',
-  served: 'text-purple-600',
-  completed: 'text-gray-500',
-  cancelled: 'text-red-500',
+const orderStatusTone: Record<string, 'neutral' | 'brand' | 'success' | 'warning' | 'danger' | 'info'> = {
+  pending: 'warning',
+  preparing: 'info',
+  ready: 'success',
+  served: 'brand',
+  completed: 'neutral',
+  cancelled: 'danger',
 };
 
 function localizeTemplate(template: string, vars: Record<string, string | number>): string {
@@ -197,258 +201,196 @@ export default function DashboardPage() {
   // for the day's actual totals from /reports/summary instead.
   const dateScopedTiles = isToday
     ? [
-        {
-          label: t('dashboard.runningOrders'),
-          value: stats?.runningOrders ?? 0,
-          icon: ChefHat,
-          color: 'bg-blue-50 border-blue-200',
-          iconColor: 'text-blue-600',
-          href: '/orders',
-        },
-        {
-          label: t('dashboard.pendingOrders'),
-          value: stats?.pendingOrders ?? 0,
-          icon: Clock,
-          color: 'bg-yellow-50 border-yellow-200',
-          iconColor: 'text-yellow-600',
-          href: '/orders',
-        },
-        {
-          label: t('dashboard.tablesOccupied'),
-          value: stats?.tablesOccupied ?? 0,
-          icon: LayoutGrid,
-          color: 'bg-purple-50 border-purple-200',
-          iconColor: 'text-purple-600',
-          href: '/tables',
-        },
+        { label: t('dashboard.runningOrders'), value: stats?.runningOrders ?? 0, icon: ChefHat, href: '/orders' },
+        { label: t('dashboard.pendingOrders'), value: stats?.pendingOrders ?? 0, icon: Clock, href: '/orders' },
+        { label: t('dashboard.tablesOccupied'), value: stats?.tablesOccupied ?? 0, icon: LayoutGrid, href: '/tables' },
       ]
     : [
-        {
-          label: t('dashboard.orders'),
-          value: daySummary?.orders.count ?? 0,
-          icon: ChefHat,
-          color: 'bg-blue-50 border-blue-200',
-          iconColor: 'text-blue-600',
-          href: '/orders',
-        },
-        {
-          label: t('dashboard.newCustomers'),
-          value: daySummary?.customers.new ?? 0,
-          icon: Clock,
-          color: 'bg-yellow-50 border-yellow-200',
-          iconColor: 'text-yellow-600',
-          href: '/customers',
-        },
+        { label: t('dashboard.orders'), value: daySummary?.orders.count ?? 0, icon: ChefHat, href: '/orders' },
+        { label: t('dashboard.newCustomers'), value: daySummary?.customers.new ?? 0, icon: Clock, href: '/customers' },
       ];
 
-  const tiles = [
+  const tiles: { label: string; value: ReactNode; icon: typeof Banknote; href: string; primary?: boolean }[] = [
     {
       label: isToday ? t('dashboard.todaySales') : t('dashboard.sales'),
       value: fmt(isToday ? (stats?.sales ?? 0) : (daySummary?.bills.collected ?? 0)),
       icon: Banknote,
-      color: 'bg-green-50 border-green-200',
-      iconColor: 'text-green-600',
       href: '/orders',
+      primary: true,
     },
     ...dateScopedTiles,
     {
       label: t('dashboard.aov'),
       value: fmt(insights?.aov ?? 0),
       icon: TrendingUp,
-      color: 'bg-teal-50 border-teal-200',
-      iconColor: 'text-teal-600',
       href: '/orders',
     },
     {
       label: t('dashboard.avgPrepTime'),
       value: insights?.avgPrepTimeMinutes != null ? localizeTemplate(t('dashboard.minutesValue'), { minutes: insights.avgPrepTimeMinutes }) : '—',
       icon: Timer,
-      color: 'bg-orange-50 border-orange-200',
-      iconColor: 'text-orange-600',
       href: '/orders',
     },
   ];
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold text-gray-900">{t('dashboard.title')}</h1>
-        <input
-          type="date"
-          value={selectedDate}
-          max={todayLocal}
-          onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand/30"
-          aria-label={t('dashboard.selectDate')}
-        />
-      </div>
+    <PageContainer>
+      <PageHeader
+        eyebrow={isToday ? t('dashboard.overview') : selectedDate}
+        title={t('dashboard.title')}
+        description={currentTenant?.business_name}
+        actions={
+          <input
+            type="date"
+            value={selectedDate}
+            max={todayLocal}
+            onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
+            className="h-10 rounded-lg border border-input bg-surface px-3.5 text-sm text-foreground shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            aria-label={t('dashboard.selectDate')}
+          />
+        }
+      />
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="w-8 h-8 border-3 border-brand border-t-transparent rounded-full animate-spin" />
+        <div className="flex items-center justify-center py-24">
+          <div className="size-8 animate-spin rounded-full border-[3px] border-primary border-t-transparent" />
         </div>
       ) : (
-        <>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        <div className="animate-rise space-y-8">
+          {/* ── KPI band ─────────────────────────────────────────── */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             {tiles.map((tile) => (
               <Link
                 key={tile.label}
                 href={tile.href}
-                className={`rounded-xl border p-5 ${tile.color} transition-transform hover:-translate-y-0.5 hover:shadow-sm`}
+                className={cn(
+                  'group flex flex-col justify-between rounded-2xl border p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md',
+                  tile.primary
+                    ? 'border-transparent bg-primary text-primary-foreground'
+                    : 'border-hairline bg-surface'
+                )}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-medium text-gray-600">{tile.label}</span>
-                  <tile.icon size={20} className={tile.iconColor} />
+                <div className="mb-4 flex items-center justify-between">
+                  <span className={cn('eyebrow', tile.primary && 'text-primary-foreground/70')}>
+                    {tile.label}
+                  </span>
+                  <tile.icon className={cn('size-4', tile.primary ? 'text-primary-foreground/70' : 'text-muted-foreground/60')} />
                 </div>
-                <p className="text-3xl font-bold text-gray-900">
+                <p className={cn('figure text-3xl', tile.primary ? 'text-primary-foreground' : 'text-foreground')}>
                   {tile.value}
                 </p>
               </Link>
             ))}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Recent Orders */}
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                <h2 className="flex items-center gap-2 font-semibold text-gray-900">
-                  <ClipboardList size={16} className="text-gray-400" />
-                  {isToday ? t('dashboard.recentOrders') : t('dashboard.orders')}
-                </h2>
-                <Link href="/orders" className="flex items-center gap-1 text-xs text-brand hover:text-brand-hover font-medium">
-                  {t('dashboard.viewAll')} <ArrowRight size={12} />
-                </Link>
-              </div>
+          {/* ── Orders + Top products ────────────────────────────── */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <Panel
+              icon={<ClipboardList className="size-4" />}
+              title={isToday ? t('dashboard.recentOrders') : t('dashboard.orders')}
+              action={<ViewAll href="/orders" label={t('dashboard.viewAll')} />}
+            >
               {recentOrders.length === 0 ? (
-                <p className="px-4 py-6 text-sm text-gray-400 text-center">{t('dashboard.noOrdersYet')}</p>
+                <EmptyState compact icon={<ClipboardList className="size-5" />} title={t('dashboard.noOrdersYet')} />
               ) : (
-                <div className="divide-y divide-gray-50">
+                <ul className="divide-y divide-hairline">
                   {recentOrders.map((order) => (
-                    <Link
-                      key={order.id}
-                      href="/orders"
-                      className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">#{order.order_number}</span>
-                          <span className={`text-xs font-medium ${orderStatusColor[order.status] || 'text-gray-500'}`}>
-                            {t(`orders.${order.status}` as 'orders.pending' | 'orders.preparing' | 'orders.ready' | 'orders.served' | 'orders.completed' | 'orders.cancelled')}
-                          </span>
+                    <li key={order.id}>
+                      <Link href="/orders" className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-surface-sunken">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-foreground">#{order.order_number}</span>
+                            <StatusPill size="sm" tone={orderStatusTone[order.status] ?? 'neutral'}>
+                              {t(`orders.${order.status}` as 'orders.pending' | 'orders.preparing' | 'orders.ready' | 'orders.served' | 'orders.completed' | 'orders.cancelled')}
+                            </StatusPill>
+                          </div>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {order.customer_name || order.table_name || t('dashboard.walkIn')}
+                          </p>
                         </div>
-                        <p className="text-xs text-gray-400 truncate">
-                          {order.customer_name || order.table_name || t('dashboard.walkIn')}
-                        </p>
-                      </div>
-                      <span className="text-sm font-semibold text-gray-900 shrink-0">
-                        {fmt(Number(order.total))}
-                      </span>
-                    </Link>
+                        <span className="figure shrink-0 text-base text-foreground">{fmt(Number(order.total))}</span>
+                      </Link>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </Panel>
 
-            {/* Top Products Today */}
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                <h2 className="flex items-center gap-2 font-semibold text-gray-900">
-                  <TrendingUp size={16} className="text-gray-400" />
-                  {t('dashboard.topProductsToday')}
-                </h2>
-                <Link href="/products" className="flex items-center gap-1 text-xs text-brand hover:text-brand-hover font-medium">
-                  {t('dashboard.viewAll')} <ArrowRight size={12} />
-                </Link>
-              </div>
+            <Panel
+              icon={<TrendingUp className="size-4" />}
+              title={t('dashboard.topProductsToday')}
+              action={<ViewAll href="/products" label={t('dashboard.viewAll')} />}
+            >
               {topProducts.length === 0 ? (
-                <p className="px-4 py-6 text-sm text-gray-400 text-center">{t('dashboard.noSalesYet')}</p>
+                <EmptyState compact icon={<TrendingUp className="size-5" />} title={t('dashboard.noSalesYet')} />
               ) : (
-                <div className="divide-y divide-gray-50">
-                  {topProducts.map((product) => (
-                    <div key={product.product_id} className="flex items-center justify-between px-4 py-2.5">
-                      <div className="min-w-0">
-                        <span className="text-sm font-medium text-gray-900">{product.product_name}</span>
-                        <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.productSoldOrders'), { quantity: product.total_quantity, orders: product.order_count })}</p>
+                <ol className="divide-y divide-hairline">
+                  {topProducts.map((product, i) => (
+                    <li key={product.product_id} className="flex items-center justify-between gap-3 px-5 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="figure w-5 shrink-0 text-center text-sm text-muted-foreground">{i + 1}</span>
+                        <div className="min-w-0">
+                          <span className="font-medium text-foreground">{product.product_name}</span>
+                          <p className="text-xs text-muted-foreground">{localizeTemplate(t('dashboard.productSoldOrders'), { quantity: product.total_quantity, orders: product.order_count })}</p>
+                        </div>
                       </div>
-                      <span className="text-sm font-semibold text-gray-900 shrink-0">
-                        {fmt(Number(product.total_revenue))}
-                      </span>
-                    </div>
+                      <span className="figure shrink-0 text-base text-foreground">{fmt(Number(product.total_revenue))}</span>
+                    </li>
                   ))}
-                </div>
+                </ol>
               )}
-            </div>
+            </Panel>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
-            {/* Top Staff */}
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                <h2 className="flex items-center gap-2 font-semibold text-gray-900">
-                  <Trophy size={16} className="text-gray-400" />
-                  {t('dashboard.topStaff')}
-                </h2>
-                <Link href="/staff" className="flex items-center gap-1 text-xs text-brand hover:text-brand-hover font-medium">
-                  {t('dashboard.viewAll')} <ArrowRight size={12} />
-                </Link>
-              </div>
+          {/* ── Staff + Categories ───────────────────────────────── */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <Panel
+              icon={<Trophy className="size-4" />}
+              title={t('dashboard.topStaff')}
+              action={<ViewAll href="/staff" label={t('dashboard.viewAll')} />}
+            >
               {(insights?.topStaff.length ?? 0) === 0 ? (
-                <p className="px-4 py-6 text-sm text-gray-400 text-center">{t('dashboard.noSalesYet')}</p>
+                <EmptyState compact icon={<Trophy className="size-5" />} title={t('dashboard.noSalesYet')} />
               ) : (
-                <div className="divide-y divide-gray-50">
+                <ul className="divide-y divide-hairline">
                   {insights!.topStaff.map((staff) => (
-                    <div key={staff.user_id} className="flex items-center justify-between px-4 py-2.5">
+                    <li key={staff.user_id} className="flex items-center justify-between gap-3 px-5 py-3">
                       <div className="min-w-0">
-                        <span className="text-sm font-medium text-gray-900">{staff.name}</span>
-                        <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.staffOrderCount'), { orders: staff.orderCount })}</p>
+                        <span className="font-medium text-foreground">{staff.name}</span>
+                        <p className="text-xs text-muted-foreground">{localizeTemplate(t('dashboard.staffOrderCount'), { orders: staff.orderCount })}</p>
                       </div>
-                      <span className="text-sm font-semibold text-gray-900 shrink-0">
-                        {fmt(Number(staff.revenue))}
-                      </span>
-                    </div>
+                      <span className="figure shrink-0 text-base text-foreground">{fmt(Number(staff.revenue))}</span>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </Panel>
 
-            {/* Top Categories */}
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                <h2 className="flex items-center gap-2 font-semibold text-gray-900">
-                  <Tags size={16} className="text-gray-400" />
-                  {t('dashboard.topCategories')}
-                </h2>
-              </div>
+            <Panel icon={<Tags className="size-4" />} title={t('dashboard.topCategories')}>
               {(insights?.topCategories.length ?? 0) === 0 ? (
-                <p className="px-4 py-6 text-sm text-gray-400 text-center">{t('dashboard.noSalesYet')}</p>
+                <EmptyState compact icon={<Tags className="size-5" />} title={t('dashboard.noSalesYet')} />
               ) : (
-                <div className="divide-y divide-gray-50">
+                <ul className="divide-y divide-hairline">
                   {insights!.topCategories.map((category) => (
-                    <div key={category.category_id ?? category.name} className="flex items-center justify-between px-4 py-2.5">
+                    <li key={category.category_id ?? category.name} className="flex items-center justify-between gap-3 px-5 py-3">
                       <div className="min-w-0">
-                        <span className="text-sm font-medium text-gray-900">{category.name}</span>
-                        <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.categoryQuantitySold'), { quantity: category.quantity })}</p>
+                        <span className="font-medium text-foreground">{category.name}</span>
+                        <p className="text-xs text-muted-foreground">{localizeTemplate(t('dashboard.categoryQuantitySold'), { quantity: category.quantity })}</p>
                       </div>
-                      <span className="text-sm font-semibold text-gray-900 shrink-0">
-                        {fmt(Number(category.revenue))}
-                      </span>
-                    </div>
+                      <span className="figure shrink-0 text-base text-foreground">{fmt(Number(category.revenue))}</span>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </Panel>
           </div>
 
-          {/* Payment Methods */}
-          <div className="bg-white rounded-xl border border-gray-100 p-4 mt-4">
-            <div className="flex items-center gap-2 mb-4">
-              <Wallet size={16} className="text-gray-400" />
-              <h2 className="font-semibold text-gray-900">{t('dashboard.paymentMethods')}</h2>
-            </div>
+          {/* ── Payment methods ──────────────────────────────────── */}
+          <Panel icon={<Wallet className="size-4" />} title={t('dashboard.paymentMethods')} bodyClassName="p-5">
             {paymentMethods.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-6">{t('dashboard.noPaymentsYet')}</p>
+              <EmptyState compact icon={<Wallet className="size-5" />} title={t('dashboard.noPaymentsYet')} />
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {paymentMethods.map((pm) => {
                   const meta = PAYMENT_METHODS.find((m) => m.key === pm.method);
                   const Icon = meta?.icon ?? Wallet;
@@ -456,18 +398,18 @@ export default function DashboardPage() {
                   const percent = paymentMethodsTotal > 0 ? Math.round((Number(pm.total) / paymentMethodsTotal) * 100) : 0;
                   return (
                     <div key={pm.method ?? 'unknown'}>
-                      <div className="flex items-center justify-between mb-1">
+                      <div className="mb-1.5 flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <Icon size={14} className="text-gray-400" />
-                          <span className="text-sm font-medium text-gray-900">{label}</span>
+                          <Icon size={14} className="text-muted-foreground" />
+                          <span className="text-sm font-medium text-foreground">{label}</span>
                         </div>
-                        <span className="text-sm font-semibold text-gray-900">{fmt(Number(pm.total))}</span>
+                        <span className="figure text-sm text-foreground">{fmt(Number(pm.total))}</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-brand rounded-full" style={{ width: `${percent}%` }} />
+                      <div className="flex items-center gap-3">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-sunken">
+                          <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
                         </div>
-                        <span className="text-xs text-gray-400 shrink-0">
+                        <span className="w-24 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
                           {localizeTemplate(t('dashboard.paymentMethodCount'), { count: pm.count, percent })}
                         </span>
                       </div>
@@ -476,58 +418,75 @@ export default function DashboardPage() {
                 })}
               </div>
             )}
-          </div>
+          </Panel>
 
-          {/* Business Patterns */}
-          <div className="bg-white rounded-xl border border-gray-100 p-4 mt-4">
-            <div className="flex items-center gap-2 mb-1">
-              <BarChart3 size={16} className="text-gray-400" />
-              <h2 className="font-semibold text-gray-900">{t('dashboard.businessPatterns')}</h2>
+          {/* ── Business patterns ────────────────────────────────── */}
+          <Panel
+            icon={<BarChart3 className="size-4" />}
+            title={t('dashboard.businessPatterns')}
+            subtitle={localizeTemplate(t('dashboard.businessPatternsHint'), { days: insights?.windowDays ?? 30 })}
+            bodyClassName="p-5"
+          >
+            <div className="grid grid-cols-2 gap-6 lg:grid-cols-4">
+              <Pattern label={t('dashboard.busiestHour')} value={insights?.busiestHour ? formatHourLabel(insights.busiestHour.hour, locale) : t('dashboard.notEnoughData')} note={insights?.busiestHour ? localizeTemplate(t('dashboard.ordersCount'), { count: insights.busiestHour.orderCount }) : undefined} />
+              <Pattern label={t('dashboard.idlestHour')} value={insights?.idlestHour ? formatHourLabel(insights.idlestHour.hour, locale) : t('dashboard.notEnoughData')} note={insights?.idlestHour ? localizeTemplate(t('dashboard.ordersCount'), { count: insights.idlestHour.orderCount }) : undefined} />
+              <Pattern label={t('dashboard.busiestDay')} value={insights?.busiestDayOfWeek ? formatWeekdayLabel(insights.busiestDayOfWeek.dayIndex, locale) : t('dashboard.notEnoughData')} note={insights?.busiestDayOfWeek ? localizeTemplate(t('dashboard.ordersCount'), { count: insights.busiestDayOfWeek.orderCount }) : undefined} />
+              <Pattern label={t('dashboard.idlestDay')} value={insights?.idlestDayOfWeek ? formatWeekdayLabel(insights.idlestDayOfWeek.dayIndex, locale) : t('dashboard.notEnoughData')} note={insights?.idlestDayOfWeek ? localizeTemplate(t('dashboard.ordersCount'), { count: insights.idlestDayOfWeek.orderCount }) : undefined} />
             </div>
-            <p className="text-xs text-gray-400 mb-4">
-              {localizeTemplate(t('dashboard.businessPatternsHint'), { days: insights?.windowDays ?? 30 })}
-            </p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-                <p className="text-xs text-gray-500 mb-1">{t('dashboard.busiestHour')}</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {insights?.busiestHour ? formatHourLabel(insights.busiestHour.hour, locale) : t('dashboard.notEnoughData')}
-                </p>
-                {insights?.busiestHour && (
-                  <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.ordersCount'), { count: insights.busiestHour.orderCount })}</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">{t('dashboard.idlestHour')}</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {insights?.idlestHour ? formatHourLabel(insights.idlestHour.hour, locale) : t('dashboard.notEnoughData')}
-                </p>
-                {insights?.idlestHour && (
-                  <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.ordersCount'), { count: insights.idlestHour.orderCount })}</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">{t('dashboard.busiestDay')}</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {insights?.busiestDayOfWeek ? formatWeekdayLabel(insights.busiestDayOfWeek.dayIndex, locale) : t('dashboard.notEnoughData')}
-                </p>
-                {insights?.busiestDayOfWeek && (
-                  <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.ordersCount'), { count: insights.busiestDayOfWeek.orderCount })}</p>
-                )}
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">{t('dashboard.idlestDay')}</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {insights?.idlestDayOfWeek ? formatWeekdayLabel(insights.idlestDayOfWeek.dayIndex, locale) : t('dashboard.notEnoughData')}
-                </p>
-                {insights?.idlestDayOfWeek && (
-                  <p className="text-xs text-gray-400">{localizeTemplate(t('dashboard.ordersCount'), { count: insights.idlestDayOfWeek.orderCount })}</p>
-                )}
-              </div>
-            </div>
-          </div>
-        </>
+          </Panel>
+        </div>
       )}
+    </PageContainer>
+  );
+}
+
+/** Editorial content panel — small-caps titled section with soft depth. */
+function Panel({
+  icon,
+  title,
+  subtitle,
+  action,
+  bodyClassName,
+  children,
+}: {
+  icon?: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  bodyClassName?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+      <div className="flex items-start justify-between gap-3 border-b border-hairline px-5 py-4">
+        <div className="flex items-center gap-2.5">
+          {icon && <span className="text-muted-foreground">{icon}</span>}
+          <div>
+            <h2 className="eyebrow">{title}</h2>
+            {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
+          </div>
+        </div>
+        {action}
+      </div>
+      <div className={bodyClassName}>{children}</div>
+    </section>
+  );
+}
+
+function ViewAll({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} className="flex items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-brand-strong">
+      {label} <ArrowRight className="size-3" />
+    </Link>
+  );
+}
+
+function Pattern({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div>
+      <p className="eyebrow mb-1.5">{label}</p>
+      <p className="text-display text-xl text-foreground">{value}</p>
+      {note && <p className="mt-0.5 text-xs text-muted-foreground">{note}</p>}
     </div>
   );
 }

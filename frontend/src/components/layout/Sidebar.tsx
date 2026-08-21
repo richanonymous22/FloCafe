@@ -203,33 +203,32 @@ export default function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border">
-      <SidebarHeader className="gap-2 pb-1">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild className="hover:bg-sidebar-accent">
-              <Link href={homeHref}>
-                <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-brand to-brand-strong text-sm font-bold text-white shadow-sm">
-                  {businessName.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-                  <span className="truncate font-semibold text-sidebar-foreground">{businessName}</span>
-                  <span className="truncate text-[11px] text-sidebar-foreground/55">
-                    {t('common.brandName')} · {roleLabel}
-                  </span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+      <SidebarHeader className="gap-3 px-3 pt-4 pb-2 group-data-[collapsible=icon]:px-2">
+        {/* Plemmo wordmark — the editorial signature in the display serif. */}
+        <Link
+          href={homeHref}
+          className="flex items-center gap-2.5 group-data-[collapsible=icon]:justify-center"
+        >
+          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-sm">
+            P
+          </div>
+          <span className="text-display text-xl text-foreground group-data-[collapsible=icon]:hidden">
+            Plemmo
+          </span>
+        </Link>
 
-        {/* Context row — online/offline. Hidden in icon-collapsed mode. */}
-        <div className="px-1 group-data-[collapsible=icon]:hidden">
+        {/* Business + role + connectivity. Hidden in icon-collapsed mode. */}
+        <div className="min-w-0 space-y-2 group-data-[collapsible=icon]:hidden">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
+            <p className="truncate text-xs text-muted-foreground">{roleLabel}</p>
+          </div>
           <div
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium',
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
               online
-                ? 'bg-success/15 text-success'
-                : 'bg-destructive/15 text-red-300'
+                ? 'bg-success-tint text-success'
+                : 'bg-danger-tint text-destructive'
             )}
             title={online ? t('nav.context.online') : t('nav.context.offline')}
           >
@@ -242,7 +241,7 @@ export default function AppSidebar() {
       <SidebarContent>
         {groups.map((group) => (
           <SidebarGroup key={group.labelKey}>
-            <SidebarGroupLabel className="text-sidebar-foreground/45">
+            <SidebarGroupLabel className="eyebrow px-3 group-data-[collapsible=icon]:hidden">
               {t(group.labelKey)}
             </SidebarGroupLabel>
             <SidebarGroupContent>

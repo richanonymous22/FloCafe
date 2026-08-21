@@ -326,7 +326,7 @@ export default function RetailTillPage() {
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">
             <ShoppingBag className="size-4 text-muted-foreground" />
-            <h2 className="font-semibold">Current sale</h2>
+            <h2 className="text-display text-lg">Current sale</h2>
             {itemCount > 0 && (
               <span className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-semibold tabular-nums text-brand-strong">
                 {itemCount}
@@ -417,9 +417,9 @@ export default function RetailTillPage() {
               <span>Subtotal</span>
               <span className="tabular-nums">{fmt(subtotal)}</span>
             </div>
-            <div className="flex items-center justify-between text-lg font-bold">
-              <span>Total</span>
-              <span className="tabular-nums">{fmt(subtotal)}</span>
+            <div className="flex items-center justify-between">
+              <span className="text-base font-semibold">Total</span>
+              <span className="figure text-2xl text-foreground">{fmt(subtotal)}</span>
             </div>
           </div>
           <div className="flex gap-2">

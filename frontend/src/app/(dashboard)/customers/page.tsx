@@ -16,10 +16,21 @@ import { countryName } from '@/lib/countries';
 import { dialCodeFor, parsePhone } from '@/lib/phone';
 import { useI18n } from '@/hooks/useI18n';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
+import { nameToColor } from '@/lib/image-utils';
 
 function SortIcon({ field, sortField, sortOrder }: { field: string; sortField: string; sortOrder: 'asc' | 'desc' }) {
   if (sortField !== field) return <span className="text-text-subtle w-3 inline-block ml-1 opacity-0 group-hover:opacity-100 transition-opacity">↕</span>;
   return sortOrder === 'asc' ? <TrendingUp size={12} className="inline ml-1 text-muted-foreground" /> : <TrendingDown size={12} className="inline ml-1 text-muted-foreground" />;
+}
+
+function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="rounded-2xl border border-hairline bg-surface p-4 shadow-xs">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">{label}</p>
+      <p className="mt-1.5 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="mt-0.5 text-xs text-text-subtle">{sub}</p>
+    </div>
+  );
 }
 
 export default function CustomersPage() {
@@ -132,64 +143,86 @@ export default function CustomersPage() {
     }
   };
 
+  const loyaltyMembers = customers.filter((c) => Number(c.wallet_balance) > 0).length;
+  const pointsOutstanding = customers.reduce((s, c) => s + Number(c.wallet_balance || 0), 0);
+  const lifetimeSpend = customers.reduce((s, c) => s + Number(c.total_spent || 0), 0);
+
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <div className="flex items-center gap-4">
-          <h1 className="text-display-lg text-3xl text-foreground">{t('nav.customers')}</h1>
-          {filter === 'invalid_phones' && (
-            <span className="bg-red-100 text-red-800 text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1.5">
-              <AlertCircle size={14} /> Action Required
-              <button onClick={() => router.push('/customers')} className="ml-1 text-red-500 hover:text-red-700">
-                <X size={12} />
-              </button>
-            </span>
-          )}
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">{t('nav.customers')}</h1>
+            {filter === 'invalid_phones' && (
+              <span className="bg-danger-tint text-danger text-xs px-2.5 py-1 rounded-full font-semibold flex items-center gap-1.5">
+                <AlertCircle size={14} /> Action Required
+                <button onClick={() => router.push('/customers')} className="ml-1 opacity-70 hover:opacity-100">
+                  <X size={12} />
+                </button>
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-sm text-text-subtle">Your guest book — visits, spend and loyalty in one place.</p>
         </div>
-        <Button onClick={openAdd}><Plus size={16} className="mr-1" /> {t('customer.add')}</Button>
+        <Button onClick={openAdd} className="h-10 gap-2 rounded-xl font-semibold shadow-sm"><Plus size={16} /> {t('customer.add')}</Button>
       </div>
 
-      <div className="relative mb-4">
-        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+      {/* KPI band */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Customers" value={String(customers.length)} sub={search || filter ? 'in this view' : 'in your guest book'} />
+        <KpiCard label="Loyalty members" value={String(loyaltyMembers)} sub="with a points balance" />
+        <KpiCard label="Points outstanding" value={pointsOutstanding.toLocaleString()} sub="across all wallets" />
+        <KpiCard label="Lifetime spend" value={fmt(lifetimeSpend)} sub="total recorded" />
+      </div>
+
+      <div className="relative">
+        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" />
         <input
           type="text" value={search} onChange={(e) => setSearch(e.target.value)}
           placeholder={t('customer.search')}
-          className="w-full pl-10 pr-4 py-2.5 bg-surface border border-border rounded-lg focus:ring-2 focus:ring-brand outline-none"
+          className="h-11 w-full rounded-xl bg-surface border border-hairline pl-10 pr-4 text-sm outline-none transition-colors placeholder:text-text-subtle focus:border-input"
         />
       </div>
 
-      <div className="bg-surface rounded-xl border border-hairline overflow-hidden">
+      <div className="bg-surface rounded-2xl border border-hairline overflow-hidden shadow-sm">
         <table className="w-full">
-          <thead className="bg-surface-sunken">
-            <tr>
-              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('name')}>
+          <thead className="border-b border-hairline bg-surface-sunken">
+            <tr className="[&>th]:p-4 [&>th]:text-[11px] [&>th]:font-bold [&>th]:uppercase [&>th]:tracking-wide [&>th]:text-text-subtle">
+              <th className="text-left cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('name')}>
                 {t('customers.columnCustomer')} <SortIcon field="name" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('phone')}>
+              <th className="text-left cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('phone')}>
                 {t('customer.phone')} <SortIcon field="phone" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('last_visit')}>
+              <th className="text-center cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('last_visit')}>
                 Last Visit <SortIcon field="last_visit" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('visits')}>
+              <th className="text-center cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('visits')}>
                 {t('customer.visits')} <SortIcon field="visits" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('spent')}>
+              <th className="text-right cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('spent')}>
                 {t('customer.totalSpent')} <SortIcon field="spent" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase cursor-pointer hover:bg-secondary group transition-colors" onClick={() => onSort('loyalty')}>
+              <th className="text-right cursor-pointer hover:text-foreground group transition-colors" onClick={() => onSort('loyalty')}>
                 {t('customer.loyalty')} <SortIcon field="loyalty" sortField={sortField} sortOrder={sortOrder} />
               </th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('customers.columnActions')}</th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('customers.columnLedger')}</th>
+              <th className="text-center">{t('customers.columnActions')}</th>
+              <th className="text-center">{t('customers.columnLedger')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-hairline">
             {customers.map((c) => (
               <tr key={c.id} className="hover:bg-surface-sunken">
                 <td className="p-4">
-                  <p className="font-medium text-foreground">{c.name}</p>
-                  <p className="text-xs text-muted-foreground">{c.email || '—'}</p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: nameToColor(c.name) }}>
+                      <span className="text-sm font-bold text-white/80">{c.name.substring(0, 2).toUpperCase()}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-foreground">{c.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">{c.email || '—'}</p>
+                    </div>
+                  </div>
                 </td>
                 <td className="p-4 text-sm text-muted-foreground">
                   <div className="flex items-center gap-2">
@@ -210,8 +243,8 @@ export default function CustomersPage() {
                 <td className="p-4 text-right font-medium">{fmt(Number(c.total_spent))}</td>
                 <td className="p-4 text-right">
                   {Number(c.wallet_balance) > 0 ? (
-                    <span className="inline-flex items-center gap-1 text-purple-700 font-semibold text-sm">
-                      <Wallet size={13} />
+                    <span className="inline-flex items-center gap-1 rounded-full bg-warning-tint px-2.5 py-0.5 text-xs font-semibold text-warning">
+                      <Wallet size={12} />
                       {Number(c.wallet_balance).toLocaleString()} {t('customer.ptsSuffix')}
                     </span>
                   ) : (

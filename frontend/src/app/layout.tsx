@@ -1,14 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, Geist_Mono } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import "./globals.css";
 import MenuActionHandler from "@/components/layout/MenuActionHandler";
 import AuthGuard from "@/components/layout/AuthGuard";
 import { HtmlLangSync } from "@/components/layout/HtmlLangSync";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// DM Sans — the Plemmo UI typeface (matches the Serva design language).
+const dmSans = DM_Sans({
+  variable: "--font-sans-family",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -51,7 +53,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${dmSans.variable} ${geistMono.variable} antialiased`}
       >
         <MenuActionHandler />
         <HtmlLangSync />

@@ -1,40 +1,20 @@
 'use client';
 
 /**
- * Plemmo application shell — grouped, context-aware navigation.
+ * Plemmo application shell — "Serva" style.
  *
- * Replaces the previous flat single-list nav (preserved as Sidebar.legacy.tsx)
- * with sectioned groups — Sell, Operations, Insights, People, Business — plus a
- * business/role context header and an online/offline indicator. All role and
- * business-type visibility rules from the legacy shell are preserved verbatim;
- * only the organisation and chrome changed. A group renders only when it has at
- * least one item the current user may see.
+ * A 264px white sidebar: brand lockup, a global search field, grouped nav with
+ * an orange-tint active pill, and a user-profile card in the footer. All role
+ * and business-type visibility rules are preserved from the original shell.
  */
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard,
-  ShoppingCart,
-  Store,
-  Boxes,
-  Truck,
-  ArrowLeftRight,
-  MapPin,
-  ClipboardList,
-  Package,
-  Users,
-  UserCog,
-  Settings,
-  LogOut,
-  PanelLeft,
-  ChefHat,
-  UserCircle,
-  LifeBuoy,
-  Scale,
-  Wifi,
-  WifiOff,
+  LayoutGrid, ShoppingCart, Store, Boxes, Truck, ArrowLeftRight, MapPin,
+  ClipboardList, Package, Users, UserCog, Settings, LogOut, PanelLeft,
+  ChefHat, LifeBuoy, Scale, Wifi, WifiOff, Search, ChevronsUpDown,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
@@ -44,50 +24,37 @@ import api from '@/lib/api';
 import { useI18n } from '@/hooks/useI18n';
 import { useConfirm } from '@/hooks/use-confirm';
 import { cn } from '@/lib/utils';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarRail,
-  useSidebar,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
+  SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton,
+  SidebarMenuItem, SidebarRail, useSidebar,
 } from '@/components/ui/sidebar';
 
 interface NavItem {
-  href: string;
-  labelKey: string;
-  icon: LucideIcon;
-  roles: string[];
-  businessTypes: string[] | null; // null = all business types
+  href: string; labelKey: string; icon: LucideIcon;
+  roles: string[]; businessTypes: string[] | null; external?: boolean;
 }
+interface NavGroup { labelKey: string; items: NavItem[]; }
 
-interface NavGroup {
-  labelKey: string;
-  items: NavItem[];
-}
-
-// Grouped Plemmo navigation. Roles/businessTypes carry the same rules the
-// legacy flat list enforced — nothing is newly exposed or hidden.
 const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: 'nav.group.sell',
     items: [
-      { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
-      { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
+      { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: null, external: true },
+      { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: null, external: true },
       { href: '/orders', labelKey: 'nav.orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
     ],
   },
   {
     labelKey: 'nav.group.operations',
     items: [
-      { href: '/tables', labelKey: 'nav.tables', icon: LayoutDashboard, roles: ['owner', 'manager'], businessTypes: ['restaurant'] },
-      { href: '/settings?tab=kds', labelKey: 'nav.kds', icon: ChefHat, roles: ['owner', 'manager'], businessTypes: ['restaurant'] },
+      { href: '/tables', labelKey: 'nav.tables', icon: LayoutGrid, roles: ['owner', 'manager'], businessTypes: ['restaurant'] },
+      { href: '/settings?tab=kds', labelKey: 'nav.kds', icon: ChefHat, roles: ['owner', 'manager'], businessTypes: ['restaurant'], external: true },
       { href: '/products', labelKey: 'nav.products.catalogue', icon: Package, roles: ['owner', 'manager'], businessTypes: null },
       { href: '/inventory', labelKey: 'nav.inventory', icon: Boxes, roles: ['owner', 'manager'], businessTypes: null },
       { href: '/transfers', labelKey: 'nav.transfers', icon: ArrowLeftRight, roles: ['owner', 'manager'], businessTypes: null },
@@ -99,7 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: 'nav.group.insights',
     items: [
-      { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, roles: ['owner'], businessTypes: null },
+      { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutGrid, roles: ['owner'], businessTypes: null },
     ],
   },
   {
@@ -118,6 +85,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+function initials(text: string) {
+  return text.split(' ').map((w) => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+}
+
 export default function AppSidebar() {
   const pathname = usePathname();
   const { user, currentTenant, logout } = useAuthStore();
@@ -126,9 +97,7 @@ export default function AppSidebar() {
   const { t } = useI18n();
   const { confirm, ConfirmDialog } = useConfirm();
   const [emailNeedsAttention, setEmailNeedsAttention] = useState(false);
-  const [online, setOnline] = useState(() =>
-    typeof navigator === 'undefined' ? true : navigator.onLine
-  );
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const closeMobile = () => { if (isMobile) setOpenMobile(false); };
 
   const role = currentTenant?.role || 'cashier';
@@ -136,16 +105,12 @@ export default function AppSidebar() {
 
   const isVisible = (item: NavItem) => {
     if (item.href === '/tables' && !tablesRequired) return false;
-    // KDS disabled → hide the nav entry entirely (issue #133).
     if (item.href === '/settings?tab=kds' && !kdsEnabled) return false;
-    return item.roles.includes(role)
-      && (item.businessTypes === null || item.businessTypes.includes(businessType));
+    return item.roles.includes(role) && (item.businessTypes === null || item.businessTypes.includes(businessType));
   };
-
   const groups = NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter(isVisible) }))
-    .filter((group) => group.items.length > 0);
-
+    .map((g) => ({ ...g, items: g.items.filter(isVisible) }))
+    .filter((g) => g.items.length > 0);
   const homeHref = getLandingPage();
 
   useEffect(() => {
@@ -153,113 +118,89 @@ export default function AppSidebar() {
     const off = () => setOnline(false);
     window.addEventListener('online', on);
     window.addEventListener('offline', off);
-    return () => {
-      window.removeEventListener('online', on);
-      window.removeEventListener('offline', off);
-    };
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
   }, []);
 
   useEffect(() => {
     if (!currentTenant) return;
     api.get('/settings/business')
-      .then((res) => {
-        setTablesRequired(typeof res.data.tables_required === 'boolean' ? res.data.tables_required : true);
-      })
-      .catch(() => { });
+      .then((res) => setTablesRequired(typeof res.data.tables_required === 'boolean' ? res.data.tables_required : true))
+      .catch(() => {});
     api.get('/settings/kds_enabled')
       .then((res) => setKdsEnabled(res.data.setting?.value !== 'false'))
-      .catch(() => { });
+      .catch(() => {});
   }, [currentTenant, setTablesRequired, setKdsEnabled]);
 
   useEffect(() => {
     if (role !== 'owner') return;
     let active = true;
-    const refreshCloudAttention = async () => {
+    const refresh = async () => {
       try {
-        const [accountResponse, cloudResponse] = await Promise.all([
-          api.get('/settings/cloud/account'),
-          api.get('/settings/cloud'),
-        ]);
+        const [acc, cloud] = await Promise.all([api.get('/settings/cloud/account'), api.get('/settings/cloud')]);
         if (!active) return;
-        const deletionStatus = accountResponse.data?.deletion_request?.status || cloudResponse.data?.cloud_deletion_status;
+        const deletion = acc.data?.deletion_request?.status || cloud.data?.cloud_deletion_status;
         setEmailNeedsAttention(
-          (accountResponse.data?.cloud_account_available !== false && Boolean(accountResponse.data?.email) && !accountResponse.data?.verified)
-          || ['pending', 'processing', 'failed'].includes(deletionStatus)
+          (acc.data?.cloud_account_available !== false && Boolean(acc.data?.email) && !acc.data?.verified)
+          || ['pending', 'processing', 'failed'].includes(deletion)
         );
-      } catch {
-        if (active) setEmailNeedsAttention(false);
-      }
+      } catch { if (active) setEmailNeedsAttention(false); }
     };
-    void refreshCloudAttention();
-    window.addEventListener('flo:cloud-account-status-changed', refreshCloudAttention);
-    return () => {
-      active = false;
-      window.removeEventListener('flo:cloud-account-status-changed', refreshCloudAttention);
-    };
+    void refresh();
+    window.addEventListener('flo:cloud-account-status-changed', refresh);
+    return () => { active = false; window.removeEventListener('flo:cloud-account-status-changed', refresh); };
   }, [role]);
 
   const businessName = currentTenant?.business_name || t('common.brandName');
   const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
+  const userName = user?.name || user?.email || t('nav.user', { defaultValue: 'User' });
 
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border">
-      <SidebarHeader className="gap-3 px-3 pt-4 pb-2 group-data-[collapsible=icon]:px-2">
-        {/* Plemmo wordmark — the editorial signature in the display serif. */}
-        <Link
-          href={homeHref}
-          className="flex items-center gap-2.5 group-data-[collapsible=icon]:justify-center"
-        >
-          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-sm">
-            P
+      <SidebarHeader className="gap-3 px-3 pt-4 pb-2">
+        <Link href={homeHref} className="flex items-center gap-2.5 px-1 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <div className="flex aspect-square size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-base font-bold text-primary-foreground shadow-sm">P</div>
+          <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
+            <span className="text-[15px] font-bold text-foreground">Plemmo</span>
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-text-subtle">POS System</span>
           </div>
-          <span className="text-display text-xl text-foreground group-data-[collapsible=icon]:hidden">
-            Plemmo
-          </span>
         </Link>
 
-        {/* Business + role + connectivity. Hidden in icon-collapsed mode. */}
-        <div className="min-w-0 space-y-2 group-data-[collapsible=icon]:hidden">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-foreground">{businessName}</p>
-            <p className="truncate text-xs text-muted-foreground">{roleLabel}</p>
-          </div>
-          <div
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
-              online
-                ? 'bg-success-tint text-success'
-                : 'bg-danger-tint text-destructive'
-            )}
-            title={online ? t('nav.context.online') : t('nav.context.offline')}
-          >
-            {online ? <Wifi className="size-3" /> : <WifiOff className="size-3" />}
-            <span>{online ? t('nav.context.online') : t('nav.context.offline')}</span>
-          </div>
+        <div className="relative group-data-[collapsible=icon]:hidden">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
+          <input
+            readOnly
+            placeholder={t('nav.searchPlaceholder', { defaultValue: 'Search menu, orders, staff' })}
+            className="h-9 w-full rounded-lg border border-transparent bg-muted pl-9 pr-3 text-sm text-foreground placeholder:text-text-subtle outline-none transition-colors focus:border-input focus:bg-surface"
+          />
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="px-1">
         {groups.map((group) => (
-          <SidebarGroup key={group.labelKey}>
-            <SidebarGroupLabel className="eyebrow px-3 group-data-[collapsible=icon]:hidden">
+          <SidebarGroup key={group.labelKey} className="py-1">
+            <SidebarGroupLabel className="px-3 text-[10px] font-bold uppercase tracking-widest text-text-subtle group-data-[collapsible=icon]:hidden">
               {t(group.labelKey)}
             </SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
+              <SidebarMenu className="gap-0.5">
                 {group.items.map((item) => {
                   const [hrefPath, hrefQuery] = item.href.split('?');
                   const isActive = !hrefQuery && (pathname === hrefPath || pathname?.startsWith(hrefPath + '/'));
                   return (
                     <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton asChild isActive={isActive} tooltip={t(item.labelKey)}>
+                      <SidebarMenuButton
+                        asChild isActive={isActive} tooltip={t(item.labelKey)}
+                        className="h-10 gap-3 rounded-lg px-3 font-medium data-[active=true]:bg-sidebar-accent data-[active=true]:font-semibold data-[active=true]:text-sidebar-accent-foreground"
+                      >
                         <Link href={item.href} onClick={closeMobile}>
-                          <span className="relative flex size-4 shrink-0 items-center justify-center">
-                            <item.icon className="size-4 shrink-0" />
-                            {item.href === '/settings' && emailNeedsAttention && (
-                              <span aria-label="Email verification required" className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-sidebar" />
-                            )}
-                          </span>
-                          <span>{t(item.labelKey)}</span>
+                          <item.icon className="size-[18px] shrink-0" />
+                          <span className="flex-1">{t(item.labelKey)}</span>
+                          {item.href === '/settings' && emailNeedsAttention && (
+                            <span aria-label="Attention" className="size-2 rounded-full bg-destructive" />
+                          )}
+                          {item.external && (
+                            <span aria-hidden className="text-text-subtle group-data-[collapsible=icon]:hidden">↗</span>
+                          )}
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -271,38 +212,53 @@ export default function AppSidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="gap-2 p-2">
+        {/* Connectivity card */}
+        <div className="flex items-center gap-2 rounded-xl border border-hairline bg-surface px-3 py-2.5 group-data-[collapsible=icon]:hidden">
+          <span className={cn('flex size-7 items-center justify-center rounded-lg', online ? 'bg-success-tint text-success' : 'bg-danger-tint text-destructive')}>
+            {online ? <Wifi className="size-4" /> : <WifiOff className="size-4" />}
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="text-xs font-semibold text-foreground">{online ? t('nav.context.online') : t('nav.context.offline')}</p>
+            <p className="truncate text-[11px] text-text-subtle">{t('common.brandName')}</p>
+          </div>
+          <Link href="/support" onClick={closeMobile} title={t('nav.support')} className="text-text-subtle transition-colors hover:text-foreground">
+            <LifeBuoy className="size-4" />
+          </Link>
+        </div>
+
+        {/* Profile card */}
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={pathname === '/support'} tooltip={t('nav.support')}>
-              <Link href="/support" onClick={closeMobile}>
-                <LifeBuoy />
-                <span>{t('nav.support')}</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={toggleSidebar} tooltip={t('nav.toggleSidebar')}>
-              <PanelLeft />
-              <span>{t('nav.collapse')}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            {/* Identity label, not a button — nothing to click through to, so it
-                deliberately skips SidebarMenuButton's interactive/hover styling. */}
-            <div
-              title={user?.name || user?.email || t('nav.user', { defaultValue: 'User' })}
-              className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-sidebar-foreground/70 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0"
-            >
-              <UserCircle />
-              <span className="truncate">{user?.name || user?.email || t('nav.user', { defaultValue: 'User' })}</span>
-            </div>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={async () => { if (await confirm(t('nav.confirmLogout', { defaultValue: 'Are you sure you want to log out?' }))) logout(); }} tooltip={t('nav.logoutTooltip')}>
-              <LogOut />
-              <span>{t('nav.logout')}</span>
-            </SidebarMenuButton>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-hover group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+                  <Avatar className="size-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg bg-primary/10 text-xs font-bold text-primary">{initials(userName)}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">
+                    <p className="truncate text-sm font-semibold text-foreground">{userName}</p>
+                    <p className="truncate text-xs text-text-subtle">{roleLabel} · {businessName}</p>
+                  </div>
+                  <ChevronsUpDown className="size-4 shrink-0 text-text-subtle group-data-[collapsible=icon]:hidden" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" side="top" className="w-56">
+                <DropdownMenuItem onClick={toggleSidebar}>
+                  <PanelLeft className="size-4" /> {t('nav.collapse')}
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/support" onClick={closeMobile}><LifeBuoy className="size-4" /> {t('nav.support')}</Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={async () => { if (await confirm(t('nav.confirmLogout', { defaultValue: 'Are you sure you want to log out?' }))) logout(); }}
+                >
+                  <LogOut className="size-4" /> {t('nav.logout')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

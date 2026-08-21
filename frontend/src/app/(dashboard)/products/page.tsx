@@ -59,6 +59,16 @@ function taxCategoryOptionLabel(tc: { label: string; rate_percent?: number | nul
   return tc.rate_percent != null ? `${tc.label} (${tc.rate_percent}%)` : tc.label;
 }
 
+function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="rounded-2xl border border-hairline bg-surface p-4 shadow-xs">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">{label}</p>
+      <p className="mt-1.5 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="mt-0.5 text-xs text-text-subtle">{sub}</p>
+    </div>
+  );
+}
+
 export default function ProductsPage() {
   const { t } = useI18n();
   const { currentTenant } = useAuthStore();
@@ -463,66 +473,73 @@ export default function ProductsPage() {
     );
   }
 
+  const activeProducts = products.filter((p) => p.is_active).length;
+  const avgMargin = (() => {
+    const withCost = products.filter((p) => (p.cost_price ?? 0) > 0 && Number(p.price) > 0);
+    if (!withCost.length) return null;
+    const m = withCost.reduce((s, p) => s + (1 - Number(p.cost_price) / Number(p.price)), 0) / withCost.length;
+    return Math.round(m * 100);
+  })();
+  const stockValue = products.reduce((s, p) => s + (p.track_inventory ? Number(p.price) * Math.max(0, p.stock_quantity || 0) : 0), 0);
+
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-display-lg text-3xl text-foreground">{t('products.title')}</h1>
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
+      {/* Masthead */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{t('products.title')}</h1>
+          <p className="mt-0.5 text-sm text-text-subtle">Every product and category you sell, in one place.</p>
+        </div>
+        {activeTab === 'products' && (
+          <div className="flex flex-wrap items-center gap-2">
+            {isOwnerOrManager && taxCategories.length > 0 && (
+              <Button variant="outline" className="h-10 rounded-xl" onClick={() => { setBulkTaxCategoryId(''); setShowBulkTaxModal(true); }}>Assign tax</Button>
+            )}
+            <Button variant="outline" className="h-10 gap-2 rounded-xl" onClick={() => openCsvModal('products')}><FileSpreadsheet size={16} /> Import CSV</Button>
+            <Button className="h-10 gap-2 rounded-xl font-semibold shadow-sm" onClick={openCreate}><Plus size={16} /> {t('products.addProduct')}</Button>
+          </div>
+        )}
       </div>
 
-      <div className="flex gap-1 mb-6 border-b">
-        <button onClick={() => setActiveTab('products')} className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${activeTab === 'products' ? 'border-brand text-brand' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-          <Package size={16} /> {t('products.tabProducts')}
-        </button>
-        <button onClick={() => setActiveTab('categories')} className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${activeTab === 'categories' ? 'border-brand text-brand' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-          <Folder size={16} /> {t('products.tabCategories')}
-        </button>
+      {/* Pill tabs */}
+      <div className="inline-flex items-center gap-1 rounded-xl border border-hairline bg-surface p-1 shadow-xs">
+        <button onClick={() => setActiveTab('products')} className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${activeTab === 'products' ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'}`}><Package size={15} /> {t('products.tabProducts')}</button>
+        <button onClick={() => setActiveTab('categories')} className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${activeTab === 'categories' ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'}`}><Folder size={15} /> {t('products.tabCategories')}</button>
         {isRestaurant && (
-          <button onClick={() => setActiveTab('addons')} className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${activeTab === 'addons' ? 'border-brand text-brand' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-            <Puzzle size={16} /> {t('products.tabAddonGroups')}
-          </button>
+          <button onClick={() => setActiveTab('addons')} className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${activeTab === 'addons' ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'}`}><Puzzle size={15} /> {t('products.tabAddonGroups')}</button>
         )}
       </div>
 
       {activeTab === 'products' && (
         <>
-          <div className="flex justify-end gap-2 mb-4">
-            {isOwnerOrManager && taxCategories.length > 0 && (
-              <Button variant="outline" onClick={() => { setBulkTaxCategoryId(''); setShowBulkTaxModal(true); }}>
-                Assign tax category
-              </Button>
-            )}
-            <Button variant="outline" onClick={() => openCsvModal('products')}>
-              <FileSpreadsheet size={16} className="mr-1" /> CSV
-            </Button>
-            <Button onClick={openCreate}>
-              <Plus size={16} className="mr-1" /> {t('products.addProduct')}
-            </Button>
+          {/* KPI band */}
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiCard label="Products" value={String(products.length)} sub={`${activeProducts} active`} />
+            <KpiCard label="Categories" value={String(categories.length)} sub="in the catalogue" />
+            <KpiCard label="Average margin" value={avgMargin != null ? `${avgMargin}%` : '—'} sub="where cost is set" />
+            <KpiCard label="Stock value" value={fmt(stockValue)} sub="at retail price" />
           </div>
 
       {/* Product Table */}
-      <div className="bg-surface rounded-xl border border-hairline overflow-hidden">
+      <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
         <table className="w-full">
-          <thead className="bg-surface-sunken">
-            <tr>
-              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnProduct')}</th>
-              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnCategory')}</th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">Add-ons</th>
-              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnPrice')}</th>
-              <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnTax')}</th>
-              {loyaltyEnabled && <th className="text-left p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnCashback')}</th>}
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnStock')}</th>
-              <th className="text-center p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnStatus')}</th>
-              <th className="text-right p-4 text-xs font-medium text-muted-foreground uppercase">{t('products.columnActions')}</th>
+          <thead className="border-b border-hairline bg-surface-sunken">
+            <tr className="[&>th]:p-4 [&>th]:text-[11px] [&>th]:font-bold [&>th]:uppercase [&>th]:tracking-wide [&>th]:text-text-subtle">
+              <th className="text-left">{t('products.columnProduct')}</th>
+              <th className="text-left">{t('products.columnCategory')}</th>
+              <th className="text-right">{t('products.columnPrice')}</th>
+              <th className="text-right">Cost</th>
+              <th className="text-center">Margin</th>
+              {loyaltyEnabled && <th className="text-left">{t('products.columnCashback')}</th>}
+              <th className="text-center">{t('products.columnStock')}</th>
+              <th className="text-center">{t('products.columnStatus')}</th>
+              <th className="text-right">{t('products.columnActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-hairline">
             {products.map((product) => {
               const parentCat = categories.find((c) => String(c.id) === String(product.category_id || product.category?.id));
               const isCategoryInactive = Boolean(parentCat && !parentCat.is_active);
-              const matchedTaxCategory = taxCategories.find((tc) => tc.id === product.tax_category_id);
-              const taxLabel = product.tax_category_id
-                ? (matchedTaxCategory ? taxCategoryOptionLabel(matchedTaxCategory) : product.tax_category_id)
-                : '—';
               return (
               <tr key={product.id} className="hover:bg-surface-sunken">
                 <td className="p-4 max-w-[220px]">
@@ -567,28 +584,26 @@ export default function ProductsPage() {
                     )}
                   </div>
                 </td>
-                <td className="p-4 text-center">
-                  {product.addon_groups && product.addon_groups.length > 0 ? (
-                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
-                      {t('products.addonGroupCount', { count: product.addon_groups.length })}
+                <td className="p-4 text-right">
+                  <p className="font-semibold text-foreground">{fmt(Number(product.price))}</p>
+                  {product.addon_groups && product.addon_groups.length > 0 && (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-info-tint px-1.5 py-0.5 text-[10px] font-semibold text-info">
+                      <Puzzle size={10} /> {t('products.addonGroupCount', { count: product.addon_groups.length })}
                     </span>
-                  ) : (
-                    <span className="text-muted-foreground text-sm">—</span>
                   )}
                 </td>
-                <td className="p-4 text-right">
-                  <p className="font-medium">{fmt(Number(product.price))}</p>
-                  {product.cost_price != null && product.cost_price > 0 && <p className="text-xs text-muted-foreground">Cost: {fmt(Number(product.cost_price))}</p>}
+                <td className="p-4 text-right text-sm text-muted-foreground">
+                  {product.cost_price != null && product.cost_price > 0 ? fmt(Number(product.cost_price)) : '—'}
                 </td>
-                <td className="p-4 text-sm text-muted-foreground">
-                  <div className="flex flex-col gap-0.5">
-                    <span>{taxLabel}</span>
-                    {!product.tax_category_id && taxCategories.length > 0 && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 w-fit" title={t('products.notTaxedTooltip')}>
-                        <AlertTriangle size={11} className="shrink-0" /> {t('products.notTaxedBadge')}
-                      </span>
-                    )}
-                  </div>
+                <td className="p-4 text-center">
+                  {(() => {
+                    const price = Number(product.price);
+                    const cost = Number(product.cost_price ?? 0);
+                    if (!(cost > 0 && price > 0)) return <span className="text-sm text-muted-foreground">—</span>;
+                    const m = Math.round((1 - cost / price) * 100);
+                    const tone = m >= 50 ? 'bg-success-tint text-success' : m >= 25 ? 'bg-warning-tint text-warning' : 'bg-danger-tint text-danger';
+                    return <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`}>{m}%</span>;
+                  })()}
                 </td>
                 {loyaltyEnabled && (
                   <td className="p-4 text-sm text-muted-foreground">

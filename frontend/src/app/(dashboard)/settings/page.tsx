@@ -130,15 +130,15 @@ function SettingsNavItem({
     <button
       onClick={() => onClick(value)}
       className={[
-        'flex items-center w-full min-w-0 text-left text-sm rounded-md py-1.5 transition-colors',
+        'flex items-center w-full min-w-0 text-left text-sm rounded-lg py-2 transition-colors',
         indent ? 'pl-5 pr-2 border-l-2 ml-1 text-xs md:ml-0' : 'px-3',
         isActive
-          ? 'bg-brand/10 text-brand font-semibold' + (indent ? ' border-brand' : '')
-          : 'text-muted-foreground hover:bg-secondary hover:text-foreground' + (indent ? ' border-transparent' : ''),
+          ? 'bg-accent text-primary font-semibold' + (indent ? ' border-primary' : '')
+          : 'text-muted-foreground hover:bg-hover hover:text-foreground' + (indent ? ' border-transparent' : ''),
       ].join(' ')}
     >
       <span className="min-w-0 truncate">{label}</span>
-      {attention && <span className="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Action required">1</span>}
+      {attention && <span className="ml-auto rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-bold text-white" aria-label="Action required">1</span>}
     </button>
   );
 }
@@ -175,7 +175,7 @@ function KdsDefaultViewCard() {
   }
 
   return (
-    <div className="bg-surface rounded-xl border border-hairline p-6">
+    <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
       <div className="flex items-center gap-2 mb-4">
         <Monitor size={20} className="text-muted-foreground" />
         <h2 className="font-semibold text-foreground">{t('settings.kdsDefaultView')}</h2>
@@ -2025,13 +2025,13 @@ export default function SettingsPage() {
       <Tabs orientation="vertical" value={activeTab} onValueChange={setActiveTab} className="flex flex-col md:flex-row gap-6 items-start">
 
         {/* Settings sidebar nav */}
-        <div className="w-full md:w-40 md:min-w-[10rem] shrink-0 md:sticky md:top-0">
-          <div className="flex items-center gap-3 mb-6">
-            <Settings size={28} className="text-brand" />
-            <h1 className="text-display-lg text-3xl text-foreground">{t('settings.title')}</h1>
+        <div className="w-full md:w-48 md:min-w-[12rem] shrink-0 md:sticky md:top-0">
+          <div className="mb-5 flex items-center gap-2.5">
+            <div className="flex size-9 items-center justify-center rounded-xl bg-accent text-primary"><Settings size={18} /></div>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('settings.title')}</h1>
           </div>
 
-           <nav className="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-x-visible border-b md:border-b-0 md:border-r border-border pb-2 md:pb-0 md:pr-2">
+           <nav className="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-x-visible rounded-2xl border border-hairline bg-surface p-2 shadow-xs md:pb-2">
 
             {/* General group */}
             <div className="hidden md:block px-3 pt-3 pb-2 mt-2 mb-1 border-b border-hairline">
@@ -2084,7 +2084,7 @@ export default function SettingsPage() {
         <TabsContent value="store">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* Store Details — editable for admin, readonly otherwise */}
-            <div className="lg:col-span-2 bg-surface rounded-xl border border-hairline p-6">
+            <div className="lg:col-span-2 bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Building2 size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.storeDetails')}</h2>
@@ -2262,7 +2262,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Order Number Format */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Hash size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.orderNumberFormat', { defaultValue: 'Order Number Format' })}</h2>
@@ -2327,7 +2327,7 @@ export default function SettingsPage() {
 
 
             {/* Subscription */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <CreditCard size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.subscription')}</h2>
@@ -2381,7 +2381,7 @@ export default function SettingsPage() {
         <TabsContent value="pos">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* POS Display */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Monitor size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.posDisplay')}</h2>
@@ -2399,7 +2399,7 @@ export default function SettingsPage() {
             </div>
 
             {/* POS Workflow */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Users size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.posWorkflow')}</h2>
@@ -2430,7 +2430,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Add a cashier — pair another device onto the same POS over the local network */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Smartphone size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.posPairing')}</h2>
@@ -2539,7 +2539,7 @@ export default function SettingsPage() {
         <TabsContent value="kds">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* KDS on/off (issue #133) — not every business runs a Kitchen Display. */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-foreground">{t('settings.kdsEnabledToggle', { defaultValue: 'Kitchen Display System' })}</p>
@@ -2564,7 +2564,7 @@ export default function SettingsPage() {
             )}
 
             {kdsEnabledSetting && (
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <ChefHat size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.kds')}</h2>
@@ -2668,7 +2668,7 @@ export default function SettingsPage() {
             </div>
             )}
 
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <ChefHat size={20} className="text-muted-foreground" />
@@ -2806,7 +2806,7 @@ export default function SettingsPage() {
 
         <TabsContent value="server-app">
           <div className="pb-6 max-w-3xl space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-foreground">{t('settings.serverApp', { defaultValue: 'Server App' })}</p>
@@ -2825,7 +2825,7 @@ export default function SettingsPage() {
             )}
 
             {serverAppEnabledSetting && (
-              <div className="bg-surface rounded-xl border border-hairline p-6">
+              <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
                 <div className="flex items-center gap-2 mb-4">
                   <Smartphone size={20} className="text-muted-foreground" />
                   <h2 className="font-semibold text-foreground">{t('settings.tablesideOrdering', { defaultValue: 'Tableside Ordering' })}</h2>
@@ -2928,7 +2928,7 @@ export default function SettingsPage() {
         <TabsContent value="loyalty">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* Loyalty */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Gift size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.loyaltyProgram')}</h2>
@@ -3002,7 +3002,7 @@ export default function SettingsPage() {
         <TabsContent value="discounts">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* Discount Limits */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Percent size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.discountLimits')}</h2>
@@ -3072,7 +3072,7 @@ export default function SettingsPage() {
         <TabsContent value="account">
           <div className="pb-6 max-w-3xl space-y-6">
             {/* Account */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <h2 className="font-semibold text-foreground mb-4">{t('settings.account')}</h2>
               <div className="space-y-3">
                 <div>
@@ -3130,7 +3130,7 @@ export default function SettingsPage() {
         {/* Privacy — anonymous telemetry (from the old Integrations tab) + cloud privacy controls (from Account) */}
         <TabsContent value="privacy">
           <div className="pb-6 max-w-3xl space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6 space-y-4">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs space-y-4">
               <div className="flex items-center gap-2">
                 <Lock size={20} className="text-muted-foreground" />
                 <div>
@@ -3224,7 +3224,7 @@ export default function SettingsPage() {
         <TabsContent value="receipts-printers">
           <div className="pb-6 max-w-6xl space-y-6">
             <div className="space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <Printer size={20} className="text-muted-foreground" />
@@ -3455,7 +3455,7 @@ export default function SettingsPage() {
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{t('settings.tabPrinting')}</h2>
             </div>
 
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Printer size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.printing')}</h2>
@@ -3583,7 +3583,7 @@ export default function SettingsPage() {
           </div>
 
             <div className="space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <FileText size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.billTemplate')}</h2>
@@ -3624,7 +3624,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
             <h2 className="text-lg font-semibold text-foreground">{t('settings.tabBackupData')}</h2>
             {/* Database Export */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <FileText size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.exportDatabase')}</h2>
@@ -3657,7 +3657,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Database Backup */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <FileText size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.createBackup')}</h2>
@@ -3682,7 +3682,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Backup History */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <Database size={20} className="text-muted-foreground" />
@@ -3750,7 +3750,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Google Drive — automated off-device backups (#129) */}
-            <div className="bg-surface rounded-xl border border-hairline p-6 space-y-4">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs space-y-4">
               <div className="flex items-center gap-2">
                 <HardDrive size={20} className="text-muted-foreground" />
                 <div>
@@ -3881,7 +3881,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Database Import */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <FileText size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.importDatabase')}</h2>
@@ -3938,7 +3938,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Database Info */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Database size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.databaseInformation')}</h2>
@@ -3961,7 +3961,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Database Health Check */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Wrench size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.databaseHealthCheck')}</h2>
@@ -3978,7 +3978,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Master PIN */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <KeyRound size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.masterPin')}</h2>
@@ -4029,7 +4029,7 @@ export default function SettingsPage() {
             <h2 className="text-lg font-semibold text-foreground">{t('settings.tabMobileAccess')}</h2>
 
             {/* FloAdmin — reporting sync */}
-            <div className="bg-surface rounded-xl border border-hairline p-6 space-y-5">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs space-y-5">
               <div className="flex items-center gap-2">
                 <Cloud size={20} className="text-brand" />
                 <div>
@@ -4125,7 +4125,7 @@ export default function SettingsPage() {
             </div>
 
             {/* RevFlo — consolidated: download/QR + app (pairing) code + paired devices */}
-            <div className="bg-surface rounded-xl border border-hairline p-6 space-y-5">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs space-y-5">
               <div className="flex items-center gap-2">
                 <Smartphone size={20} className="text-muted-foreground" />
                 <div>
@@ -4262,7 +4262,7 @@ export default function SettingsPage() {
             <h2 className="text-lg font-semibold text-foreground">{t('settings.tabOrderflow')}</h2>
 
             {/* OrderFlow — online orders */}
-            <div className="bg-surface rounded-xl border border-hairline p-6 space-y-4">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs space-y-4">
               <div className="flex items-center gap-2">
                 <Zap size={20} className="text-amber-500" />
                 <div>
@@ -4289,7 +4289,7 @@ export default function SettingsPage() {
         {/* About tab */}
         <TabsContent value="about">
           <div className="pb-6 max-w-3xl space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <h2 className="font-semibold text-foreground mb-4">{t('settings.aboutApp')}</h2>
               <p className="text-sm text-muted-foreground mb-6">
                 {t('settings.aboutDescription')}
@@ -4314,7 +4314,7 @@ export default function SettingsPage() {
             </div>
 
             {/* More Apps — moved here from the old Integrations tab */}
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
               <div className="flex items-center gap-2 mb-4">
                 <Smartphone size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{t('settings.moreApps')}</h2>
@@ -4378,7 +4378,7 @@ export default function SettingsPage() {
         {/* Software Updates tab */}
         <TabsContent value="updates">
           <div className="pb-6 max-w-3xl space-y-6">
-            <div className="bg-surface rounded-xl border border-hairline p-6">
+            <div className="bg-surface rounded-2xl border border-hairline p-6 shadow-xs">
             <div className="flex items-center gap-2 mb-4">
               <RefreshCw size={20} className="text-muted-foreground" />
               <h2 className="font-semibold text-foreground">{t('settings.updates')}</h2>

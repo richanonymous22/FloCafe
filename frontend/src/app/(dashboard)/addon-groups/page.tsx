@@ -172,11 +172,14 @@ export default function AddonGroupsPage() {
   }
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-display-lg text-3xl text-foreground">{t('addonGroups.title')}</h1>
-        <Button onClick={() => { resetForm(); setShowForm(true); }}>
-          <Plus size={16} className="mr-1" /> {t('addonGroups.addGroup')}
+    <div className="mx-auto w-full max-w-[1100px] space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{t('addonGroups.title')}</h1>
+          <p className="mt-0.5 text-sm text-text-subtle">Modifier groups your team can attach to menu items.</p>
+        </div>
+        <Button onClick={() => { resetForm(); setShowForm(true); }} className="h-10 gap-2 rounded-xl font-semibold shadow-sm">
+          <Plus size={16} /> {t('addonGroups.addGroup')}
         </Button>
       </div>
 
@@ -184,7 +187,7 @@ export default function AddonGroupsPage() {
         {groups.map((group) => {
           const isExpanded = expandedGroup === group.id;
           return (
-            <div key={group.id} className="bg-surface rounded-xl border border-hairline">
+            <div key={group.id} className="bg-surface rounded-2xl border border-hairline shadow-xs">
               {/* Group Header */}
               <div className="flex items-center justify-between p-4">
                 <button
@@ -195,7 +198,7 @@ export default function AddonGroupsPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground">{group.name}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${group.is_required ? 'bg-red-100 text-red-700' : 'bg-secondary text-muted-foreground'}`}>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${group.is_required ? 'bg-danger-tint text-danger' : 'bg-surface-sunken text-text-subtle'}`}>
                         {group.is_required ? t('products.requiredTag') : t('products.optionalTag')}
                       </span>
                       <span className="text-xs text-muted-foreground">

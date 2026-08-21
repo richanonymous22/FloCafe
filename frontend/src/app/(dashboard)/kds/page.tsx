@@ -63,15 +63,19 @@ export default function KdsPage() {
   }
   if (kdsEnabled === false) {
     return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-3 text-center px-6">
-        <ChefHat size={40} className="text-text-subtle" />
-        <h1 className="text-lg font-semibold text-foreground">Kitchen Display is disabled</h1>
-        <p className="text-sm text-muted-foreground max-w-sm">
-          This business has turned off the Kitchen Display System. An owner or manager can turn it back on from Settings.
-        </p>
-        <Link href="/settings?tab=kds" className="text-sm text-brand hover:underline mt-1">
-          Go to Settings
-        </Link>
+      <div className="flex h-full min-h-[60vh] items-center justify-center px-6">
+        <div className="flex max-w-md flex-col items-center gap-3 rounded-2xl border border-hairline bg-surface p-10 text-center shadow-sm">
+          <div className="flex size-14 items-center justify-center rounded-2xl bg-surface-sunken text-text-subtle">
+            <ChefHat size={28} />
+          </div>
+          <h1 className="text-lg font-bold text-foreground">Kitchen Display is disabled</h1>
+          <p className="text-sm text-muted-foreground">
+            This business has turned off the Kitchen Display System. An owner or manager can turn it back on from Settings.
+          </p>
+          <Link href="/settings?tab=kds" className="mt-2 inline-flex h-10 items-center rounded-xl bg-brand px-4 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90">
+            Go to Settings
+          </Link>
+        </div>
       </div>
     );
   }

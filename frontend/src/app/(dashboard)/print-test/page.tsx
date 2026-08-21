@@ -130,12 +130,12 @@ export default function PrintTestPage() {
   return (
     <div className="min-h-screen bg-surface-sunken p-8">
       <div className="max-w-2xl mx-auto">
-        <div className="flex items-center gap-3 mb-6">
-          <Printer size={28} className="text-brand" />
-          <h1 className="text-display-lg text-3xl text-foreground">{t('printTest.title')}</h1>
+        <div className="flex items-center gap-2.5 mb-6">
+          <div className="flex size-9 items-center justify-center rounded-xl bg-accent text-primary"><Printer size={18} /></div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('printTest.title')}</h1>
         </div>
 
-        <div className="bg-surface rounded-xl border border-hairline p-6 mb-6">
+        <div className="bg-surface rounded-2xl border border-hairline p-6 mb-6 shadow-xs">
           <h2 className="font-semibold text-foreground mb-4">{t('printTest.selectTestType')}</h2>
           <div className="grid grid-cols-2 gap-2">
             {testOptions.map((opt) => {
@@ -158,7 +158,7 @@ export default function PrintTestPage() {
           </div>
         </div>
 
-        <div className="bg-surface rounded-xl border border-hairline p-6 mb-6">
+        <div className="bg-surface rounded-2xl border border-hairline p-6 mb-6 shadow-xs">
           <h2 className="font-semibold text-foreground mb-4">{t('printTest.printerSettings')}</h2>
           
           <div className="space-y-4">

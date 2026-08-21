@@ -209,9 +209,9 @@ export default function OrderHistoryGrid() {
 
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t('orders.historyTitle')}</h1>
-        <Badge variant="outline">{t('dashboard.ordersCount', { count: orders.length })}</Badge>
+      <div className="flex items-center justify-between mb-5">
+        <h1 className="text-3xl font-bold tracking-tight">{t('orders.historyTitle')}</h1>
+        <Badge variant="outline" className="rounded-full">{t('dashboard.ordersCount', { count: orders.length })}</Badge>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 auto-rows-max content-start items-start">

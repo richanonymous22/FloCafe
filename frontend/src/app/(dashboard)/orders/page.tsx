@@ -713,17 +713,20 @@ export default function OrdersPage() {
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-display-lg text-3xl text-foreground">{t('nav.orders')}</h1>
-        <div className="flex gap-2">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{t('nav.orders')}</h1>
+          <p className="mt-0.5 text-sm text-text-subtle">Live tickets, held carts and completed sales in one feed.</p>
+        </div>
+        <div className="inline-flex items-center gap-1 rounded-xl border border-hairline bg-surface p-1 shadow-xs">
           {(['all', 'active', 'unpaid', 'held'] as FilterType[]).map((f) => (
             <button
               key={f}
               onClick={() => setTabFilter(f)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium ${
+              className={`rounded-lg px-3.5 py-1.5 text-sm font-semibold transition-colors ${
                 tabFilter === f
-                  ? 'bg-brand text-white'
-                  : 'bg-surface text-muted-foreground border border-border hover:border-gray-400'
+                  ? 'bg-accent text-primary'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {t(tabLabelKey[f])}
@@ -733,16 +736,16 @@ export default function OrdersPage() {
       </div>
 
       {/* Filter Bar */}
-      <div className="flex flex-wrap items-center gap-3 mb-4">
+      <div className="mb-4 flex flex-wrap items-center gap-2.5">
         {/* Search by order number */}
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" />
           <input
             type="text"
             placeholder={t('orders.search')}
             value={filters.search}
             onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-            className="w-full pl-9 pr-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand bg-surface"
+            className="h-10 w-full rounded-xl border border-hairline bg-surface pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-text-subtle focus:border-input"
           />
         </div>
 
@@ -750,7 +753,7 @@ export default function OrdersPage() {
         <select
           value={filters.table}
           onChange={(e) => setFilters(prev => ({ ...prev, table: e.target.value }))}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="h-10 rounded-xl border border-hairline bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-input"
         >
           <option value="">{t('orders.allTables')}</option>
           {tables.map((table: Table) => (
@@ -764,7 +767,7 @@ export default function OrdersPage() {
         <select
           value={filters.type}
           onChange={(e) => setFilters(prev => ({ ...prev, type: e.target.value }))}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="h-10 rounded-xl border border-hairline bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-input"
         >
           <option value="">{t('orders.allTypes')}</option>
           <option value="dine_in">{t('orders.dineIn')}</option>
@@ -777,7 +780,7 @@ export default function OrdersPage() {
         <select
           value={filters.status}
           onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+          className="h-10 rounded-xl border border-hairline bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-input"
         >
           <option value="">{t('orders.allStatuses')}</option>
           <option value="active">{t('orders.active')}</option>
@@ -799,13 +802,13 @@ export default function OrdersPage() {
         ) : (
           <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 content-start items-start auto-rows-max">
             {Object.values(heldOrdersStore.orders).map((heldOrder) => (
-              <div key={heldOrder.tableId} className="bg-surface rounded-xl border border-blue-200 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-shadow">
-                 <div className="p-4 border-b border-hairline bg-blue-50/50 flex justify-between items-center">
+              <div key={heldOrder.tableId} className="bg-surface rounded-2xl border border-hairline overflow-hidden flex flex-col shadow-xs hover:shadow-sm transition-shadow">
+                 <div className="p-4 border-b border-hairline bg-info-tint/40 flex justify-between items-center">
                    <div>
                      <p className="font-bold text-foreground">{tables.find(t => t.id === heldOrder.tableId)?.name || t('common.tableFallback')}</p>
                      <p className="text-xs text-muted-foreground">{formatTime(heldOrder.heldAt)}</p>
                    </div>
-                   <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold tracking-wide">{t('orders.held')}</span>
+                   <span className="bg-info-tint text-info text-xs px-2 py-1 rounded-full font-bold tracking-wide">{t('orders.held')}</span>
                  </div>
                  <div className="p-4 flex-1">
                    {heldOrder.items.map((item, idx) => (
@@ -870,8 +873,8 @@ export default function OrdersPage() {
             return (
               <div
                 key={order.id}
-                className={`bg-surface rounded-xl border overflow-hidden flex flex-col ${
-                  order.status === 'cancelled' ? 'border-red-200 opacity-75' : 'border-hairline'
+                className={`bg-surface rounded-2xl border overflow-hidden flex flex-col shadow-xs transition-shadow hover:shadow-sm ${
+                  order.status === 'cancelled' ? 'border-danger/30 opacity-75' : 'border-hairline'
                 }`}
               >
                 {/* Top bar: order id/status on the left, payment badge + reprint on the right */}
@@ -911,8 +914,8 @@ export default function OrdersPage() {
 
                 {/* Order notes */}
                 {order.special_instructions && (
-                  <div className="px-4 py-2 bg-amber-50 border-b border-amber-100">
-                    <p className="text-sm text-amber-700 font-medium break-words">
+                  <div className="px-4 py-2 bg-warning-tint/50 border-b border-hairline">
+                    <p className="text-sm text-warning font-medium break-words">
                       📝 {order.special_instructions}
                     </p>
                   </div>
@@ -920,17 +923,17 @@ export default function OrdersPage() {
 
                 {/* Customer info strip */}
                 {order.customer ? (
-                  <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center justify-between">
+                  <div className="px-4 py-2 bg-info-tint/50 border-b border-hairline flex items-center justify-between">
                     <div className="flex items-center gap-2 min-w-0">
-                      <User size={14} className="text-blue-600 shrink-0" />
-                      <span className="text-sm font-medium text-blue-800 truncate">{order.customer.name}</span>
+                      <User size={14} className="text-info shrink-0" />
+                      <span className="text-sm font-medium text-foreground truncate">{order.customer.name}</span>
                       {order.customer.phone && (
-                        <span className="text-xs text-blue-600 shrink-0">{order.customer.phone}</span>
+                        <span className="text-xs text-info shrink-0">{order.customer.phone}</span>
                       )}
                     </div>
                     <button
                       onClick={() => handleCreateNewOrderForCustomer(order)}
-                      className="flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-100 hover:bg-blue-200 px-2.5 py-1 rounded-lg transition-colors shrink-0"
+                      className="flex items-center gap-1 text-xs font-semibold text-info hover:opacity-80 bg-info-tint px-2.5 py-1 rounded-lg transition-colors shrink-0"
                       title={t('orders.startNewOrderForCustomer')}
                     >
                       <Plus size={12} /> {t('orders.newOrder')}

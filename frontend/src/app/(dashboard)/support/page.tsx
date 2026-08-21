@@ -79,15 +79,15 @@ export default function SupportPage() {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 md:p-6">
       <div className="flex items-start gap-3">
-        <div className="rounded-xl bg-brand/10 p-3 text-brand"><LifeBuoy className="size-6" /></div>
+        <div className="rounded-xl bg-accent p-3 text-primary"><LifeBuoy className="size-6" /></div>
         <div>
-          <h1 className="text-display-lg text-3xl text-foreground tracking-tight">{t('support.title')}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t('support.subtitle')}</p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t('support.title')}</h1>
+          <p className="mt-1 text-sm text-text-subtle">{t('support.subtitle')}</p>
         </div>
       </div>
 
       {submittedId && (
-        <div className="flex gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-green-900">
+        <div className="flex gap-3 rounded-xl border border-success/30 bg-success-tint p-4 text-success">
           <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
           <div>
             <p className="font-medium">{t('support.requestQueued')}</p>
@@ -172,7 +172,7 @@ export default function SupportPage() {
                 <dt className="text-muted-foreground">{t('support.platform')}</dt><dd>{profile.platform || '—'}</dd>
                 <dt className="text-muted-foreground">{t('support.location')}</dt><dd>{[profile.country, profile.timezone].filter(Boolean).join(' · ') || '—'}</dd>
               </dl>
-              <div className="flex gap-2 text-xs text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-green-600" /><span>{t('support.privacyHint')}</span></div>
+              <div className="flex gap-2 text-xs text-muted-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-success" /><span>{t('support.privacyHint')}</span></div>
               {diagnosticsPreview && (
                 <details className="text-xs text-muted-foreground">
                   <summary className="cursor-pointer">{t('support.showPayload')}</summary>

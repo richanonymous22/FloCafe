@@ -13,11 +13,19 @@ import { useI18n } from '@/hooks/useI18n';
 import { ORDER_STATUS_LABEL_KEYS, ITEM_STATUS_LABEL_KEYS } from '@/lib/i18n-enums';
 
 const statusColors: Record<string, string> = {
-  available: 'bg-green-500',
-  occupied: 'bg-red-500',
-  reserved: 'bg-yellow-500',
-  cleaning: 'bg-surface-sunken0',
-  held: 'bg-blue-500',
+  available: 'bg-success',
+  occupied: 'bg-danger',
+  reserved: 'bg-warning',
+  cleaning: 'bg-text-subtle',
+  held: 'bg-info',
+};
+
+const statusPill: Record<string, string> = {
+  available: 'bg-success-tint text-success',
+  occupied: 'bg-danger-tint text-danger',
+  reserved: 'bg-warning-tint text-warning',
+  cleaning: 'bg-surface-sunken text-text-subtle',
+  held: 'bg-info-tint text-info',
 };
 
 const TABLE_STATUS_LABEL: Record<string, string> = {
@@ -314,24 +322,48 @@ export default function TablesPage() {
     );
   }
 
+  const statusCounts = tables.reduce<Record<string, number>>((acc, tb) => {
+    acc[tb.status] = (acc[tb.status] || 0) + 1;
+    return acc;
+  }, {});
+  const legend: { key: string; label: string }[] = [
+    { key: 'available', label: t('tables.statusAvailable') },
+    { key: 'occupied', label: t('tables.statusOccupied') },
+    { key: 'reserved', label: t('tables.statusReserved') },
+  ];
+
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-display-lg text-3xl text-foreground">{t('tables.title')}</h1>
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{t('tables.title')}</h1>
+          <p className="mt-0.5 text-sm text-text-subtle">Your floor plan — status at a glance, live tickets per table.</p>
+        </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer select-none">
+          <label className="flex cursor-pointer select-none items-center gap-2 text-sm font-medium text-muted-foreground">
             <input
               type="checkbox"
               checked={showDetails}
               onChange={toggleDetails}
-              className="w-4 h-4 rounded border-border-strong text-brand focus:ring-brand"
+              className="size-4 rounded border-border-strong text-brand focus:ring-brand"
             />
             {t('tables.showOrderDetails')}
           </label>
-          <Button onClick={() => setShowForm(true)}>
-            <Plus size={16} className="mr-1" /> {t('tables.addTable')}
+          <Button onClick={() => setShowForm(true)} className="h-10 gap-2 rounded-xl font-semibold shadow-sm">
+            <Plus size={16} /> {t('tables.addTable')}
           </Button>
         </div>
+      </div>
+
+      {/* Status band */}
+      <div className="flex flex-wrap gap-3">
+        {legend.map(({ key, label }) => (
+          <div key={key} className="flex items-center gap-2.5 rounded-2xl border border-hairline bg-surface px-4 py-2.5 shadow-xs">
+            <span className={`size-2.5 rounded-full ${statusColors[key]}`} />
+            <span className="text-sm font-medium text-foreground">{label}</span>
+            <span className="text-lg font-bold tabular-nums text-foreground">{statusCounts[key] || 0}</span>
+          </div>
+        ))}
       </div>
 
       {showDetails ? (
@@ -342,17 +374,17 @@ export default function TablesPage() {
 
             return (
               <div key={table.id}
-                className={`bg-surface rounded-xl border border-hairline hover:shadow-md transition-shadow ${
+                className={`bg-surface rounded-2xl border border-hairline shadow-xs hover:shadow-sm transition-shadow ${
                   hasOrders ? 'border-l-4 border-l-brand' : ''
                 } ${!table.is_active ? 'opacity-60' : ''}`}>
                 {/* Table header */}
-                <div className="px-4 py-3 border-b border-gray-50 flex items-center justify-between">
+                <div className="px-4 py-3 border-b border-hairline flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${statusColors[table.status]}`} />
+                    <div className={`size-2.5 rounded-full ${statusColors[table.status]}`} />
                     <h3 className="font-bold text-foreground">{table.name}</h3>
                     <span className="text-xs text-muted-foreground">· {t('tables.capacitySeats', { count: table.capacity })}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">{t(TABLE_STATUS_LABEL[table.status] ?? table.status)}</span>
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${statusPill[table.status] || 'bg-surface-sunken text-text-subtle'}`}>{t(TABLE_STATUS_LABEL[table.status] ?? table.status)}</span>
                 </div>
 
                 {/* Orders section */}
@@ -398,7 +430,7 @@ export default function TablesPage() {
                 )}
 
                 {/* Actions */}
-                <div className="px-4 py-2 border-t border-gray-50 flex justify-end gap-2">
+                <div className="px-4 py-2 border-t border-hairline flex justify-end gap-2">
                   {(table.status === 'occupied' || table.status === 'reserved') && (
                     <button onClick={() => updateStatus(table.id, 'available')}
                       className="text-xs text-brand hover:text-brand-hover font-medium">
@@ -424,8 +456,8 @@ export default function TablesPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
           {tables.map((table) => (
             <div key={table.id}
-              className={`bg-surface rounded-xl p-5 border border-hairline text-center hover:shadow-md transition-shadow ${!table.is_active ? 'opacity-60' : ''}`}>
-              <div className={`w-3 h-3 rounded-full ${statusColors[table.status]} mx-auto mb-3`} />
+              className={`bg-surface rounded-2xl p-5 border border-hairline text-center shadow-xs hover:shadow-sm transition-shadow ${!table.is_active ? 'opacity-60' : ''}`}>
+              <div className={`size-3 rounded-full ${statusColors[table.status]} mx-auto mb-3`} />
               <h3 className="font-bold text-lg text-foreground">{table.name}</h3>
               <p className="text-sm text-muted-foreground">{t('tables.capacitySeats', { count: table.capacity })}</p>
               <p className="text-xs text-muted-foreground mt-1">{t(TABLE_STATUS_LABEL[table.status] ?? table.status)}</p>

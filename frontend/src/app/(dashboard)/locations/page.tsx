@@ -8,9 +8,10 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Plus, Store, Building2, Monitor, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { nameToColor } from '@/lib/image-utils';
 import api from '@/lib/api';
 
 interface Location { id: string; name: string; code: string | null; is_active: number; }
@@ -57,42 +58,71 @@ export default function LocationsPage() {
     }
   }
 
+  const contextRows = [
+    { icon: Building2, label: 'Organization', value: context?.organization?.name },
+    { icon: Store, label: 'Location', value: context?.location?.name },
+    { icon: Monitor, label: 'Register', value: context?.register?.name },
+    { icon: Cpu, label: 'Device', value: context?.device?.name },
+  ];
+
   return (
-    <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-4">
-      <h1 className="text-display-lg text-3xl text-foreground">Locations</h1>
-      {error && <div className="text-destructive text-sm">{error}</div>}
+    <div className="mx-auto w-full max-w-[1100px] space-y-5">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Locations</h1>
+        <p className="mt-0.5 text-sm text-text-subtle">The sites you trade from, and what this device is registered as.</p>
+      </div>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">This device</CardTitle></CardHeader>
-        <CardContent className="text-sm space-y-1">
-          <div>Organization: {context?.organization?.name || '—'}</div>
-          <div>Location: {context?.location?.name || '—'}</div>
-          <div>Register: {context?.register?.name || '—'}</div>
-          <div>Device: {context?.device?.name || '—'}</div>
-        </CardContent>
-      </Card>
+      {error && <div className="rounded-lg border border-destructive/30 bg-danger-tint px-4 py-3 text-sm text-destructive">{error}</div>}
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Add a location</CardTitle></CardHeader>
-        <CardContent className="flex gap-2">
-          <Input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} className="max-w-32" />
-          <Button disabled={busy} onClick={createLocation}>Add</Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle className="text-base">All locations</CardTitle></CardHeader>
-        <CardContent className="space-y-1">
-          {locations.map((l) => (
-            <div key={l.id} className="flex justify-between text-sm border-b pb-1 last:border-0">
-              <span>{l.name}{l.code ? ` (${l.code})` : ''}</span>
-              <span className="text-muted-foreground">{l.is_active ? 'Active' : 'Inactive'}</span>
+      {/* This device context */}
+      <div className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
+        <h2 className="mb-4 text-[11px] font-bold uppercase tracking-wide text-text-subtle">This device</h2>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {contextRows.map(({ icon: Icon, label, value }) => (
+            <div key={label} className="flex items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-primary"><Icon size={18} /></div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">{label}</p>
+                <p className="truncate text-sm font-semibold text-foreground">{value || '—'}</p>
+              </div>
             </div>
           ))}
-          {locations.length === 0 && <p className="text-muted-foreground text-sm">No locations yet.</p>}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      {/* Add a location */}
+      <div className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
+        <h2 className="mb-3 text-sm font-bold text-foreground">Add a location</h2>
+        <div className="flex flex-wrap gap-2">
+          <Input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} className="h-10 flex-1 rounded-xl border-hairline" />
+          <Input placeholder="Code" value={code} onChange={(e) => setCode(e.target.value)} className="h-10 w-32 rounded-xl border-hairline" />
+          <Button disabled={busy} onClick={createLocation} className="h-10 gap-2 rounded-xl font-semibold"><Plus size={16} /> Add</Button>
+        </div>
+      </div>
+
+      {/* All locations */}
+      <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+        <div className="border-b border-hairline px-5 py-3"><h2 className="text-sm font-bold text-foreground">All locations</h2></div>
+        <div className="divide-y divide-hairline">
+          {locations.map((l) => (
+            <div key={l.id} className={`flex items-center justify-between gap-3 p-4 ${l.is_active ? '' : 'opacity-60'}`}>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: nameToColor(l.name) }}>
+                  <span className="text-sm font-bold text-white/80">{l.name.substring(0, 2).toUpperCase()}</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="font-semibold text-foreground truncate">{l.name}</p>
+                  {l.code && <p className="text-xs text-muted-foreground">Code: {l.code}</p>}
+                </div>
+              </div>
+              <span className={`shrink-0 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${l.is_active ? 'bg-success-tint text-success' : 'bg-surface-sunken text-text-subtle'}`}>
+                {l.is_active ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+          ))}
+          {locations.length === 0 && <p className="px-5 py-10 text-center text-sm text-muted-foreground">No locations yet.</p>}
+        </div>
+      </div>
     </div>
   );
 }

@@ -27,7 +27,10 @@ function dialCodeFor(country: string | undefined): string {
 }
 
 const INITIAL_ADMIN_ROLE = 'owner';
-const VALID_BUSINESS_TYPES = new Set(['restaurant']);
+// Both verticals are supported at first-run setup. The retail vertical
+// (retail.* features, preset-retail role, retail sale hooks) already exists;
+// only the setup gate previously restricted new installs to restaurants.
+const VALID_BUSINESS_TYPES = new Set(['restaurant', 'retail']);
 const VALID_SETUP_PROFILES = new Set(['empty', 'express', 'demo']);
 const VALID_SERVICE_MODELS = new Set(['qsr', 'finedine']);
 const LOCAL_SETUP_HOSTS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -779,7 +782,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
     }
 
     if (!VALID_BUSINESS_TYPES.has(normalizedBusinessType)) {
-      return res.status(400).json({ error: 'FloCafe setup only supports restaurant businesses' });
+      return res.status(400).json({ error: 'Business type must be restaurant or retail' });
     }
 
     if (!VALID_SETUP_PROFILES.has(normalizedSetupProfile)) {

@@ -7,10 +7,34 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Plus, Search, PackageCheck, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { useFormatCurrency } from '@/hooks/useFormatCurrency';
 import api from '@/lib/api';
+
+const PO_STATUS: Record<string, { label: string; cls: string }> = {
+  draft: { label: 'Draft', cls: 'bg-surface-sunken text-text-subtle' },
+  ordered: { label: 'Ordered', cls: 'bg-info-tint text-info' },
+  partially_received: { label: 'Part received', cls: 'bg-warning-tint text-warning' },
+  received: { label: 'Received', cls: 'bg-success-tint text-success' },
+  cancelled: { label: 'Cancelled', cls: 'bg-danger-tint text-danger' },
+};
+
+function StatusPill({ status }: { status: string }) {
+  const meta = PO_STATUS[status] || { label: status, cls: 'bg-surface-sunken text-text-subtle' };
+  return <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${meta.cls}`}>{meta.label}</span>;
+}
+
+function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="rounded-2xl border border-hairline bg-surface p-4 shadow-xs">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">{label}</p>
+      <p className="mt-1.5 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="mt-0.5 text-xs text-text-subtle">{sub}</p>
+    </div>
+  );
+}
 
 interface Supplier { id: string; name: string; }
 interface Product { id: string; name: string; }
@@ -31,6 +55,7 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 export default function PurchasingPage() {
+  const fmt = useFormatCurrency();
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [selected, setSelected] = useState<PurchaseOrder | null>(null);
@@ -172,138 +197,186 @@ export default function PurchasingPage() {
     }
   }
 
+  const openCount = orders.filter((o) => !['received', 'cancelled'].includes(o.status)).length;
+  const draftCount = orders.filter((o) => o.status === 'draft').length;
+  const awaitingCount = orders.filter((o) => ['ordered', 'partially_received'].includes(o.status)).length;
+  const spend = supplierTotals.reduce((s, r) => s + Number(r.totalValue || 0), 0);
+
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
-      <h1 className="text-display-lg text-3xl text-foreground">Purchasing</h1>
-      {error && <div className="text-destructive text-sm">{error}</div>}
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Purchasing</h1>
+        <p className="mt-0.5 text-sm text-text-subtle">Raise purchase orders, receive stock and track spend by supplier.</p>
+      </div>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">New purchase order</CardTitle></CardHeader>
-        <CardContent className="flex gap-2">
-          <select className="border rounded-md px-3 py-2 text-sm flex-1" value={newSupplierId} onChange={(e) => setNewSupplierId(e.target.value)}>
-            <option value="">Select supplier…</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <Button disabled={busy} onClick={createOrder}>Create draft PO</Button>
-        </CardContent>
-      </Card>
+      {error && <div className="rounded-lg border border-destructive/30 bg-danger-tint px-4 py-3 text-sm text-destructive">{error}</div>}
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Purchase orders</CardTitle></CardHeader>
-        <CardContent className="space-y-1">
-          {orders.map((po) => (
-            <Button key={po.id} variant={selected?.id === po.id ? 'secondary' : 'outline'} className="w-full justify-between" onClick={() => openOrder(po.id)}>
-              <span>{po.reference_number || po.id.slice(0, 8)}</span>
-              <span className="text-muted-foreground text-xs uppercase">{po.status}</span>
-            </Button>
-          ))}
-          {orders.length === 0 && <p className="text-muted-foreground text-sm">No purchase orders yet.</p>}
-        </CardContent>
-      </Card>
+      {/* KPI band */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Open orders" value={String(openCount)} sub="not yet closed" />
+        <KpiCard label="Drafts" value={String(draftCount)} sub="still being built" />
+        <KpiCard label="Awaiting receipt" value={String(awaitingCount)} sub="ordered, not in yet" />
+        <KpiCard label="Spend to date" value={fmt(spend)} sub="across all suppliers" />
+      </div>
 
-      {selected && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              {selected.reference_number || selected.id.slice(0, 8)} — <span className="uppercase">{selected.status}</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {selected.status === 'draft' && (
-              <div className="space-y-2 border-b pb-4">
-                <div className="flex gap-2">
-                  <Input placeholder="Search products" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') searchProducts(); }} />
-                  <Button variant="outline" onClick={searchProducts}>Search</Button>
-                </div>
-                {productResults.length > 0 && (
-                  <div className="space-y-1">
-                    {productResults.map((p) => (
-                      <Button key={p.id} size="sm" variant={selectedProduct?.id === p.id ? 'secondary' : 'outline'} className="w-full justify-start" onClick={() => setSelectedProduct(p)}>
-                        {p.name}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-                {selectedProduct && (
-                  <div className="flex gap-2 items-end">
-                    <div>
-                      <label className="text-sm text-muted-foreground">Quantity</label>
-                      <Input type="number" value={itemQty} onChange={(e) => setItemQty(e.target.value)} />
-                    </div>
-                    <div>
-                      <label className="text-sm text-muted-foreground">Unit cost</label>
-                      <Input type="number" value={itemCost} onChange={(e) => setItemCost(e.target.value)} />
-                    </div>
-                    <Button disabled={busy} onClick={addItem}>Add item</Button>
-                  </div>
-                )}
-              </div>
-            )}
-
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[380px_1fr]">
+        {/* Left rail: create + list */}
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-bold text-foreground">New purchase order</h2>
             <div className="space-y-2">
-              {selected.items.map((item) => {
-                const remaining = item.quantity_ordered - item.quantity_received;
-                return (
-                  <div key={item.id} className="border-b pb-2 last:border-0">
-                    <div className="flex justify-between text-sm">
-                      <span>{item.product_id}{item.product_variant_id ? ` (${item.product_variant_id})` : ''}</span>
-                      <span>@ {item.unit_cost}</span>
+              <select className="h-10 w-full rounded-xl border border-hairline bg-surface px-3 text-sm text-foreground outline-none focus:border-input" value={newSupplierId} onChange={(e) => setNewSupplierId(e.target.value)}>
+                <option value="">Select supplier…</option>
+                {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <Button disabled={busy} onClick={createOrder} className="w-full gap-2 rounded-xl font-semibold"><Plus size={16} /> Create draft PO</Button>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+            <div className="border-b border-hairline px-5 py-3">
+              <h2 className="text-sm font-bold text-foreground">Purchase orders</h2>
+            </div>
+            <div className="divide-y divide-hairline">
+              {orders.map((po) => (
+                <button
+                  key={po.id}
+                  onClick={() => openOrder(po.id)}
+                  className={`flex w-full items-center justify-between gap-2 px-5 py-3 text-left transition-colors hover:bg-surface-sunken ${selected?.id === po.id ? 'bg-accent/60' : ''}`}
+                >
+                  <span className="font-medium text-foreground">{po.reference_number || po.id.slice(0, 8)}</span>
+                  <StatusPill status={po.status} />
+                </button>
+              ))}
+              {orders.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">No purchase orders yet.</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Detail */}
+        <div className="space-y-4">
+          {selected ? (
+            <div className="rounded-2xl border border-hairline bg-surface shadow-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-hairline p-5">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">Purchase order</p>
+                  <h2 className="text-lg font-bold text-foreground">{selected.reference_number || selected.id.slice(0, 8)}</h2>
+                </div>
+                <StatusPill status={selected.status} />
+              </div>
+
+              <div className="space-y-5 p-5">
+                {selected.status === 'draft' && (
+                  <div className="space-y-3 rounded-xl border border-hairline bg-surface-sunken p-4">
+                    <div className="relative">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-subtle" />
+                      <Input placeholder="Search products to add" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') searchProducts(); }} className="h-10 rounded-lg border-hairline bg-surface pl-9" />
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      Ordered: {item.quantity_ordered} · Received: {item.quantity_received} · Remaining: {remaining}
-                    </div>
-                    {(selected.status === 'ordered' || selected.status === 'partially_received') && remaining > 0 && (
-                      <div className="flex gap-2 mt-1">
-                        <Input type="number" placeholder={`Up to ${remaining}`} value={receiveQty[item.id] || ''} onChange={(e) => setReceiveQty({ ...receiveQty, [item.id]: e.target.value })} />
-                        <Button size="sm" disabled={busy} onClick={() => receive(item)}>Receive</Button>
+                    {productResults.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {productResults.map((p) => (
+                          <button key={p.id} onClick={() => setSelectedProduct(p)} className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${selectedProduct?.id === p.id ? 'border-primary bg-accent text-primary' : 'border-hairline bg-surface text-muted-foreground hover:bg-hover'}`}>
+                            {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {selectedProduct && (
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-xs font-medium text-text-subtle">Quantity</label>
+                          <Input type="number" value={itemQty} onChange={(e) => setItemQty(e.target.value)} className="h-10 rounded-lg border-hairline bg-surface" />
+                        </div>
+                        <div className="flex-1">
+                          <label className="mb-1 block text-xs font-medium text-text-subtle">Unit cost</label>
+                          <Input type="number" value={itemCost} onChange={(e) => setItemCost(e.target.value)} className="h-10 rounded-lg border-hairline bg-surface" />
+                        </div>
+                        <Button disabled={busy} onClick={addItem} className="h-10 rounded-lg font-semibold">Add item</Button>
                       </div>
                     )}
                   </div>
-                );
-              })}
-              {selected.items.length === 0 && <p className="text-muted-foreground text-sm">No items yet.</p>}
-            </div>
+                )}
 
-            <div className="flex justify-between font-semibold">
-              <span>Total</span>
-              <span>{selected.total.toFixed(2)}</span>
-            </div>
+                <div className="divide-y divide-hairline">
+                  {selected.items.map((item) => {
+                    const remaining = item.quantity_ordered - item.quantity_received;
+                    return (
+                      <div key={item.id} className="py-3 first:pt-0">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="font-medium text-foreground">{item.product_id}{item.product_variant_id ? ` (${item.product_variant_id})` : ''}</span>
+                          <span className="text-muted-foreground">@ {fmt(Number(item.unit_cost))}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-text-subtle">
+                          <span>Ordered <span className="font-semibold text-foreground">{item.quantity_ordered}</span></span>
+                          <span>Received <span className="font-semibold text-success">{item.quantity_received}</span></span>
+                          <span>Remaining <span className="font-semibold text-warning">{remaining}</span></span>
+                        </div>
+                        {(selected.status === 'ordered' || selected.status === 'partially_received') && remaining > 0 && (
+                          <div className="mt-2 flex gap-2">
+                            <Input type="number" placeholder={`Up to ${remaining}`} value={receiveQty[item.id] || ''} onChange={(e) => setReceiveQty({ ...receiveQty, [item.id]: e.target.value })} className="h-9 max-w-[160px] rounded-lg border-hairline" />
+                            <Button size="sm" disabled={busy} onClick={() => receive(item)} className="rounded-lg">Receive</Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {selected.items.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No items yet.</p>}
+                </div>
 
-            <div className="flex gap-2">
-              {selected.status === 'draft' && <Button onClick={markOrdered}>Mark ordered</Button>}
-              {(selected.status === 'draft' || selected.status === 'ordered' || selected.status === 'partially_received') && (
-                <Button variant="destructive" onClick={cancelOrder}>Cancel</Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                <div className="flex items-center justify-between border-t border-hairline pt-4">
+                  <span className="text-sm font-semibold text-text-subtle">Total</span>
+                  <span className="text-xl font-bold text-foreground">{fmt(Number(selected.total))}</span>
+                </div>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Purchases by supplier</CardTitle></CardHeader>
-        <CardContent className="space-y-1">
-          {supplierTotals.map((row) => (
-            <div key={row.supplierId} className="flex justify-between text-sm border-b pb-1 last:border-0">
-              <span>{row.supplierName} ({row.orderCount})</span>
-              <span>{row.totalValue.toFixed(2)}</span>
+                <div className="flex gap-2">
+                  {selected.status === 'draft' && <Button onClick={markOrdered} className="rounded-xl font-semibold">Mark ordered</Button>}
+                  {(selected.status === 'draft' || selected.status === 'ordered' || selected.status === 'partially_received') && (
+                    <Button variant="outline" onClick={cancelOrder} className="rounded-xl text-danger hover:bg-danger-tint hover:text-danger">Cancel</Button>
+                  )}
+                </div>
+              </div>
             </div>
-          ))}
-          {supplierTotals.length === 0 && <p className="text-muted-foreground text-sm">No purchases yet.</p>}
-        </CardContent>
-      </Card>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-hairline bg-surface py-20 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full bg-surface-sunken text-text-subtle"><FileText className="size-6" /></div>
+              <p className="text-sm font-medium text-foreground">Select a purchase order</p>
+              <p className="text-xs text-text-subtle">Pick one from the list, or create a new draft.</p>
+            </div>
+          )}
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">Recent goods received</CardTitle></CardHeader>
-        <CardContent className="space-y-1">
-          {recentReceipts.map((r) => (
-            <div key={r.id} className="flex justify-between text-sm border-b pb-1 last:border-0">
-              <span>{new Date(r.created_at).toLocaleString()} — {r.product_name} from {r.supplier_name}</span>
-              <span>+{r.quantity_delta} @ {r.unit_cost}</span>
-            </div>
-          ))}
-          {recentReceipts.length === 0 && <p className="text-muted-foreground text-sm">No goods received yet.</p>}
-        </CardContent>
-      </Card>
+      {/* Reports */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+          <div className="border-b border-hairline px-5 py-3"><h2 className="text-sm font-bold text-foreground">Purchases by supplier</h2></div>
+          <div className="divide-y divide-hairline">
+            {supplierTotals.map((row) => (
+              <div key={row.supplierId} className="flex items-center justify-between px-5 py-3 text-sm">
+                <span className="text-foreground">{row.supplierName} <span className="text-text-subtle">· {row.orderCount} orders</span></span>
+                <span className="font-semibold tabular-nums text-foreground">{fmt(Number(row.totalValue))}</span>
+              </div>
+            ))}
+            {supplierTotals.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">No purchases yet.</p>}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
+          <div className="flex items-center gap-2 border-b border-hairline px-5 py-3"><PackageCheck size={16} className="text-success" /><h2 className="text-sm font-bold text-foreground">Recent goods received</h2></div>
+          <div className="divide-y divide-hairline">
+            {recentReceipts.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{r.product_name}</p>
+                  <p className="truncate text-xs text-text-subtle">{new Date(r.created_at).toLocaleString()} · {r.supplier_name}</p>
+                </div>
+                <span className="shrink-0 font-semibold tabular-nums text-success">+{r.quantity_delta} <span className="font-normal text-text-subtle">@ {fmt(Number(r.unit_cost))}</span></span>
+              </div>
+            ))}
+            {recentReceipts.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">No goods received yet.</p>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

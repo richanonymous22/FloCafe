@@ -7,8 +7,19 @@ import toast from 'react-hot-toast';
 import { Plus, X, Edit, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import type { Staff } from '@/lib/types';
 import { useI18n } from '@/hooks/useI18n';
+import { nameToColor } from '@/lib/image-utils';
 
 const VALID_ROLES = ['owner', 'manager', 'cashier', 'waiter', 'chef'];
+
+function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="rounded-2xl border border-hairline bg-surface p-4 shadow-xs">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-text-subtle">{label}</p>
+      <p className="mt-1.5 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="mt-0.5 text-xs text-text-subtle">{sub}</p>
+    </div>
+  );
+}
 
 const roleColorKey: Record<string, string> = {
   owner: 'staff.roleOwner',
@@ -165,40 +176,66 @@ export default function StaffPage() {
     && editingStaff?.role === 'owner'
     && staff.filter((s) => s.role === 'owner' && Boolean(s.is_active)).length === 1;
 
+  const activeCount = staff.filter((s) => s.is_active).length;
+  const leadership = staff.filter((s) => ['owner', 'manager'].includes(s.role) && s.is_active).length;
+  const withPin = staff.filter((s) => Boolean(s.has_pin)).length;
+
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-display-lg text-3xl text-foreground">{t('staff.title')}</h1>
-        <Button onClick={openAdd}><Plus size={16} className="mr-1" /> {t('staff.addButton')}</Button>
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{t('staff.title')}</h1>
+          <p className="mt-0.5 text-sm text-text-subtle">Your team, their roles and till access.</p>
+        </div>
+        <Button onClick={openAdd} className="h-10 gap-2 rounded-xl font-semibold shadow-sm"><Plus size={16} /> {t('staff.addButton')}</Button>
+      </div>
+
+      {/* KPI band */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard label="Team members" value={String(staff.length)} sub={`${activeCount} active`} />
+        <KpiCard label="Active" value={String(activeCount)} sub="can sign in" />
+        <KpiCard label="Owners & managers" value={String(leadership)} sub="with elevated access" />
+        <KpiCard label="PIN enabled" value={String(withPin)} sub="quick till switching" />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {staff.map((s) => (
-          <div key={s.id} className={`bg-surface rounded-xl p-5 border ${s.is_active ? 'border-hairline' : 'border-border opacity-60'}`}>
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <p className="font-bold text-foreground">{s.name}</p>
-                <p className="text-xs text-muted-foreground">{s.email || '—'}</p>
-                {Boolean(s.has_pin) && (
-                  <p className="text-xs text-green-600 mt-1">{t('staff.pinSet')}</p>
-                )}
+          <div key={s.id} className={`bg-surface rounded-2xl p-5 border shadow-xs transition-shadow hover:shadow-sm ${s.is_active ? 'border-hairline' : 'border-hairline opacity-60'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex size-11 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: nameToColor(s.name) }}>
+                  <span className="text-sm font-bold text-white/80">{s.name.substring(0, 2).toUpperCase()}</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-foreground truncate">{s.name}</p>
+                  <p className="text-xs text-muted-foreground truncate">{s.email || '—'}</p>
+                </div>
               </div>
-              <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${roleColors[s.role] || 'bg-secondary text-foreground'}`}>
+              <span className={`shrink-0 inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${roleColors[s.role] || 'bg-secondary text-foreground'}`}>
                 {roleColorKey[s.role] ? t(roleColorKey[s.role]) : s.role}
               </span>
             </div>
-            <div className="flex flex-wrap gap-2 mt-3">
-              <Button variant="outline" size="sm" onClick={() => openEdit(s)}>
+            <div className="mt-3 flex items-center gap-3 text-xs">
+              <span className="inline-flex items-center gap-1.5 font-medium text-text-subtle">
+                <span className={`size-1.5 rounded-full ${s.is_active ? 'bg-success' : 'bg-text-subtle'}`} />
+                {s.is_active ? t('common.active') : t('common.inactive')}
+              </span>
+              {Boolean(s.has_pin) && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-success-tint px-2 py-0.5 font-semibold text-success">{t('staff.pinSet')}</span>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 border-t border-hairline pt-4">
+              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEdit(s)}>
                 <Edit size={14} className="mr-1" /> {t('common.edit')}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => openResetPw(s)}>
+              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openResetPw(s)}>
                 <RotateCcw size={14} className="mr-1" /> {t('staff.resetPwButton')}
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => toggleActive(s)}
-                className={s.is_active ? 'text-red-500 hover:text-red-700 hover:bg-red-50' : 'text-green-500 hover:text-green-700 hover:bg-green-50'}
+                className={s.is_active ? 'text-danger hover:text-danger hover:bg-danger-tint' : 'text-success hover:text-success hover:bg-success-tint'}
               >
                 {s.is_active ? t('staff.deactivate') : t('staff.reactivate')}
               </Button>

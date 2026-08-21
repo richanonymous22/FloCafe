@@ -14,7 +14,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutGrid, ShoppingCart, Store, Boxes, Truck, ArrowLeftRight, MapPin,
   ClipboardList, Package, Users, UserCog, Settings, LogOut, PanelLeft,
-  ChefHat, LifeBuoy, Scale, Wifi, WifiOff, Search, ChevronsUpDown,
+  ChefHat, LifeBuoy, Scale, Wifi, WifiOff, Search, ChevronsUpDown, BarChart3,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
@@ -67,6 +67,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: 'nav.group.insights',
     items: [
       { href: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutGrid, roles: ['owner'], businessTypes: null },
+      { href: '/reports', labelKey: 'nav.reports', icon: BarChart3, roles: ['owner', 'manager'], businessTypes: null },
     ],
   },
   {

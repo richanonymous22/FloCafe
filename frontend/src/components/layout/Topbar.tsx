@@ -11,6 +11,7 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 // Route → page-title translation key (falls back to a humanised segment).
 const TITLE_KEYS: Record<string, string> = {
   '/dashboard': 'nav.dashboard',
+  '/reports': 'nav.reports',
   '/orders': 'nav.orders',
   '/products': 'nav.products.catalogue',
   '/inventory': 'nav.inventory',

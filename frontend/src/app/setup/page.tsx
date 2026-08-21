@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { ArrowLeft, ArrowRight, Check, Cloud, Database, KeyRound, Search, Sparkles, UtensilsCrossed, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { COUNTRIES, getCountryByCode, countryName, type Country } from '@/lib/countries';
@@ -231,28 +232,60 @@ export default function SetupPage() {
     }
   };
 
+  const stepMeta = [
+    t('setup.chooseLanguage'),
+    t('setup.setMasterPinTitle'),
+    t('setup.createOwner'),
+    t('setup.setupDataTitle'),
+    t('setup.cloudTitle'),
+    t('setup.flowTitle'),
+  ];
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-muted px-4 py-12">
-      <div className="w-full max-w-2xl">
-        <div className="text-center mb-8">
-          <img src="/logo.png" alt="Flo" width={80} height={52} className="mx-auto mb-4" />
-          <h1 className="text-3xl font-bold">{t('setup.welcome')}</h1>
-          <p className="text-muted-foreground mt-2">{t('setup.tagline')}</p>
+    <div className="min-h-screen bg-muted/30 lg:grid lg:grid-cols-[400px_1fr]">
+      {/* Brand rail + vertical stepper */}
+      <aside className="relative hidden flex-col justify-between overflow-hidden bg-primary p-10 text-primary-foreground lg:flex">
+        <div className="pointer-events-none absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-32 -left-16 size-96 rounded-full bg-black/10 blur-3xl" />
+        <div className="relative flex items-center gap-2.5">
+          <div className="grid size-9 place-items-center rounded-lg bg-white/15 text-sm font-semibold">P</div>
+          <span className="text-xl font-semibold tracking-tight">Plemmo</span>
         </div>
-
-        <div className="flex justify-center gap-2 mb-8">
-          {[1, 2, 3, 4, 5, 6].map((s) => (
-            <div
-              key={s}
-              className={`w-3 h-3 rounded-full transition-colors ${
-                s === step ? 'bg-primary' : s < step ? 'bg-primary/50' : 'bg-muted'
-              }`}
-            />
-          ))}
+        <div className="relative">
+          <h1 className="text-3xl font-semibold tracking-tight">{t('setup.welcome')}</h1>
+          <p className="mt-2 max-w-xs text-sm text-primary-foreground/70">{t('setup.tagline')}</p>
+          <ol className="mt-8 space-y-1">
+            {stepMeta.map((label, i) => {
+              const n = i + 1;
+              const active = n === step;
+              const done = n < step;
+              return (
+                <li key={n} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors ${active ? 'bg-white/10' : ''}`}>
+                  <span className={`grid size-7 shrink-0 place-items-center rounded-full border text-xs font-semibold ${done ? 'border-transparent bg-white text-primary' : active ? 'border-white' : 'border-white/30 text-primary-foreground/60'}`}>
+                    {done ? <Check className="size-4" /> : n}
+                  </span>
+                  <span className={`truncate text-sm ${active ? 'font-medium' : 'text-primary-foreground/60'}`}>{label}</span>
+                </li>
+              );
+            })}
+          </ol>
         </div>
+        <p className="relative text-xs text-primary-foreground/50">Plemmo EPOS</p>
+      </aside>
 
-        <Card>
-          <CardContent className="pt-6">
+      {/* Content */}
+      <main className="flex min-h-screen items-center justify-center p-6 sm:p-10">
+        <div className="w-full max-w-xl">
+          <div className="mb-6 lg:hidden">
+            <div className="mb-3 flex items-center gap-2.5">
+              <div className="grid size-8 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">P</div>
+              <span className="font-semibold">Plemmo</span>
+            </div>
+            <Progress value={(step / 6) * 100} />
+          </div>
+
+          <Card>
+            <CardContent className="p-6 sm:p-8">
             {step === 1 && (
               <div className="space-y-6">
                 <div className="text-center">
@@ -737,7 +770,11 @@ export default function SetupPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+          <p className="mt-4 hidden text-center text-xs text-muted-foreground lg:block">
+            {stepMeta[step - 1]} · {step} / 6
+          </p>
+        </div>
+      </main>
     </div>
   );
 }

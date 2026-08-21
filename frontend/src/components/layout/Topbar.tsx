@@ -39,6 +39,7 @@ export default function Topbar() {
   const key = Object.keys(TITLE_KEYS).find((p) => pathname === p || pathname.startsWith(p + '/'));
   const title = key ? t(TITLE_KEYS[key]) : humanise(pathname);
   const business = currentTenant?.business_name || t('common.brandName');
+  const sellHref = currentTenant?.business_type === 'retail' ? '/retail' : '/pos';
 
   return (
     <header className="flex h-[64px] shrink-0 items-center gap-3 border-b border-hairline bg-surface px-4 md:px-6">
@@ -74,7 +75,7 @@ export default function Topbar() {
       </button>
 
       <Button asChild className="h-10 gap-1.5 px-4 font-semibold shadow-sm">
-        <Link href="/retail">
+        <Link href={sellHref}>
           <Plus className="size-4" />
           <span className="hidden sm:inline">{t('nav.newSale')}</span>
         </Link>

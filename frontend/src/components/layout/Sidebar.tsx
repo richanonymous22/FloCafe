@@ -45,8 +45,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: 'nav.group.sell',
     items: [
-      { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: null, external: true },
-      { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: null, external: true },
+      { href: '/pos', labelKey: 'nav.pos', icon: ShoppingCart, roles: ['owner', 'manager', 'cashier'], businessTypes: ['restaurant'], external: true },
+      { href: '/retail', labelKey: 'nav.retail', icon: Store, roles: ['owner', 'manager', 'cashier'], businessTypes: ['retail'], external: true },
       { href: '/orders', labelKey: 'nav.orders', icon: ClipboardList, roles: ['owner', 'manager', 'cashier'], businessTypes: null },
     ],
   },

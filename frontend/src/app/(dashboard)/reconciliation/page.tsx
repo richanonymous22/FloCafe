@@ -65,17 +65,22 @@ function money(n: number | null | undefined): string { return n == null ? '—' 
 export default function ReconciliationPage() {
   const [tab, setTab] = useState('sales');
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div className="mx-auto w-full max-w-[1500px] space-y-5">
       <div>
-        <h1 className="text-display-lg text-3xl text-foreground">Reconciliation</h1>
-        <p className="text-sm text-muted-foreground">Sales, cross-device conflicts, inventory discrepancies, and sync health for this organization.</p>
+        <h1 className="text-3xl font-bold tracking-tight">Reconciliation</h1>
+        <p className="mt-0.5 text-sm text-text-subtle">Sales, cross-device conflicts, inventory discrepancies, and sync health for this organization.</p>
       </div>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="sales">Sales</TabsTrigger>
-          <TabsTrigger value="conflicts">Conflicts</TabsTrigger>
-          <TabsTrigger value="inventory">Inventory</TabsTrigger>
-          <TabsTrigger value="health">Sync Health</TabsTrigger>
+        <TabsList className="inline-flex h-auto items-center gap-1 rounded-xl border border-hairline bg-surface p-1 shadow-xs">
+          {(['sales', 'conflicts', 'inventory', 'health'] as const).map((v) => (
+            <TabsTrigger
+              key={v}
+              value={v}
+              className="rounded-lg px-3.5 py-1.5 text-sm font-semibold capitalize text-muted-foreground data-[state=active]:bg-accent data-[state=active]:text-primary data-[state=active]:shadow-none"
+            >
+              {v === 'health' ? 'Sync health' : v}
+            </TabsTrigger>
+          ))}
         </TabsList>
         <TabsContent value="sales"><SalesTab /></TabsContent>
         <TabsContent value="conflicts"><ConflictsTab /></TabsContent>

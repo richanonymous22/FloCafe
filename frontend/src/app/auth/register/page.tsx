@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import toast from 'react-hot-toast';
 import { useI18n } from '@/hooks/useI18n';
 import { Eye, EyeOff } from 'lucide-react';
+import BrandWordmark from '@/components/layout/BrandWordmark';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -68,14 +69,14 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-12">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-12">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
-          <img src="/logo.svg" alt="Flo" width={120} height={77} className="mx-auto mb-3" />
-          <p className="text-gray-500 mt-2">{t('auth.registerSubtitle')}</p>
+          <BrandWordmark className="justify-center mb-3" />
+          <p className="text-muted-foreground mt-2">{t('auth.registerSubtitle')}</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-lg p-8">
+        <div className="bg-card rounded-2xl shadow-lg p-8 border border-border">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
@@ -189,7 +190,7 @@ export default function RegisterPage() {
             </Button>
           </form>
 
-          <p className="text-center text-sm text-gray-500 mt-6">
+          <p className="text-center text-sm text-muted-foreground mt-6">
             {t('auth.haveAccount')}{' '}
             <Link href="/auth/login" className="text-brand hover:text-brand-hover font-medium">
               {t('auth.signIn')}

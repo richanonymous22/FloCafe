@@ -1,14 +1,18 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, Geist_Mono } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import "./globals.css";
 import MenuActionHandler from "@/components/layout/MenuActionHandler";
 import AuthGuard from "@/components/layout/AuthGuard";
 import { HtmlLangSync } from "@/components/layout/HtmlLangSync";
 
-const geistSans = Geist({
+// next/font self-hosts at build time (no runtime Google Fonts request), so
+// this works offline in the packaged Electron app exactly like the previous
+// Geist setup did.
+const dmSans = DM_Sans({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  weight: ["400", "500", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -17,13 +21,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flo",
-  description: "Smart Point of Sale for restaurants",
+  title: "Plemmo EPOS",
+  description: "Plemmo — offline-first Point of Sale for hospitality and retail",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Flo",
+    title: "Plemmo EPOS",
   },
   icons: {
     icon: [
@@ -35,7 +39,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#3248FF",
+  themeColor: "#FF5E00",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -50,7 +54,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${dmSans.variable} ${geistMono.variable} antialiased`}
       >
         <MenuActionHandler />
         <HtmlLangSync />

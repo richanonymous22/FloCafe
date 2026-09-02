@@ -30,6 +30,7 @@ import { getLandingPage } from '@/components/layout/AuthGuard';
 import api from '@/lib/api';
 import { useI18n } from '@/hooks/useI18n';
 import { useConfirm } from '@/hooks/use-confirm';
+import SyncStatusIndicator from '@/components/layout/SyncStatusIndicator';
 import {
   Sidebar,
   SidebarContent,
@@ -172,6 +173,9 @@ export default function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
+        <div className="px-2 pb-1 group-data-[collapsible=icon]:hidden">
+          <SyncStatusIndicator />
+        </div>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={pathname === '/support'} tooltip={t('nav.support')}>

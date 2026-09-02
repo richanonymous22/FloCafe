@@ -30,6 +30,7 @@ import { heldOrderRoutes } from './held-orders';
 import { supportTicketRoutes } from './support-ticket';
 import salesReconciliationRoutes from './sales-reconciliation';
 import adminReconciliationRoutes from './admin-reconciliation';
+import syncStatusRoutes from './sync-status';
 import { getDatabase, now, parseItemJson, attachEffectiveAddons, withTxn, getSettingValue, getCachedPairingCode, setCachedPairingCode, verifyPin } from '../db';
 import { ulid } from '../core/ids';
 import { checkPinRateLimit } from './orders';
@@ -120,6 +121,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/support-ticket', supportTicketRoutes);
   app.use('/api/sales', salesReconciliationRoutes);   // SYNC-F conflict + reconciliation APIs
   app.use('/api/admin', adminReconciliationRoutes);   // SYNC-G admin sales console + reconciliation
+  app.use('/api/sync', syncStatusRoutes);             // any-role connection/sync/license status (UI-0)
 
   // Tax preview
   app.post('/api/tax/preview', async (req, res) => {

@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import { useI18n } from '@/hooks/useI18n';
 import { ROLE_LABEL_KEYS, BUSINESS_TYPE_LABEL_KEYS } from '@/lib/i18n-enums';
 import { Eye, EyeOff } from 'lucide-react';
+import BrandWordmark from '@/components/layout/BrandWordmark';
 
 function LoginContent() {
   const router = useRouter();
@@ -152,7 +153,7 @@ function LoginContent() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <img src="/logo.png" alt="Flo" width={120} height={77} className="mx-auto mb-3" />
+          <BrandWordmark className="justify-center mb-3" />
           <p className="text-muted-foreground mt-2">{t('auth.signInTitle')}</p>
         </div>
         {dbError && (

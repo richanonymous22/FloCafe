@@ -5,40 +5,76 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-sans: "Geist", system-ui, sans-serif;
-  --font-mono: "Geist Mono", monospace;
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: #3248FF;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: #e8ebff;
-  --sidebar-accent-foreground: #3248FF;
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: #3248FF;
+  /* Plemmo design system (docs/DESIGN_SYSTEM.md), extracted from the Serva
+     reference. Semantic shadcn tokens below are re-themed to these values so
+     every existing primitive re-skins from one place; the raw Serva palette
+     is also exposed as --plemmo-* for components that need it directly
+     (status pills, till chips, KPI tiles). */
+  --plemmo-orange: #FF5E00;
+  --plemmo-orange-lo: #FF8A3D;
+  --plemmo-orange-tint: #FFF1E9;
+  --plemmo-ink: #1A1A1A;
+  --plemmo-green: #40B119;
+  --plemmo-green-tint: #ECF8E7;
+  --plemmo-yellow: #FFB833;
+  --plemmo-yellow-tint: #FFF6E5;
+  --plemmo-red: #E5484D;
+  --plemmo-red-tint: #FDECEC;
+  --plemmo-blue: #3B82F6;
+  --plemmo-blue-tint: #EEF3FF;
+  --plemmo-purple: #8A3FCB;
+  --plemmo-purple-tint: #F9EFFF;
+  --plemmo-bg: #F7F7F8;
+  --plemmo-line: #ECECEF;
+  --plemmo-line-2: #E0E0E5;
+  --plemmo-mute: #71717A;
+  --plemmo-faint: #A1A1AA;
+  --plemmo-hover: #F4F4F5;
+  --plemmo-sb: 264px;
+  --plemmo-sb-min: 80px;
+  --plemmo-top: 70px;
+  --plemmo-shadow: 0 1px 2px rgba(26,26,26,.05);
+  --plemmo-shadow-md: 0 8px 24px -12px rgba(26,26,26,.18);
+  --plemmo-shadow-pop: 0 20px 52px -18px rgba(26,26,26,.34);
+  --plemmo-ease: cubic-bezier(.2,.8,.25,1);
+
+  /* var(--font-geist-sans) is the next/font-injected DM Sans stack (see
+     layout.tsx) — kept under its original variable name so this file didn't
+     need touching everywhere else it's referenced. */
+  --font-sans: var(--font-geist-sans), "DM Sans", system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), "Geist Mono", monospace;
+  --radius: 0.875rem; /* 14px, Serva default radius */
+  --background: #F7F7F8;
+  --foreground: #1A1A1A;
+  --card: #FFFFFF;
+  --card-foreground: #1A1A1A;
+  --popover: #FFFFFF;
+  --popover-foreground: #1A1A1A;
+  --primary: #FF5E00;
+  --primary-foreground: #FFFFFF;
+  --secondary: #FFFFFF;
+  --secondary-foreground: #1A1A1A;
+  --muted: #F4F4F5;
+  --muted-foreground: #71717A;
+  --accent: #FFF1E9;
+  --accent-foreground: #FF5E00;
+  --destructive: #E5484D;
+  --border: #ECECEF;
+  --input: #ECECEF;
+  --ring: #FF5E00;
+  --chart-1: #FF5E00;
+  --chart-2: #40B119;
+  --chart-3: #3B82F6;
+  --chart-4: #8A3FCB;
+  --chart-5: #FFB833;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #1A1A1A;
+  --sidebar-primary: #FF5E00;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #FFF1E9;
+  --sidebar-accent-foreground: #FF5E00;
+  --sidebar-border: #ECECEF;
+  --sidebar-ring: #FF5E00;
 }
 
 body {
@@ -103,14 +139,31 @@ body {
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Brand colors */
-  --color-brand: #3248FF;
-  --color-brand-light: #e8ebff;
-  --color-brand-hover: #2538d4;
-  --color-brand-ring: #3248FF80;
-  --color-success: #00cc61;
-  --color-success-light: #dcfce7;
-  --color-success-hover: #00b355;
+  /* Brand colors (Plemmo — docs/DESIGN_SYSTEM.md) */
+  --color-brand: #FF5E00;
+  --color-brand-light: #FFF1E9;
+  --color-brand-hover: #E5540A;
+  --color-brand-ring: #FF5E0080;
+  --color-success: #40B119;
+  --color-success-light: #ECF8E7;
+  --color-success-hover: #359A16;
+
+  /* Full Plemmo semantic palette, exposed as Tailwind utilities
+     (bg-plemmo-warning, text-plemmo-danger, etc.) for status pills, till
+     chips, and KPI accents that need a color the shadcn semantic tokens
+     don't name. */
+  --color-plemmo-orange: var(--plemmo-orange);
+  --color-plemmo-orange-tint: var(--plemmo-orange-tint);
+  --color-plemmo-success: var(--plemmo-green);
+  --color-plemmo-success-tint: var(--plemmo-green-tint);
+  --color-plemmo-warning: var(--plemmo-yellow);
+  --color-plemmo-warning-tint: var(--plemmo-yellow-tint);
+  --color-plemmo-danger: var(--plemmo-red);
+  --color-plemmo-danger-tint: var(--plemmo-red-tint);
+  --color-plemmo-info: var(--plemmo-blue);
+  --color-plemmo-info-tint: var(--plemmo-blue-tint);
+  --color-plemmo-accent: var(--plemmo-purple);
+  --color-plemmo-accent-tint: var(--plemmo-purple-tint);
 }
 
 .dark {

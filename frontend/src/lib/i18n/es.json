@@ -267,6 +267,8 @@
   "pos.newCustomerEnterName": "Nuevo cliente: ingresá el nombre",
   "pos.noActiveOrder": "No hay pedido activo para esta mesa",
   "pos.noPrinters": "Aún no hay impresoras configuradas.",
+  "pos.noProductsFound": "No se encontraron productos",
+  "pos.noProductsFoundDesc": "Prueba con otra búsqueda o categoría.",
   "pos.noTablesFound": "No se encontraron mesas",
   "pos.orderHeldFor": "Pedido guardado para {table}",
   "pos.orderNotesPlaceholder": "Notas del pedido (opcional)",

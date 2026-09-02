@@ -268,6 +268,8 @@
   "pos.newCustomerEnterName": "مشتری تازه — نام را بنویسید",
   "pos.noActiveOrder": "هیچ سفارش فعالی برای این میز پیدا نشد",
   "pos.noPrinters": "هنوز هیچ چاپگری پیکربندی نشده است.",
+  "pos.noProductsFound": "محصولی یافت نشد",
+  "pos.noProductsFoundDesc": "جستجو یا دسته‌بندی دیگری را امتحان کنید.",
   "pos.noTablesFound": "هیچ میزی پیدا نشد",
   "pos.orderHeldFor": "سفارش برای {table} نگه داشته شد",
   "pos.orderNotesPlaceholder": "یادداشت سفارش (اختیاری)",

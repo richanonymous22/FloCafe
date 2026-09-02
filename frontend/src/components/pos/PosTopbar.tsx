@@ -23,7 +23,7 @@ export default function PosTopbar({ tables, onShowTablePicker }: Props) {
   const showTableBtn = isRestaurant && cart.orderType === 'dine_in' && tablesRequired;
 
   return (
-    <div className="flex items-center gap-3 border-b bg-white shrink-0 px-4 py-2.5">
+    <div className="flex items-center gap-3 border-b border-border bg-card shrink-0 px-4 py-2.5">
       <div className="flex-1 min-w-0">
         <CustomerSearch variant="topbar" />
       </div>
@@ -34,7 +34,7 @@ export default function PosTopbar({ tables, onShowTablePicker }: Props) {
           onClick={onShowTablePicker}
           className={`h-10 shrink-0 flex items-center gap-1.5 px-3 text-sm rounded-lg border font-medium transition-colors whitespace-nowrap ${
             cart.tableId
-              ? 'bg-orange-500 text-white border-orange-500 hover:bg-orange-600'
+              ? 'bg-brand text-white border-brand hover:bg-brand-hover'
               : 'bg-amber-50 border-amber-400 text-amber-700 hover:bg-amber-100'
           }`}
         >

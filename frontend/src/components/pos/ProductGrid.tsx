@@ -10,6 +10,7 @@ import api from '@/lib/api';
 import { useI18n } from '@/hooks/useI18n';
 import { parseDbTimestamp } from '@/lib/utils';
 import { useFormatCurrency } from '@/hooks/useFormatCurrency';
+import { EmptyState } from '@/components/ui/empty-state';
 
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string; activeBg: string; activeText: string }> = {
   red: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', activeBg: 'bg-red-500', activeText: 'text-white' },
@@ -85,14 +86,14 @@ export default function ProductGrid({
               }
             }}
             placeholder={t('pos.searchProducts')}
-            className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl focus:border-brand outline-none transition-colors text-sm"
+            className="w-full pl-9 pr-4 py-2 bg-card border border-border rounded-xl focus:border-brand outline-none transition-colors text-sm"
           />
         </div>
         <div className="flex flex-wrap gap-2 pb-1">
           <button
             onClick={() => setSelectedCategory(null)}
             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-              !selectedCategory ? 'bg-brand text-white' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+              !selectedCategory ? 'bg-brand text-white' : 'bg-card text-foreground/80 border border-border hover:bg-muted'
             }`}
           >
             {t('pos.allCategories')}
@@ -111,7 +112,7 @@ export default function ProductGrid({
                       : 'bg-brand text-white'
                     : colorClasses
                       ? `${colorClasses.bg} ${colorClasses.text} border ${colorClasses.border} hover:opacity-80`
-                      : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
+                      : 'bg-card text-foreground/80 border border-border hover:bg-muted'
                 }`}
               >
                 {cat.name}
@@ -122,9 +123,16 @@ export default function ProductGrid({
       </div>
 
       <div className="flex-1 overflow-y-auto pb-20 md:pb-0">
+        {filtered.length === 0 ? (
+          <EmptyState
+            icon={<Search />}
+            title={t('pos.noProductsFound', { defaultValue: 'No products found' })}
+            description={t('pos.noProductsFoundDesc', { defaultValue: 'Try a different search or category.' })}
+          />
+        ) : (
         <div className={`grid gap-3 ${
-          sidebarOpen 
-            ? 'grid-cols-4' 
+          sidebarOpen
+            ? 'grid-cols-4'
             : 'grid-cols-5'
         }`}>
           {filtered.map((product) => {
@@ -138,7 +146,7 @@ export default function ProductGrid({
                 key={product.id}
                 data-testid="pos-product-card"
                 onClick={() => onProductClick(product)}
-                className="bg-white rounded-xl p-2.5 border border-gray-100 hover:border-brand/40 hover:shadow-md transition-all text-left relative group cursor-pointer overflow-hidden"
+                className="bg-card rounded-xl p-2.5 border border-border hover:border-brand/40 hover:shadow-md transition-all text-left relative group cursor-pointer overflow-hidden"
               >
                 {!!product.track_inventory && (
                   <>
@@ -191,7 +199,7 @@ export default function ProductGrid({
                   </div>
                 )}
 
-                <h3 className="font-medium text-gray-900 text-sm line-clamp-2 leading-snug">{product.name}</h3>
+                <h3 className="font-medium text-foreground text-sm line-clamp-2 leading-snug">{product.name}</h3>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-brand font-bold">
                     {fmt(Number(product.price))}
@@ -206,7 +214,7 @@ export default function ProductGrid({
                           e.stopPropagation();
                           onProductClick(product);
                         }}
-                        className="text-gray-400 hover:text-gray-600 transition-colors"
+                        className="text-muted-foreground hover:text-foreground transition-colors"
                         title={t('pos.customisable')}
                       >
                         <SlidersHorizontal size={12} />
@@ -219,6 +227,7 @@ export default function ProductGrid({
             );
           })}
         </div>
+        )}
       </div>
     </div>
   );

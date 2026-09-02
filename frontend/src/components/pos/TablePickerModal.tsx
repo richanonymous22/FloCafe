@@ -17,10 +17,10 @@ interface Props {
 }
 
 const statusStyles: Record<string, { border: string; badge: string; badgeKey: string | null }> = {
-  available: { border: 'border-gray-200 hover:border-brand/40', badge: '', badgeKey: null },
+  available: { border: 'border-border hover:border-brand/40', badge: '', badgeKey: null },
   occupied: { border: 'border-orange-300 bg-orange-50', badge: 'bg-orange-500', badgeKey: 'pos.tableOccupied' },
   reserved: { border: 'border-yellow-300 bg-yellow-50', badge: 'bg-yellow-500', badgeKey: 'pos.tableReserved' },
-  cleaning: { border: 'border-gray-300 bg-gray-100', badge: 'bg-gray-500', badgeKey: 'pos.tableCleaning' },
+  cleaning: { border: 'border-border bg-muted', badge: 'bg-muted/500', badgeKey: 'pos.tableCleaning' },
   held: { border: 'border-blue-400 bg-blue-50', badge: 'bg-blue-500', badgeKey: 'pos.tableHeld' },
 };
 
@@ -50,10 +50,10 @@ export default function TablePickerModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto">
+      <div className="bg-card rounded-2xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-bold">{t('pos.selectTable')}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button onClick={onClose} className="text-muted-foreground hover:text-muted-foreground">
             <X size={20} />
           </button>
         </div>
@@ -88,8 +88,8 @@ export default function TablePickerModal({
                     {t(style.badgeKey)}
                   </span>
                 )}
-                <p className="font-bold text-gray-900">{table.name}</p>
-                <p className="text-xs text-gray-500">{t('pos.tableSeats', { count: table.capacity })}</p>
+                <p className="font-bold text-foreground">{table.name}</p>
+                <p className="text-xs text-muted-foreground">{t('pos.tableSeats', { count: table.capacity })}</p>
                 {table.status === 'occupied' && (table.current_order || table.activeOrder) && (
                   <p className="text-xs text-orange-600 font-medium mt-1">
                     #{(table.current_order || table.activeOrder)?.order_number}
@@ -101,14 +101,14 @@ export default function TablePickerModal({
         </div>
 
         {tables.length === 0 && (
-          <p className="text-center text-gray-500 py-8">{t('pos.noTablesFound')}</p>
+          <p className="text-center text-muted-foreground py-8">{t('pos.noTablesFound')}</p>
         )}
 
         {selectedTableId && (
-          <div className="flex gap-3 mt-4 pt-4 border-t border-gray-100">
+          <div className="flex gap-3 mt-4 pt-4 border-t border-border">
             <button
               onClick={() => onHoldTable(selectedTableId)}
-              className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-200 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+              className="flex-1 px-4 py-3 rounded-xl border-2 border-border text-foreground/80 font-medium hover:bg-muted/50 transition-colors"
             >
               {t('pos.holdTable')}
             </button>

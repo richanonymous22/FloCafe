@@ -235,6 +235,22 @@ acceptable as a permanent implementation for 0- or 3-decimal currencies.
 6. **Cash drawer has no status feedback loop.** `openCashDrawer()` reports
    success/failure of the print dispatch, not whether the drawer physically
    opened (no hardware in this class of printer reports that).
+7. **The final retail UI (Plemmo redesign) moved retail off this section's
+   atomic checkout.** `frontend/src/app/(dashboard)/retail/page.tsx` now
+   drives `POST /orders` (`type: 'in_store'`) -> `PATCH /orders/:id/discount`
+   -> `POST /bills/generate` -> `POST /bills/:id/payments` — the same
+   granular sequence hospitality's prepaid checkout already used — instead
+   of calling `checkout()` below, so it can reuse `PrepaidCheckoutModal`'s
+   existing discount/PIN-approval UI rather than inventing a new one.
+   `main/modules/retail/checkout.ts` is unchanged and still callable by
+   anything else that wants the single-request shape. Two things this still
+   does **not** give retail: **hold/resume** (the held-orders store is keyed
+   by `tableId`; a tableless retail sale has no equivalent key, so a
+   suspended retail cart concept would need real backend design, not just a
+   UI reuse) and **offers as a concept distinct from discounts** (no such
+   backend concept exists anywhere in Plemmo today — discounts are the only
+   price-adjustment mechanism; "offers" in the product brief should be read
+   as discounts until/unless a real promotions engine is scoped).
 
 ---
 

@@ -111,6 +111,7 @@ export function useTaxPreview(
         const payload = {
           items: items.map((item) => ({
             product_id: item.product.id,
+            variant_id: item.variant_id ?? undefined,
             quantity: item.quantity,
             addons: item.addons.map((a) => ({ price: Number(a.price), quantity: Number(a.quantity) || 1 })),
             discount_amount: 0,

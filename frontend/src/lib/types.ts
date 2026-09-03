@@ -253,4 +253,10 @@ export interface CartItem {
   quantity: number;
   addons: Addon[];
   special_instructions: string;
+  /** Retail-only: the product_variants row this line was rung up under, if
+   * any (hospitality never sets this — variants are a retail concept).
+   * `product` already carries the variant's sell price/display name so
+   * every existing render/total site works unchanged; this is read only
+   * when submitting the order so the correct variant is billed/stocked. */
+  variant_id?: string | number | null;
 }

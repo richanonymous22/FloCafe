@@ -11,7 +11,7 @@ interface CartState {
   deliveryAddress: string;
   orderNotes: string;
 
-  addItem: (product: Product, quantity?: number, addons?: Addon[], specialInstructions?: string) => void;
+  addItem: (product: Product, quantity?: number, addons?: Addon[], specialInstructions?: string, variantId?: string | number | null) => void;
   updateItemDetails: (cartItemId: string, quantity: number, addons: Addon[], specialInstructions: string) => void;
   removeItem: (cartItemId: string) => void;
   updateQuantity: (cartItemId: string, quantity: number) => void;
@@ -29,8 +29,11 @@ interface CartState {
   itemCount: () => number;
 }
 
-function generateCartItemId(productId: number | string, addons: Addon[], specialInstructions: string): string {
+function generateCartItemId(productId: number | string, addons: Addon[], specialInstructions: string, variantId?: string | number | null): string {
   const parts = [String(productId)];
+  if (variantId != null) {
+    parts.push(`v:${variantId}`);
+  }
   if (addons.length > 0) {
     const addonStr = [...addons]
       .sort((a, b) => String(a.id).localeCompare(String(b.id)))
@@ -54,9 +57,9 @@ export const useCartStore = create<CartState>((set, get) => ({
   deliveryAddress: '',
   orderNotes: '',
 
-  addItem: (product, quantity = 1, addons = [], specialInstructions = '') => {
+  addItem: (product, quantity = 1, addons = [], specialInstructions = '', variantId = null) => {
     const items = get().items;
-    const itemId = generateCartItemId(product.id, addons, specialInstructions);
+    const itemId = generateCartItemId(product.id, addons, specialInstructions, variantId);
     const existing = items.find((i) => i.id === itemId);
 
     if (existing) {
@@ -67,7 +70,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       });
     } else {
       set({
-        items: [...items, { id: itemId, product, quantity, addons, special_instructions: specialInstructions }],
+        items: [...items, { id: itemId, product, quantity, addons, special_instructions: specialInstructions, variant_id: variantId }],
       });
     }
   },

@@ -341,6 +341,7 @@ export default function POSPage() {
         // Add new items to an existing order with a durable retry key.
         const newItems = cart.items.map((item) => ({
           product_id: item.product.id,
+          variant_id: item.variant_id ?? undefined,
           quantity: item.quantity,
           addons: item.addons.length > 0
             ? item.addons.map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: a.quantity || 1 }))
@@ -371,6 +372,7 @@ export default function POSPage() {
           special_instructions: cart.orderNotes || undefined,
           items: cart.items.map((item) => ({
             product_id: item.product.id,
+            variant_id: item.variant_id ?? undefined,
             quantity: item.quantity,
             addons: item.addons.length > 0
               ? item.addons.map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: a.quantity || 1 }))
@@ -422,6 +424,7 @@ export default function POSPage() {
     setSubmitting(true);
     const orderItems = cart.items.map((item) => ({
       product_id: item.product.id,
+      variant_id: item.variant_id ?? undefined,
       quantity: item.quantity,
       addons: item.addons.length > 0
         ? item.addons.map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: a.quantity || 1 }))
@@ -706,6 +709,7 @@ export default function POSPage() {
       await api.post(`/orders/${order.id}/items`, {
         items: cart.items.map((item) => ({
           product_id: item.product.id,
+          variant_id: item.variant_id ?? undefined,
           quantity: item.quantity,
           addons: item.addons.length > 0
             ? item.addons.map((a) => ({ id: a.id, name: a.name, price: a.price, quantity: a.quantity || 1 }))

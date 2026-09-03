@@ -739,7 +739,21 @@ export async function calculateTaxPreview(req: any, res: any): Promise<void> {
         continue;
       }
 
-      const unitPrice = parseFloat(product.price) || 0;
+      // Milestone 3: a line may name a specific product_variants row instead
+      // of the bare product (retail only — hospitality lines never set
+      // variant_id). Price comes from the variant when one is given, same
+      // resolution main/core/sale.ts's persistSaleLine uses, so this preview
+      // never shows a different total than what checkout actually settles.
+      let variantPrice: number | null = null;
+      if (itemData.variant_id) {
+        const variant = db.prepare('SELECT * FROM product_variants WHERE id = ? AND product_id = ?')
+          .get(itemData.variant_id, itemData.product_id) as any;
+        if (variant) {
+          variantPrice = parseFloat(variant.price) || 0;
+        }
+      }
+
+      const unitPrice = variantPrice !== null ? variantPrice : (parseFloat(product.price) || 0);
       const rawQty = Number(itemData.quantity);
       const quantity = Number.isFinite(rawQty) && rawQty > 0 ? rawQty : 1;
       const rawDisc = Number(itemData.discount_amount);

@@ -7,12 +7,12 @@ import type { UseKdsConnectionResult } from '@/hooks/useKdsConnection';
 export function KdsLoginForm({ conn }: { conn: UseKdsConnectionResult }) {
   const { t } = useI18n();
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+    <div className="min-h-screen bg-muted flex items-center justify-center p-4">
+      <div className="bg-card rounded-2xl shadow-xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
           <ChefHat size={48} className="mx-auto text-brand mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900">{t('kds.title')}</h1>
-          <p className="text-gray-500 mt-2">{t('kds.loginSubtitle')}</p>
+          <h1 className="text-2xl font-bold text-foreground">{t('kds.title')}</h1>
+          <p className="text-muted-foreground mt-2">{t('kds.loginSubtitle')}</p>
         </div>
 
         <form data-testid="kds-login-form" onSubmit={conn.handleLogin} className="space-y-4">
@@ -23,39 +23,39 @@ export function KdsLoginForm({ conn }: { conn: UseKdsConnectionResult }) {
           )}
 
           <div>
-            <label htmlFor="kds-login-email" className="block text-sm font-medium text-gray-700 mb-1">{t('auth.email')}</label>
+            <label htmlFor="kds-login-email" className="block text-sm font-medium text-foreground/80 mb-1">{t('auth.email')}</label>
             <input
               id="kds-login-email"
               data-testid="kds-login-email"
               type="email"
               value={conn.loginEmail}
               onChange={(e) => conn.setLoginEmail(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand"
+              className="w-full px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-brand focus:border-brand"
               placeholder="chef@flo.local"
               required
             />
           </div>
 
           <div>
-            <label htmlFor="kds-login-password" className="block text-sm font-medium text-gray-700 mb-1">{t('auth.password')}</label>
+            <label htmlFor="kds-login-password" className="block text-sm font-medium text-foreground/80 mb-1">{t('auth.password')}</label>
             <input
               id="kds-login-password"
               data-testid="kds-login-password"
               type="password"
               value={conn.loginPassword}
               onChange={(e) => conn.setLoginPassword(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand focus:border-brand"
+              className="w-full px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-brand focus:border-brand"
               placeholder="••••••••"
               required
             />
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-gray-600 select-none cursor-pointer">
+          <label className="flex items-center gap-2 text-sm text-muted-foreground select-none cursor-pointer">
             <input
               type="checkbox"
               checked={conn.rememberMe}
               onChange={(e) => conn.setRememberMe(e.target.checked)}
-              className="rounded border-gray-300 text-brand focus:ring-brand"
+              className="rounded border-border text-brand focus:ring-brand"
             />
             {t('auth.rememberMe')}
           </label>
@@ -70,7 +70,7 @@ export function KdsLoginForm({ conn }: { conn: UseKdsConnectionResult }) {
           </button>
         </form>
 
-        <p className="text-xs text-gray-400 text-center mt-6">{t('kds.loginHint')}</p>
+        <p className="text-xs text-muted-foreground text-center mt-6">{t('kds.loginHint')}</p>
       </div>
     </div>
   );

@@ -88,7 +88,7 @@ export function KdsTabsView({ orders, updating, updateItemStatus }: KdsTabsViewP
             >
               <div className={`w-2 h-2 rounded-full ${config.color}`} />
               {statusLabel(status)}
-              <span className="text-xs px-1.5 py-0.5 rounded-full bg-white/60">{count}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-card/60">{count}</span>
             </button>
           );
         })}
@@ -99,14 +99,14 @@ export function KdsTabsView({ orders, updating, updateItemStatus }: KdsTabsViewP
           {filteredOrders.map((order) => (
             <div
               key={order.id}
-              className={`bg-white rounded-xl border-2 ${STATUS_CONFIG[activeTab].border} p-4 flex flex-col`}
+              className={`bg-card rounded-xl border-2 ${STATUS_CONFIG[activeTab].border} p-4 flex flex-col`}
             >
               <div className="flex justify-between items-center mb-3 gap-2">
                 <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                   <span className="font-bold text-base shrink-0">#{order.order_number}</span>
                   <Badge
                     variant="outline"
-                    className={ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-gray-50 text-gray-700 border-gray-200'}
+                    className={ORDER_TYPE_BADGE_STYLES[order.type] || 'bg-muted/50 text-foreground/80 border-border'}
                   >
                     {t(ORDER_TYPE_LABEL_KEYS[order.type] ?? order.type)}
                   </Badge>
@@ -114,7 +114,7 @@ export function KdsTabsView({ orders, updating, updateItemStatus }: KdsTabsViewP
                     <Badge variant="secondary">{t('kds.tableLabel', { name: order.table.name })}</Badge>
                   )}
                 </div>
-                <div className="flex items-center gap-1 text-sm text-gray-400 font-mono shrink-0">
+                <div className="flex items-center gap-1 text-sm text-muted-foreground font-mono shrink-0">
                   <Clock size={12} />
                   {timeSince(order.created_at)}
                 </div>
@@ -143,17 +143,17 @@ export function KdsTabsView({ orders, updating, updateItemStatus }: KdsTabsViewP
                       <div className="flex items-center gap-2">
                         <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${config.color}`} />
                         <span className={`font-bold text-base w-6 shrink-0 ${config.text}`}>{item.quantity}×</span>
-                        <span className={`text-lg font-semibold flex-1 truncate ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                        <span className={`text-lg font-semibold flex-1 truncate ${isVoided ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
                           {item.product_name}
                         </span>
-                        <ChevronRight size={14} className="text-gray-400 shrink-0" />
+                        <ChevronRight size={14} className="text-muted-foreground shrink-0" />
                       </div>
                       {item.addons && item.addons.length > 0 && (
                         <div className="ml-[26px] flex flex-wrap gap-1 mt-1">
                           {item.addons.map((addon, i) => (
                             <span
                               key={`${addon.id ?? addon.name}-${i}`}
-                              className="text-[10px] bg-white/70 text-blue-600 px-1.5 py-0.5 rounded border border-blue-200"
+                              className="text-[10px] bg-card/70 text-blue-600 px-1.5 py-0.5 rounded border border-blue-200"
                             >
                               + {addon.name}{(addon.quantity || 1) > 1 ? ` ×${addon.quantity}` : ''}
                             </span>
@@ -174,7 +174,7 @@ export function KdsTabsView({ orders, updating, updateItemStatus }: KdsTabsViewP
         </div>
 
         {filteredOrders.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <p className="text-lg">{t('kds.emptyItems', { status: statusLabel(activeTab).toLowerCase() })}</p>
             <p className="text-sm">{t('kds.emptyHint')}</p>
           </div>

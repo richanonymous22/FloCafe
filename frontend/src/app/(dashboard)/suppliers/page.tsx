@@ -9,6 +9,8 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Truck } from 'lucide-react';
 import api from '@/lib/api';
 
 interface Supplier {
@@ -153,7 +155,14 @@ export default function SuppliersPage() {
             </CardContent>
           </Card>
         ))}
-        {suppliers.length === 0 && <p className="text-muted-foreground text-sm">No suppliers yet.</p>}
+        {suppliers.length === 0 && (
+          <EmptyState
+            icon={<Truck />}
+            title="No suppliers yet"
+            description="Add a supplier to start tracking purchase orders and receiving."
+            action={<Button onClick={startCreate}>New supplier</Button>}
+          />
+        )}
       </div>
     </div>
   );

@@ -10,6 +10,8 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ClipboardList } from 'lucide-react';
 import api from '@/lib/api';
 
 interface Supplier { id: string; name: string; }
@@ -197,7 +199,13 @@ export default function PurchasingPage() {
               <span className="text-muted-foreground text-xs uppercase">{po.status}</span>
             </Button>
           ))}
-          {orders.length === 0 && <p className="text-muted-foreground text-sm">No purchase orders yet.</p>}
+          {orders.length === 0 && (
+            <EmptyState
+              icon={<ClipboardList />}
+              title="No purchase orders yet"
+              description="Create a draft PO below to start ordering stock from a supplier."
+            />
+          )}
         </CardContent>
       </Card>
 

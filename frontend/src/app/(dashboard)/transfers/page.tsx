@@ -10,6 +10,8 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ArrowLeftRight } from 'lucide-react';
 import api from '@/lib/api';
 
 interface Location { id: string; name: string; }
@@ -164,7 +166,13 @@ export default function TransfersPage() {
               <span className="text-muted-foreground text-xs uppercase">{t.status}</span>
             </Button>
           ))}
-          {transfers.length === 0 && <p className="text-muted-foreground text-sm">No transfers yet.</p>}
+          {transfers.length === 0 && (
+            <EmptyState
+              icon={<ArrowLeftRight />}
+              title="No transfers yet"
+              description="Stock transfers between locations will show up here."
+            />
+          )}
         </CardContent>
       </Card>
 

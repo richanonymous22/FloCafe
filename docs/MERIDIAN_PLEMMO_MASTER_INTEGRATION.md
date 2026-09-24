@@ -207,7 +207,23 @@ is UI/temporary + offline cache only.
 
 ---
 
-## 10. Status log
+## 10. Progress against phases (honest status)
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 1. Foundation | Meridian in repo, serving path, API client, **real auth**, session context, licence/sync status, safe fallback | **✅ complete & verified** |
+| 2. Catalogue | products/categories/modifiers/customers from Plemmo (authoritative, read-through cache) | **✅ complete & verified** |
+| Core POS — order write path | Meridian cart → Plemmo sale, **authoritative totals/tax**, idempotency (adapter + tests) | **✅ adapter complete & verified**; wiring into Meridian's live pay/checkout button is Phase 3 work (not yet wired, to avoid a half-integrated pay flow) |
+| 3. Payments + Cash | split/partial/tips/change/refund/void UI → Plemmo; **backend gaps: tips, cash sessions, denomination counting** | ⏳ not started (backend extensions + migrations + tests required) |
+| 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo | ⏳ not started |
+| 5. Hospitality | tables/floor-plan (**backend gap: geometry**)/KDS/collection board | ⏳ not started |
+| 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (backend gap)** | ⏳ not started |
+| 7. Reports / AI / Receipts | reports on authoritative data; **AI service (backend gap)**; digital receipts | ⏳ not started |
+| 8. Offline / Sync | integrate Plemmo outbox/idempotency/conflict; remove localStorage-as-truth | ⏳ not started |
+| 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
+| 10. Final production audit | end-to-end verification + release checklist | ⏳ not started |
+
+## 11. Status log
 
 - **2026-09-24** — Audit complete (Phases 1–5). This map created. Foundation
   slice started: Meridian vendored, real auth/API client scaffolded, flagged
@@ -222,3 +238,15 @@ is UI/temporary + offline cache only.
   fallback), plus smoke/cors/static-routes/first-run regressions — all green.
   Meridian's per-staff PIN lock is preserved as the "who's on the till" UX and
   will be backed by real Plemmo staff in the staff/shifts phase.
+- **2026-09-24** — **Phase 2 Catalogue complete & verified.** `PlemmoCatalogue`
+  adapter maps Plemmo categories/products/addon-groups/customers into Meridian's
+  shapes; register hydrates from the live API (read-through cache, offline-safe).
+  Verified by `test:meridian-catalogue` (pure mappers + live API contract).
+- **2026-09-24** — **Core POS order-commit adapter complete & verified.**
+  `PlemmoOrders` maps a Meridian cart (incl. modifier→addon-id resolution via a
+  catalogue addon index) to a Plemmo sale and commits it with an idempotency
+  key; Plemmo computes authoritative subtotal/tax/total. Verified by
+  `test:meridian-orders` (pure mappers + a real end-to-end sale asserting
+  authoritative totals and idempotent replay / no duplicate). Wiring this into
+  Meridian's live pay/checkout button is deferred to the Payments phase so the
+  running app is never left with a half-integrated pay flow.

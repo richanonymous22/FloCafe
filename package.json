@@ -65,6 +65,7 @@
     "test:smoke": "node tests/run-electron-node-test.cjs tests/smoke-test.test.ts",
     "test:meridian-foundation": "node tests/run-electron-node-test.cjs tests/meridian-foundation.test.ts",
     "test:meridian-catalogue": "node tests/run-electron-node-test.cjs tests/meridian-catalogue.test.ts",
+    "test:meridian-orders": "node tests/run-electron-node-test.cjs tests/meridian-orders.test.ts",
     "test:payment-methods-split": "node tests/run-electron-node-test.cjs tests/payment-methods-split-checks.test.ts",
     "test:kds-integration": "node tests/run-electron-node-test.cjs tests/kds-integration.test.ts",
     "test:kds-contract": "node tests/run-electron-node-test.cjs tests/kds-contract.test.ts",

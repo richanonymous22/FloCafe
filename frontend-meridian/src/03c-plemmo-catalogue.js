@@ -86,6 +86,19 @@
     };
   }
 
+  // Build an addon lookup so a Meridian cart selection (group id + option
+  // label) can be resolved back to the authoritative Plemmo addon id when an
+  // order is committed. Shape: { [groupId]: { [label]: { id, price } } }.
+  function buildAddonIndex(groups) {
+    const idx = {};
+    (groups || []).forEach((g) => {
+      const byLabel = {};
+      (g.addons || []).forEach((a) => { byLabel[a.name] = { id: a.id, price: Number(a.price) || 0 }; });
+      idx[g.id] = byLabel;
+    });
+    return idx;
+  }
+
   // Load authoritative catalogue from Plemmo and hydrate the given state object
   // in place (categories, products, modGroups, customers). Returns the counts.
   async function load(S) {
@@ -110,6 +123,7 @@
       S.modGroups = groups.map(mapModGroup);
       S.products = prods.map(mapProduct);
       S.customers = customers.map(mapCustomer);
+      S._plemmoAddons = buildAddonIndex(groups);
     }
     return {
       categories: cats.length, products: prods.length,
@@ -122,6 +136,7 @@
     mapModGroup: mapModGroup,
     mapProduct: mapProduct,
     mapCustomer: mapCustomer,
+    buildAddonIndex: buildAddonIndex,
     load: load
   };
 })();

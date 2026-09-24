@@ -727,11 +727,28 @@ async function resolveCaps(){
 // Meridian's original boot, now gated behind real Plemmo authentication.
 function meridianBoot(){
   try{S=loadState();}catch(e){S=null;}
-  if(S&&S.onboarded&&S.settings&&Array.isArray(S.orders)){applyTheme();LK.sel=(S.employees[0]||{}).id;showLock();}
+  if(S&&S.onboarded&&S.settings&&Array.isArray(S.orders)){applyTheme();LK.sel=(S.employees[0]||{}).id;showLock();hydratePlemmoCatalogue();}
   else{S=null;showOnboarding();}
   resolveCaps();
   updatePlemmoStatus();
 }
+// Phase 2: pull the authoritative catalogue (categories/products/modifiers/
+// customers) from Plemmo into the running state, so the register renders real
+// data. Plemmo is authoritative; this is a read-through cache. On failure
+// (offline / not reachable) the last cached catalogue is kept.
+async function hydratePlemmoCatalogue(){
+  if(!S||!window.PlemmoCatalogue||!PlemmoAPI.isAuthenticated())return;
+  try{
+    const n=await PlemmoCatalogue.load(S);
+    saveNow();
+    if(U.user)render();
+    updatePlemmoStatus();
+    if(typeof toast==='function'&&n.products>0)toast(`Catalogue synced from Plemmo — ${n.products} products`,'ok');
+  }catch(e){
+    if(typeof toast==='function')toast('Using the last saved catalogue — Plemmo is unreachable','warn');
+  }
+}
+A.plemmoSyncCatalogue=()=>hydratePlemmoCatalogue();
 (function boot(){
   // Phase 1 foundation: authenticate against Plemmo first, then run Meridian.
   // window.PlemmoAPI is always present (00-plemmo-api.js). If it is somehow

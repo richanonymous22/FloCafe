@@ -239,7 +239,8 @@ verified in a real browser env via jsdom (`test:meridian-ui-boot`).
 | Items stock-adjust → `PlemmoInventory` (single ledger); digital-receipt email → `PlemmoReceipts` | ✅ done & jsdom-verified |
 | Cash-drawer screen → `PlemmoCash` (open/pay-in/pay-out/no-sale/close; authoritative expected + variance) | ✅ done & jsdom-verified |
 | Dine-in: seat table → send-to-kitchen creates/appends the authoritative Plemmo order (real KDS) → checkout bills + pays that order; floor-plan layout loaded from Plemmo at boot (no drag-editor UI in Meridian — `saveLayout`/`create` adapters await one) | ✅ done & jsdom-verified |
-| Remaining view handlers: team/timeclock, customers/loyalty create, reports view figures, kiosk submit | ⏳ handlers still local; adapters + backends ready and tested |
+| Customers create/edit → authoritative `/api/customers` (+ tier); kiosk submit → authoritative Plemmo sale (`PlemmoKiosk` → bill → card payment); self timeclock → `PlemmoStaff` clock-in/out | ✅ done & jsdom-verified |
+| Remaining view handlers: reports-view figures (dashboard/reports still compute over local orders) | ⏳ adapter (`PlemmoReports`) ready; view still local |
 
 ## 11. Status log
 

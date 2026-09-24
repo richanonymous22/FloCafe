@@ -610,8 +610,26 @@ A.kPay=async()=>{
   kFinish();
 };
 A.kPayCancel=()=>{K.payToken=null;K.screen='review';renderKiosk();};
-function kFinish(){
+async function kFinish(){
   const t=kTotals();
+  // Kiosk orders are authoritative Plemmo sales (never local-only). Commit
+  // through the same order+bill+payment path used at the register; on failure
+  // fall back to a local order so the customer still gets their receipt.
+  if(window.PlemmoKiosk&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()){
+    try{
+      const order=await PlemmoKiosk.submitOrder({type:K.type||'takeaway',items:K.items});
+      let bill;try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:order.id},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+      if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(order.id));bill=b&&b.bill;}
+      if(!bill)throw new Error('No bill');
+      await PlemmoPayments.pay(bill.id,{method:'card',amount:r2(Number(bill.total)||t.total)});
+      const o={id:uid('o'),no:bill.bill_number||order.order_number||order.id,plemmoOrderId:order.id,plemmoBillId:bill.id,ts:Date.now(),opened:Date.now(),
+        items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:Number(bill.discount_amount)||0,
+        subtotal:Number(bill.subtotal)||t.subtotal,tax:Number(bill.tax_amount)||0,total:Number(bill.total)||t.total,tip:0,payments:[{m:'card',a:Number(bill.total)||t.total}],status:'paid',pts:0,note:''};
+      S.orders.push(o);
+      if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).catch(()=>{});
+      save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();return;
+    }catch(e){/* fall back to local so the kiosk still completes */}
+  }
   const o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:0,subtotal:t.subtotal,tax:t.tax,total:t.total,tip:0,payments:[{m:'card',a:t.total}],status:'paid',pts:0,note:''};
   S.orders.push(o);
   o.items.forEach(l=>{const p=prod(l.pid);if(p&&p.stock!=null)p.stock=Math.max(0,p.stock-l.qty);});
@@ -645,7 +663,18 @@ A.userMenu=(d,el)=>{
    <div class="pop-sep"></div><button class="pop-i" data-act="theme">${ic(isDark()?'sun':'moon',18)} ${isDark()?'Light':'Dark'} theme</button><button class="pop-i" data-act="palette">${ic('search',18)} Search <kbd style="margin-left:auto">${isMac?'⌘':'Ctrl'} K</kbd></button>`);
 };
 A.clockOutLock=()=>{const e=me();clockOut(e.id);showLock();toast(`${first(e.name)} clocked out at ${fmtT(Date.now())}`);};
-A.clockInMe=()=>{clockIn(U.user);toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();};
+// Clock the signed-in operator in/out through Plemmo's authoritative timeclock,
+// mirroring the result into the local shift list for the team view. Offline
+// falls back to the local clock.
+async function plemmoClockSelf(wantIn){
+  if(!(window.PlemmoStaff&&PlemmoAPI.isAuthenticated()))return false;
+  try{
+    if(wantIn){const r=await PlemmoStaff.clockIn();const sh=r&&r.shift;if(sh&&!onShift(U.user))S.shifts.push({id:sh.id,emp:U.user,in:sh.clock_in?Date.parse(sh.clock_in):Date.now(),out:null});}
+    else{await PlemmoStaff.clockOut();const s=onShift(U.user);if(s)s.out=Date.now();}
+    save();return true;
+  }catch(e){toast((e&&e.message)||'Could not update your shift on Plemmo','warn');return true;/* handled */}
+}
+A.clockInMe=async()=>{const done=await plemmoClockSelf(true);if(!done)clockIn(U.user);toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();};
 
 document.addEventListener('click',e=>{
   const rail=$('#rail');

@@ -185,7 +185,21 @@ function editCustomer(id,after){
   const c=id?cust(id):null;
   const L=modal({title:c?'Edit customer':'New customer',body:`<div class="fgrid"><label class="field span2"><span>Name</span><input class="input" id="cuN" value="${esc(c?c.name:'')}" autofocus autocomplete="off"></label><label class="field"><span>Mobile</span><input class="input num" id="cuP" type="tel" value="${esc(c?c.phone:'')}"></label><label class="field"><span>Email, for receipts</span><input class="input" id="cuE" type="email" value="${esc(c?c.email:'')}"></label><label class="field span2"><span>Notes</span><input class="input" id="cuNo" value="${esc(c?c.notes:'')}" placeholder="For example, prefers oat milk"></label></div>`,
    foot:`${c?`<button class="btn btn-danger" id="cuDel">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="cuGo">${c?'Save':'Add customer'}</button>`});
-  L.el.querySelector('#cuGo').onclick=()=>{const n=L.el.querySelector('#cuN').value.trim();if(!n){toast('Add a name','warn');return;}const data={name:n,phone:L.el.querySelector('#cuP').value.trim(),email:L.el.querySelector('#cuE').value.trim(),notes:L.el.querySelector('#cuNo').value.trim()};let x=c;if(c)Object.assign(c,data);else{x={id:uid('c'),...data,created:Date.now(),points:0,visits:0,spend:0,last:null};S.customers.push(x);}save();L.close();if(U.view==='customers')renderView();toast(c?'Customer saved':`${first(n)} joined the loyalty scheme`);after&&after(x);};
+  L.el.querySelector('#cuGo').onclick=async()=>{const n=L.el.querySelector('#cuN').value.trim();if(!n){toast('Add a name','warn');return;}
+    const data={name:n,phone:L.el.querySelector('#cuP').value.trim(),email:L.el.querySelector('#cuE').value.trim(),notes:L.el.querySelector('#cuNo').value.trim()};
+    // Customers are authoritative in Plemmo. Create/update there, then mirror
+    // the returned record locally. Offline falls back to a local record.
+    if(window.PlemmoAPI&&PlemmoAPI.isAuthenticated()&&window.PlemmoCatalogue){
+      const btn=L.el.querySelector('#cuGo');btn.disabled=true;
+      try{
+        let saved;
+        if(c&&c.id){const r=await PlemmoAPI.put('/customers/'+encodeURIComponent(c.id),data);saved=r&&(r.customer||r.data||r);Object.assign(c,PlemmoCatalogue.mapCustomer(saved||{}),{id:c.id});}
+        let nx=c;if(!c){const r=await PlemmoAPI.post('/customers',data,{idempotent:true});saved=r&&(r.customer||r.data||r);nx=PlemmoCatalogue.mapCustomer(saved||{});S.customers.push(nx);}
+        L.close();if(U.view==='customers')renderView();toast(c?'Customer saved':`${first(n)} joined the loyalty scheme`);after&&after(nx);
+      }catch(e){btn.disabled=false;toast((e&&e.message)||'Could not save the customer on Plemmo','warn');}
+      return;
+    }
+    let x=c;if(c)Object.assign(c,data);else{x={id:uid('c'),...data,created:Date.now(),points:0,visits:0,spend:0,last:null};S.customers.push(x);}save();L.close();if(U.view==='customers')renderView();toast(c?'Customer saved':`${first(n)} joined the loyalty scheme`);after&&after(x);};
   const del=L.el.querySelector('#cuDel');if(del)del.onclick=async()=>{if(!await confirmBox({title:`Delete ${c.name}?`,text:'Their points are lost. Past orders stay in your history without their name.',ok:'Delete customer',danger:true}))return;S.customers=S.customers.filter(x=>x!==c);save();L.close();renderView();toast('Customer deleted');};
 }
 
@@ -227,7 +241,14 @@ VIEWS.team=()=>{
 };
 A.tmTab=d=>{U.team.tab=d.t;renderView();};
 A.tmWeek=d=>{U.team.week=+d.w;renderView();};
-A.tmClock=d=>{const e=emp(d.id);if(onShift(e.id)){clockOut(e.id);toast(`${first(e.name)} clocked out`);}else{clockIn(e.id);toast(`${first(e.name)} clocked in`);}renderView();};
+A.tmClock=async d=>{const e=emp(d.id);const wasOn=onShift(e.id);
+  // Plemmo's timeclock is self-service: the signed-in operator clocks through
+  // the authoritative API. Clocking a different team member stays local (an
+  // admin clock endpoint would be needed to make that authoritative too).
+  if(e.id===U.user&&typeof plemmoClockSelf==='function'&&window.PlemmoStaff&&PlemmoAPI.isAuthenticated()){
+    await plemmoClockSelf(!wasOn);toast(`${first(e.name)} clocked ${wasOn?'out':'in'}`);renderView();return;
+  }
+  if(wasOn){clockOut(e.id);toast(`${first(e.name)} clocked out`);}else{clockIn(e.id);toast(`${first(e.name)} clocked in`);}renderView();};
 CH.perm=(v,el)=>{const r=S.roles[el.dataset.r],p=el.dataset.p;if(el.checked){if(!r.perms.includes(p))r.perms.push(p);}else r.perms=r.perms.filter(x=>x!==p);save();toast(`${r.label}s ${el.checked?'can now':'can no longer'} ${permLabel(p).toLowerCase()}`);};
 A.tmEdit=d=>{
   const e=d.id?emp(d.id):null;let color=e?e.color:EMP_COLORS[S.employees.length%EMP_COLORS.length];

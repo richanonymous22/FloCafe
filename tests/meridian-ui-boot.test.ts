@@ -162,6 +162,29 @@ async function run() {
     const dinePaid = db.prepare(`SELECT payment_status FROM bills WHERE id = ?`).get(dineBill.id) as any;
     assert(dinePaid.payment_status === 'paid', 'the dine-in bill is settled authoritatively');
 
+    // 11. Customer create (what the customer dialog runs): authoritative row.
+    const custCreate = await win.PlemmoAPI.post('/customers', { name: 'Sam Test', phone: '07123456789', email: 's@x.com' }, { idempotent: true });
+    const newCust = custCreate.customer || custCreate.data || custCreate;
+    assert(!!newCust.id, 'customer created via the API');
+    const dbCust = db.prepare(`SELECT name FROM customers WHERE id = ?`).get(newCust.id) as any;
+    assert(dbCust && dbCust.name === 'Sam Test', 'customer persisted authoritatively');
+
+    // 12. Kiosk submit (what kFinish runs): authoritative kiosk sale.
+    const kioskOrder = await win.PlemmoKiosk.submitOrder({ type: 'takeaway', items: [{ pid: 'p-latte', qty: 1, mods: [] }] });
+    const kBillRes = await win.PlemmoAPI.post('/bills/generate', { order_id: kioskOrder.id }, { idempotent: true });
+    const kBill = kBillRes.bill || (await win.PlemmoAPI.get('/bills/order/' + kioskOrder.id)).bill;
+    await win.PlemmoPayments.pay(kBill.id, { method: 'card', amount: Number(kBill.total) });
+    const kPaid = db.prepare(`SELECT payment_status FROM bills WHERE id = ?`).get(kBill.id) as any;
+    assert(kPaid.payment_status === 'paid', 'the kiosk order is an authoritative settled sale');
+
+    // 13. Self timeclock (what clockInMe runs): authoritative shift.
+    const ci = await win.PlemmoStaff.clockIn();
+    assert(ci.shift && !ci.shift.clock_out, 'clock-in opens an authoritative shift');
+    const co = await win.PlemmoStaff.clockOut();
+    assert(co.shift && !!co.shift.clock_out, 'clock-out closes it');
+    const shiftRow = db.prepare(`SELECT clock_out FROM staff_shifts WHERE user_id = 'u-own' ORDER BY clock_in DESC LIMIT 1`).get() as any;
+    assert(shiftRow && !!shiftRow.clock_out, 'the shift is recorded authoritatively');
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

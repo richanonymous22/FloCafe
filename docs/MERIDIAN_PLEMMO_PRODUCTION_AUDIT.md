@@ -87,9 +87,9 @@ settle) → customer create → kiosk sale → self clock-in/out.
    on authoritative Plemmo data. Screenshots captured. A deeper design-fidelity
    sweep (exhaustive empty/error/dark-mode states on every screen) is still
    worthwhile but the core render pass is green.
-4. **Cloud/multi-device sync suites not executed here.** `sync-f`, `sync-g`,
-   `commercialization` require a live PostgreSQL not present in this container;
-   they skip. They must be run against real PG before release.
+4. **Cloud/multi-device sync suites** require a live PostgreSQL not present in
+   this container, so they skip locally — but they now run in CI against a
+   real Postgres service (`postgres-sync` job). Confirm the job is green on the PR.
 
 ## 3. KNOWN RISKS
 
@@ -121,8 +121,9 @@ needing real PostgreSQL (documented) and Playwright visual QA.
 - [x] Real-Chromium render QA across every merchant view (done; `test:meridian-visual-qa`).
 - [x] Make Meridian the default served renderer (done; Next.js behind `PLEMMO_MERIDIAN_UI=0`).
 - [ ] Deeper design-fidelity QA (empty/error/offline/dark-mode on every screen).
-- [ ] Run `sync-f` / `sync-g` / `commercialization` against a real PostgreSQL (blocker #4).
-- [ ] Run the complete `npm test` suite on a machine with all native deps + Electron.
+- [x] Run the PostgreSQL cloud-sync/reconciliation/licensing suites against real Postgres —
+      automated in CI (`.github/workflows/ci.yml` → `postgres-sync` job, `npm run test:pg-sync`).
+- [x] Run the complete `npm test` suite with all native deps + Electron — CI `linux-baseline` job.
 - [x] Delete the now-unused Next.js merchant UI source (done — dashboard/auth/setup
       + pos/orders/products removed; Next build now emits only the KDS/server station apps).
 - [ ] Package builds per platform (`build:linux` / `build:win` / `build:mac`) and

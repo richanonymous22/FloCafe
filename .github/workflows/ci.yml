@@ -167,3 +167,62 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 10
+
+  # 6. PostgreSQL cloud-sync suites
+  # The sync / commercialization / platform-hardening suites self-skip without a
+  # reachable PostgreSQL. This job stands one up and runs them for real, so the
+  # multi-device sync, reconciliation and licensing paths are verified in CI
+  # rather than perpetually skipped.
+  postgres-sync:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.db == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: plemmo
+          POSTGRES_PASSWORD: plemmo_dev_pw
+          POSTGRES_DB: plemmo_sync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U plemmo -d plemmo_sync_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PLEMMO_CLOUD_DB_URL: postgres://plemmo:plemmo_dev_pw@127.0.0.1:5432/plemmo_sync_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npx @electron/rebuild -f -w better-sqlite3 || npm rebuild better-sqlite3
+
+      - name: Build main backend process
+        run: npm run build
+
+      - name: Wait for PostgreSQL and verify connectivity
+        # Fail the job (rather than let the suites silently self-skip) if the DB
+        # is not actually reachable — the whole point of this job is to run them.
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5432 -U plemmo -d plemmo_sync_test; then break; fi
+            sleep 2
+          done
+          PGPASSWORD=plemmo_dev_pw psql -h 127.0.0.1 -U plemmo -d plemmo_sync_test -c 'SELECT 1;'
+
+      - name: PostgreSQL cloud-sync + reconciliation + licensing suites
+        run: npm run test:pg-sync
+        env:
+          PLEMMO_CLOUD_DB_URL: postgres://plemmo:plemmo_dev_pw@127.0.0.1:5432/plemmo_sync_test

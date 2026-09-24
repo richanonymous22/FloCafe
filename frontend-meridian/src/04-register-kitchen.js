@@ -519,9 +519,22 @@ function showReceipt(o,{change=0,fresh=false}={}){
 A.printRc=()=>toast('Sent to the receipt printer');
 A.emailRc=async d=>{
   const o=orderOf(d.id),cu=o&&o.custId?cust(o.custId):null;
-  if(cu&&cu.email){toast(`Receipt emailed to ${cu.email}`);return;}
-  const v=await promptBox({title:'Email the receipt',label:'Email address',type:'email',placeholder:'name@example.com',ok:'Send receipt'});
-  if(v&&/.+@.+\..+/.test(v))toast(`Receipt emailed to ${v.trim()}`);else if(v)toast('That email address doesn’t look right','warn');
+  let to=cu&&cu.email?cu.email:null;
+  if(!to){
+    const v=await promptBox({title:'Email the receipt',label:'Email address',type:'email',placeholder:'name@example.com',ok:'Send receipt'});
+    if(!v)return;
+    if(!/.+@.+\..+/.test(v)){toast('That email address doesn’t look right','warn');return;}
+    to=v.trim();
+  }
+  // Record the digital-receipt request authoritatively against the Plemmo bill.
+  // (The desktop build has no mail transport; Plemmo records the request and
+  // returns the receipt payload — it never silently claims a mail was sent.)
+  if(window.PlemmoReceipts&&o&&o.plemmoBillId&&PlemmoAPI.isAuthenticated()){
+    try{await PlemmoReceipts.deliver(o.plemmoBillId,'email',to);toast(`Receipt for ${to} recorded on Plemmo`);}
+    catch(e){toast((e&&e.message)||'Could not record the receipt on Plemmo','warn');}
+    return;
+  }
+  toast(`Receipt prepared for ${to}`);
 };
 
 /* =====================================================================

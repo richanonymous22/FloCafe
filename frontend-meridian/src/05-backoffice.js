@@ -96,7 +96,21 @@ A.stockAdj=d=>{
     if(m){st.mode=m.dataset.m;st.qty=st.mode==='count'?p.stock:st.mode==='waste'?1:12;st.reason=st.mode==='waste'?'Out of date':st.mode==='count'?'Stock count':'Delivery';draw();}
     if(s){st.qty=Math.max(0,st.qty+(+s.dataset.s));draw();}
     if(r){st.reason=r.dataset.r;draw();}});
-  L.el.querySelector('#saGo').onclick=()=>{const before=p.stock;p.stock=st.mode==='receive'?p.stock+st.qty:st.mode==='waste'?Math.max(0,p.stock-st.qty):st.qty;
+  L.el.querySelector('#saGo').onclick=async()=>{
+    const before=p.stock;
+    // Plemmo owns the single stock ledger. Post the adjustment there and take
+    // the authoritative balance back; only fall back to a local change offline.
+    if(window.PlemmoInventory&&PlemmoAPI.isAuthenticated()){
+      const btn=L.el.querySelector('#saGo');btn.disabled=true;
+      try{
+        const res=await PlemmoInventory.adjust(st.mode,p.id,st.qty,before,st.reason);
+        if(res&&res.movement&&typeof res.movement.balance_after==='number')p.stock=res.movement.balance_after;
+        else if(res&&res.noop){/* no change */}
+        L.close();renderView();renderRail();toast(`${p.name}: ${p.stock} in stock`);
+      }catch(e){btn.disabled=false;toast((e&&e.status===403)?'You don’t have permission to adjust stock':(e&&e.message)||'Could not update stock on Plemmo','warn');}
+      return;
+    }
+    p.stock=st.mode==='receive'?p.stock+st.qty:st.mode==='waste'?Math.max(0,p.stock-st.qty):st.qty;
     S.stockLog.push({id:uid('sl'),ts:Date.now(),pid:p.id,name:p.name,change:p.stock-before,kind:st.mode,reason:st.reason,by:U.user,after:p.stock});save();L.close();renderView();renderRail();toast(`${p.name}: ${p.stock} in stock`);};
   draw();
 };

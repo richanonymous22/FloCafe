@@ -124,6 +124,19 @@ async function run() {
     const tip = db.prepare(`SELECT COALESCE(SUM(tip_minor),0) AS t FROM payments WHERE bill_id = ?`).get(bill.id) as any;
     assert(tip.t === 100, `the £1 tip is persisted authoritatively (got ${tip.t})`);
 
+    // 7. Stock adjust path (what the items handler runs): adjust via the browser
+    // adapter and apply the authoritative balance back into local state.
+    const recv = await win.PlemmoInventory.receive('p-latte', 15, 'Delivery');
+    assert(recv.movement && recv.movement.balance_after === 15, `stock receive returns authoritative balance (got ${recv.movement && recv.movement.balance_after})`);
+    win.PlemmoInventory.applyBalance(win.__meridian.S, 'p-latte', recv.movement.balance_after);
+    assert((win.__meridian.S.products.find((p: any) => p.id === 'p-latte') || {}).stock === 15, 'local stock reflects the authoritative balance');
+    const ledger = db.prepare(`SELECT COUNT(*) AS n FROM inventory_movements WHERE product_id = 'p-latte'`).get() as any;
+    assert(ledger.n >= 1, 'the adjustment is in the single Plemmo ledger');
+
+    // 8. Digital-receipt request recorded authoritatively (what emailRc runs).
+    const deliver = await win.PlemmoReceipts.deliver(bill.id, 'email', 'guest@x.com');
+    assert(deliver.delivery && deliver.delivery.status === 'recorded' && !!deliver.receipt, 'receipt delivery recorded with payload');
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

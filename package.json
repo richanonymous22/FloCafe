@@ -17,6 +17,7 @@
     "lint:backend": "eslint main/ cloud/",
     "lint": "npm run lint:backend && cd frontend && npm run lint",
     "build:frontend": "cd frontend && npm ci && npx cross-env NEXT_BUILD_MODE=desktop npm run build",
+    "build:meridian": "bash frontend-meridian/build.sh",
     "build:all-platforms": "npm run build:frontend && npm run build && electron-builder --win --mac --linux",
     "postinstall": "install-electron && electron-builder install-app-deps && npm run verify:electron",
     "verify:electron": "node scripts/verify-electron-runtime.cjs",
@@ -224,6 +225,10 @@
       {
         "from": "frontend/out",
         "to": "frontend-out"
+      },
+      {
+        "from": "frontend-meridian/dist",
+        "to": "meridian"
       }
     ],
     "win": {

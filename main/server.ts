@@ -104,6 +104,35 @@ function getFrontendDir(): string | null {
 }
 
 /**
+ * Whether the Meridian frontend should be served as the active merchant UI.
+ *
+ * Meridian → Plemmo integration (docs/MERIDIAN_PLEMMO_MASTER_INTEGRATION.md):
+ * the built Meridian bundle replaces the Next.js export as the rendered app.
+ * Gated behind an env flag during the staged migration so the current app is
+ * never broken — flip `PLEMMO_MERIDIAN_UI=1` to serve Meridian.
+ */
+export function isMeridianUiEnabled(): boolean {
+  return process.env.PLEMMO_MERIDIAN_UI === '1' || process.env.PLEMMO_MERIDIAN_UI === 'true';
+}
+
+/**
+ * Locate the built Meridian bundle (single self-contained HTML file).
+ *
+ * Dev build → <repo-root>/frontend-meridian/dist/meridian-pos.html
+ * Packaged  → <resourcesPath>/meridian/meridian-pos.html (electron-builder extraResources)
+ */
+function getMeridianFile(): string | null {
+  const candidates = [
+    path.join(__dirname, '../frontend-meridian/dist/meridian-pos.html'),
+    path.join(process.resourcesPath || '', 'meridian', 'meridian-pos.html'),
+  ];
+  for (const file of candidates) {
+    if (fs.existsSync(file)) return file;
+  }
+  return null;
+}
+
+/**
  * Helper to rewrite dotted Next.js static segment file requests to nested paths on Windows.
  * E.g., /products/__next.!KGRhc2hib2FyZCk.products.__PAGE__.txt -> /products/__next.!KGRhc2hib2FyZCk/products/__PAGE__.txt
  */
@@ -158,14 +187,18 @@ export function startServer(): Promise<void> {
     // ── Content Security Policy ────────────────────────────────────────
     // Blocks eval() and remote code. 'unsafe-inline' is required for
     // Next.js RSC hydration scripts and Tailwind-generated style tags.
+    // Meridian links Google Fonts (degrades to system fonts offline); allow
+    // those origins for style/font only when Meridian is the active UI.
+    const fontStyleSrc = isMeridianUiEnabled() ? " https://fonts.googleapis.com" : "";
+    const fontSrc = isMeridianUiEnabled() ? " https://fonts.gstatic.com" : "";
     app.use((_req: Request, res: Response, next: NextFunction) => {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Content-Security-Policy',
         "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
-        "style-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'" + fontStyleSrc + "; " +
         "img-src 'self' data:; " +
-        "font-src 'self' data:; " +
+        "font-src 'self' data:" + fontSrc + "; " +
         "connect-src 'self' http://localhost:3000 http://localhost:3001 http://localhost:3002 http://localhost:3003 ws://localhost:3001 ws://localhost:3002; " +
         "frame-ancestors 'none'"
       );
@@ -190,10 +223,31 @@ export function startServer(): Promise<void> {
     // ── All API routes ─────────────────────────────────────────────────
     registerRoutes(app);
 
-    // ── Serve Next.js static export ────────────────────────────────────
+    // ── Serve Meridian bundle (active merchant UI when flag is set) ─────
     // Must come AFTER API routes so /api/* is not caught by the SPA fallback.
-    const frontendDir = getFrontendDir();
-    if (frontendDir) {
+    const meridianFile = isMeridianUiEnabled() ? getMeridianFile() : null;
+    const frontendDir = meridianFile ? null : getFrontendDir();
+    if (meridianFile) {
+      console.log(`[Server] Serving Meridian frontend from: ${meridianFile}`);
+      // Serve any sibling assets (future split-out files) then fall back to the
+      // single-page bundle for every non-API, non-KDS route.
+      app.use(express.static(path.dirname(meridianFile), { dotfiles: 'deny', index: false }));
+      app.get(/^(?!\/api|\/kds).*$/, (_req: Request, res: Response) => {
+        res.sendFile(meridianFile);
+      });
+    } else if (isMeridianUiEnabled()) {
+      console.warn('[Server] PLEMMO_MERIDIAN_UI is set but the Meridian bundle was not found. Run `npm run build:meridian`.');
+      app.get(/^(?!\/api|\/kds).*$/, (_req: Request, res: Response) => {
+        res.status(200).send(`
+          <html><body style="font-family:sans-serif;padding:2rem">
+            <h2>Plemmo – Meridian frontend not built</h2>
+            <p>Run <code>npm run build:meridian</code> then restart the app.</p>
+          </body></html>
+        `);
+      });
+    } else if (frontendDir) {
+      // ── Serve Next.js static export ──────────────────────────────────
+      // Must come AFTER API routes so /api/* is not caught by the SPA fallback.
       console.log(`[Server] Serving frontend from: ${frontendDir}`);
 
       // Middleware to patch Windows-specific Next.js static export path nesting.

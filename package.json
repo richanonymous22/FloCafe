@@ -69,6 +69,7 @@
     "test:plemmo-cash": "node tests/run-electron-node-test.cjs tests/plemmo-cash.test.ts",
     "test:meridian-cash-adapter": "node tests/run-electron-node-test.cjs tests/meridian-cash-adapter.test.ts",
     "test:meridian-inventory": "node tests/run-electron-node-test.cjs tests/meridian-inventory.test.ts",
+    "test:meridian-tables": "node tests/run-electron-node-test.cjs tests/meridian-tables.test.ts",
     "test:payment-methods-split": "node tests/run-electron-node-test.cjs tests/payment-methods-split-checks.test.ts",
     "test:kds-integration": "node tests/run-electron-node-test.cjs tests/kds-integration.test.ts",
     "test:kds-contract": "node tests/run-electron-node-test.cjs tests/kds-contract.test.ts",

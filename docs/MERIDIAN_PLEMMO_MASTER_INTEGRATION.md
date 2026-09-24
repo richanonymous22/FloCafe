@@ -216,7 +216,7 @@ is UI/temporary + offline cache only.
 | Core POS — order write path | Meridian cart → Plemmo sale, **authoritative totals/tax**, idempotency (adapter + tests) | **✅ adapter complete & verified**; wiring into Meridian's live pay/checkout button is Phase 3 work (not yet wired, to avoid a half-integrated pay flow) |
 | 3. Payments + Cash | split/partial/tips/change/refund/void; **new backend: tips, cash sessions, denomination counting, drawer reconciliation** | **✅ backend complete & verified** + client adapter; wiring into Meridian's live pay/drawer buttons pending (adapters ready) |
 | 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo (single ledger, no second stockLog) | **✅ complete & verified** (adapter + client; reuses existing Plemmo ledger — no backend change) |
-| 5. Hospitality | tables/floor-plan (**backend gap: geometry**)/KDS/collection board | ⏳ not started |
+| 5. Hospitality | tables/floor-plan (**geometry gap now filled**)/KDS/collection board/kiosk | **✅ complete & verified** (migration v92 + adapters) |
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (backend gap)** | ⏳ not started |
 | 7. Reports / AI / Receipts | reports on authoritative data; **AI service (backend gap)**; digital receipts | ⏳ not started |
 | 8. Offline / Sync | integrate Plemmo outbox/idempotency/conflict; remove localStorage-as-truth | ⏳ not started |
@@ -285,3 +285,18 @@ is UI/temporary + offline cache only.
   no drift, and the negative-stock guard); backend regressions
   `plemmo-inventory` (43), `plemmo-purchasing` (53), `plemmo-multi-location`
   (42) all green.
+- **2026-09-24** — **Tables / Floor Plan / KDS / Kiosk phase complete &
+  verified.** Backend gap filled: **migration v92** adds floor-plan geometry
+  (`shape`, `size`, `width`, `height`, `rotation`) to `tables` alongside the
+  existing `position_x/y` + `capacity`; the tables create/update routes now
+  persist and return it, so the floor plan is authoritative backend data (not
+  frontend/localStorage) and safe for multi-device/location use. New client
+  `03g-plemmo-tables.js`: `PlemmoTables` (map ↔ Meridian, list/load,
+  create/saveLayout/saveAll for the drag editor, setStatus), `PlemmoKDS`
+  (real tickets + item-status transitions + collection board), `PlemmoKiosk`
+  (kiosk orders via the authoritative order-commit path — never local-only).
+  Verified: `test:meridian-tables` (pure mappers + a live contract test:
+  geometry create/persist, list round-trip, independent-read consistency, a
+  layout edit that stays durable on re-read, KDS reachable); regressions
+  `issue-134-mgmt` (29), `tables-string-ids`, `kds-integration`,
+  `schema-health`, `upgrade-path`, `migration-v56-v57` all green.

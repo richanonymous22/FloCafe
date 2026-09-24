@@ -93,7 +93,8 @@ router.get('/:id', (req: Request, res: Response) => {
 router.post('/', requireRole('owner', 'manager'), requireFeature('hospitality.tables'), (req: Request, res: Response) => {
   try {
     // Accept `number` (schema column) or `name` (legacy frontend field)
-    const { number, name, capacity, floor, section, position_x, position_y, kitchen_station_id } = req.body;
+    const { number, name, capacity, floor, section, position_x, position_y, kitchen_station_id,
+      shape, size, width, height, rotation } = req.body;
     const tableNumber = number || name;
 
     if (!tableNumber) {
@@ -112,11 +113,13 @@ router.post('/', requireRole('owner', 'manager'), requireFeature('hospitality.ta
 
     const tableId = `tbl-${randomUUID().slice(0, 8)}`;
     const result = db.prepare(`
-      INSERT INTO tables (id, number, capacity, floor, section, position_x, position_y, kitchen_station_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tables (id, number, capacity, floor, section, position_x, position_y, kitchen_station_id,
+        shape, size, width, height, rotation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       tableId, tableNumber, capacity || 4, floor || null, section || null,
-      position_x || null, position_y || null, kitchen_station_id || null, now(), now()
+      position_x ?? null, position_y ?? null, kitchen_station_id || null,
+      shape || null, size || null, width ?? null, height ?? null, rotation ?? 0, now(), now()
     );
 
     const table = db.prepare('SELECT * FROM tables WHERE id = ?').get(tableId);
@@ -129,7 +132,8 @@ router.post('/', requireRole('owner', 'manager'), requireFeature('hospitality.ta
 
 router.put('/:id', requireRole('owner', 'manager'), (req: Request, res: Response) => {
   try {
-    const { number, name, capacity, floor, section, position_x, position_y, kitchen_station_id } = req.body;
+    const { number, name, capacity, floor, section, position_x, position_y, kitchen_station_id,
+      shape, size, width, height, rotation } = req.body;
     const tableNumber = number || name;
     const db = getDatabase();
 
@@ -154,9 +158,15 @@ router.put('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
         position_x = COALESCE(?, position_x),
         position_y = COALESCE(?, position_y),
         kitchen_station_id = COALESCE(?, kitchen_station_id),
+        shape = COALESCE(?, shape),
+        size = COALESCE(?, size),
+        width = COALESCE(?, width),
+        height = COALESCE(?, height),
+        rotation = COALESCE(?, rotation),
         updated_at = ?
       WHERE id = ?
-    `).run(tableNumber, capacity, floor, section, position_x, position_y, kitchen_station_id, now(), req.params.id);
+    `).run(tableNumber, capacity, floor, section, position_x, position_y, kitchen_station_id,
+      shape ?? null, size ?? null, width ?? null, height ?? null, rotation ?? null, now(), req.params.id);
 
     const updated = db.prepare('SELECT * FROM tables WHERE id = ?').get(req.params.id);
     res.json({ table: updated });

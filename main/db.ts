@@ -5200,6 +5200,23 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 92,
+    name: 'tables_floor_plan_geometry',
+    up: () => {
+      // FLOOR PLAN (Meridian integration). Persist the geometry a real
+      // floor-plan editor needs so table layout is authoritative backend data,
+      // not frontend/localStorage. Additive only — position_x/position_y and
+      // capacity already exist; these add shape, size and free-form geometry.
+      const cols = db.prepare(`PRAGMA table_info(tables)`).all() as { name: string }[];
+      const has = (c: string) => cols.some((x) => x.name === c);
+      if (!has('shape')) db.exec(`ALTER TABLE tables ADD COLUMN shape TEXT`);       // 'round' | 'square' | 'rect'
+      if (!has('size')) db.exec(`ALTER TABLE tables ADD COLUMN size TEXT`);         // 's' | 'm' | 'l' (Meridian sizing hint)
+      if (!has('width')) db.exec(`ALTER TABLE tables ADD COLUMN width REAL`);       // optional explicit geometry
+      if (!has('height')) db.exec(`ALTER TABLE tables ADD COLUMN height REAL`);
+      if (!has('rotation')) db.exec(`ALTER TABLE tables ADD COLUMN rotation REAL DEFAULT 0`);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

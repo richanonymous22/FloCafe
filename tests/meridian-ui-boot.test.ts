@@ -150,6 +150,18 @@ async function run() {
     const dbSess = db.prepare(`SELECT status, variance_minor FROM cash_sessions WHERE id = ?`).get(sessId) as any;
     assert(dbSess.status === 'closed' && dbSess.variance_minor === -200, 'the cash session is closed authoritatively with its variance');
 
+    // 10. Dine-in path (what sendKitchen + dine-in checkout run): open a dine_in
+    // order, append a course, then bill + pay the same authoritative order.
+    const dineOrder = await win.PlemmoOrders.createOrder({ type: 'dine', items: [{ pid: 'p-latte', qty: 1, mods: [] }] }, win.__meridian.S._plemmoAddons);
+    assert(dineOrder.type === 'dine_in', `dine order uses the dine_in channel (got ${dineOrder.type})`);
+    await win.PlemmoAPI.post('/orders/' + dineOrder.id + '/items', { items: [{ product_id: 'p-latte', quantity: 1 }] }, { idempotent: true });
+    const dineBillRes = await win.PlemmoAPI.post('/bills/generate', { order_id: dineOrder.id }, { idempotent: true });
+    const dineBill = dineBillRes.bill || (await win.PlemmoAPI.get('/bills/order/' + dineOrder.id)).bill;
+    assert(Math.abs(dineBill.total - 6.8) < 0.01, `dine-in bill reflects the appended course (2x Latte = 6.80, got ${dineBill.total})`);
+    await win.PlemmoPayments.paySplit(dineBill.id, [{ method: 'card', amount: 6.8 }]);
+    const dinePaid = db.prepare(`SELECT payment_status FROM bills WHERE id = ?`).get(dineBill.id) as any;
+    assert(dinePaid.payment_status === 'paid', 'the dine-in bill is settled authoritatively');
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

@@ -305,6 +305,12 @@ A.sendKitchen=async()=>{
   if(c.type==='dine'&&!c.table&&S.settings.tables){const t=await pickTable();if(!t)return;c.table=t;}
   const unsent=c.items.filter(l=>!l.sent);
   if(!unsent.length){toast('The kitchen already has everything on this order');return;}
+  // Send to the kitchen through Plemmo so the order is an authoritative sale on
+  // the real KDS. On failure, save locally so the kitchen still gets it.
+  if(window.PlemmoOrders&&PlemmoAPI.isAuthenticated()){
+    try{ await sendKitchenPlemmo(c,unsent); return; }
+    catch(e){ toast('Could not reach Plemmo — order saved locally','warn'); }
+  }
   let o=c.orderId?orderOf(c.orderId):null;
   if(!o){o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0};S.orders.push(o);}
   writeOrderFromCart(o,c);
@@ -315,6 +321,26 @@ A.sendKitchen=async()=>{
   U.cart=newCart();U.selLine=null;save();refreshPos();renderRail();
   toast(`Sent to the kitchen${tb?' for table '+tb.name:''}`,'',{action:'View table',onAction:()=>go('tables')});
 };
+async function sendKitchenPlemmo(c,unsent){
+  let o=c.orderId?orderOf(c.orderId):null;
+  if(o&&o.plemmoOrderId){
+    // Append the new items to the existing authoritative order.
+    const items=unsent.map(l=>PlemmoOrders.cartLineToItem(l,S._plemmoAddons));
+    await PlemmoAPI.post('/orders/'+encodeURIComponent(o.plemmoOrderId)+'/items',{items:items},{idempotent:true});
+  }else{
+    const order=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:unsent},S._plemmoAddons);
+    o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0,
+       subtotal:Number(order.subtotal)||0,tax:Number(order.tax_amount)||0,total:Number(order.total)||0};
+    S.orders.push(o);
+  }
+  writeOrderFromCart(o,c);
+  addTicket(o,unsent);
+  unsent.forEach(l=>l.sent=true);
+  o.items=clone(c.items);
+  const tb=c.table?tableOf(c.table):null;
+  U.cart=newCart();U.selLine=null;save();refreshPos();renderRail();
+  toast(`Sent to the kitchen${tb?' for table '+tb.name:''}`,'',{action:'View table',onAction:()=>go('tables')});
+}
 function loadOrderToCart(o){
   U.cart={items:clone(o.items).map(l=>({...l,sent:true,uid:l.uid||uid('l')})),type:o.type,table:o.table,custId:o.custId,discount:o.discount,orderId:o.id,note:o.note||''};
   U.selLine=null;
@@ -415,7 +441,10 @@ function afterPayment(){if(payRem()<=0.004)finishSale();else renderPay();}
 // (the idempotency key makes retries safe — no double charge).
 function finishSale(){
   const c=U.cart;
-  const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&!c.orderId;
+  const existing=c.orderId?orderOf(c.orderId):null;
+  // Use the authoritative path for a fresh sale, or a dine-in order already
+  // opened in Plemmo. A local-only order (Plemmo unreachable at send) pays local.
+  const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId));
   if(usePlemmo){finishSalePlemmo().catch((e)=>{
     const msg=(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
     toast(msg,'warn');
@@ -425,12 +454,16 @@ function finishSale(){
 }
 async function finishSalePlemmo(){
   const c=U.cart;
-  // 1. Authoritative order (Plemmo computes subtotal/tax/total + deducts stock).
-  const order=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);
+  const existing=c.orderId?orderOf(c.orderId):null;
+  // 1. Authoritative order — reuse a dine-in order already opened in Plemmo,
+  // else create one now (Plemmo computes totals + deducts stock).
+  let plemmoOrderId,orderResp=null;
+  if(existing&&existing.plemmoOrderId){plemmoOrderId=existing.plemmoOrderId;}
+  else{orderResp=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);plemmoOrderId=orderResp.id;}
   // 2. Bill for the order.
   let bill;
-  try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:order.id},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-  if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(order.id));bill=b&&b.bill;}
+  try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:plemmoOrderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+  if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(plemmoOrderId));bill=b&&b.bill;}
   if(!bill)throw new Error('No bill for order');
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
@@ -440,15 +473,16 @@ async function finishSalePlemmo(){
     return line;
   });
   await PlemmoPayments.paySplit(bill.id,lines,c.custId);
-  // 4. Build a local display order from the AUTHORITATIVE result (receipt +
-  // history cache). No local stock/loyalty mutation — Plemmo already did both.
-  const o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,plemmoBillId:bill.id,
-    opened:Date.now(),ts:Date.now(),empId:U.user,closedBy:U.user,source:'pos',type:c.type,table:c.table,custId:c.custId,
+  // 4. Build/patch the local display order from the AUTHORITATIVE bill (receipt
+  // + history cache). No local stock/loyalty mutation — Plemmo already did both.
+  const o=existing||{id:uid('o'),opened:Date.now(),source:'pos'};
+  Object.assign(o,{no:bill.bill_number||(orderResp&&orderResp.order_number)||o.no||plemmoOrderId,plemmoOrderId:plemmoOrderId,plemmoBillId:bill.id,
+    ts:Date.now(),empId:o.empId||U.user,closedBy:U.user,type:c.type,table:c.table,custId:c.custId,
     items:c.items.map(l=>({...l,sent:true})),
-    subtotal:Number(order.subtotal)||cartTotals(c).subtotal,tax:Number(order.tax_amount)||0,
-    discAmt:Number(order.discount_amount)||0,total:Number(order.total)||0,
-    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:0,discount:c.discount||null};
-  S.orders.push(o);
+    subtotal:Number(bill.subtotal)||cartTotals(c).subtotal,tax:Number(bill.tax_amount)||0,
+    discAmt:Number(bill.discount_amount)||0,total:Number(bill.total)||0,
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:0,discount:c.discount||null});
+  if(!existing)S.orders.push(o);
   const change=PAY.change||0;
   PAY.done=true;PAY.L.close();PAY=null;
   U.cart=newCart();U.selLine=null;U.mobCart=false;

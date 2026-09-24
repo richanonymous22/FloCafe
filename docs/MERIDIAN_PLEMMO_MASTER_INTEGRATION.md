@@ -218,7 +218,7 @@ is UI/temporary + offline cache only.
 | 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo (single ledger, no second stockLog) | **✅ complete & verified** (adapter + client; reuses existing Plemmo ledger — no backend change) |
 | 5. Hospitality | tables/floor-plan (**geometry gap now filled**)/KDS/collection board/kiosk | **✅ complete & verified** (migration v92 + adapters) |
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (gap now filled)** | **✅ complete & verified** (migration v93 + adapters) |
-| 7. Reports / AI / Receipts | reports on authoritative data; **AI service (backend gap)**; digital receipts | ⏳ not started |
+| 7. Reports / AI / Receipts | reports on authoritative data; **AI service (built)**; **digital receipts (built)** | **✅ complete & verified** (AI service + receipt endpoints + migration v94) |
 | 8. Offline / Sync | integrate Plemmo outbox/idempotency/conflict; remove localStorage-as-truth | ⏳ not started |
 | 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
 | 10. Final production audit | end-to-end verification + release checklist | ⏳ not started |
@@ -316,3 +316,24 @@ is UI/temporary + offline cache only.
   gold/bronze tiers from a real order's spend); regressions `staff-authz` (36),
   `customer-auth` (21), `plemmo-access-control` (42), `schema-health`,
   `upgrade-path` all green.
+- **2026-09-24** — **Reports / Digital Receipts / AI phase complete & verified.**
+  Reports API already covered Meridian's needs (client adapter only). Two
+  backend capabilities built: (a) **digital receipts** — `main/core/receipt-
+  digital.ts` assembles an authoritative receipt (items, totals, tax breakdown,
+  payments incl. tips, footer) + rendered text; `GET /api/bills/:id/receipt`
+  and `POST /api/bills/:id/receipt/deliver` (migration **v94** `receipt_
+  deliveries`, auditable — the desktop build has no mail transport, so a request
+  is *recorded* with the payload, never silently "sent"); (b) **AI assistant** —
+  `main/core/ai.ts` + `main/routes/ai.ts`: **advisory only**, answers over an
+  authoritative snapshot built from real data, **permission-gated**
+  (`reports.view`), **audited** (`ai.query`), and **incapable of mutation**;
+  local rule engine is the always-on authoritative source, with an optional
+  Claude API phrasing path (grounded in the same snapshot) when
+  `ANTHROPIC_API_KEY` is set. New client `03i-plemmo-reports.js` (`PlemmoReports`,
+  `PlemmoReceipts`, `PlemmoAI`). Verified: `test:meridian-reports-ai` (reports
+  read; authoritative receipt incl. tip + recorded delivery; AI answers real
+  figures, cashier-without-`reports.view` **403**, **no mutations**, each query
+  audited); regressions `bills-print-api` (23), `receipt-printing` (8),
+  `integration-payments` (33), `schema-health`, `upgrade-path` green.
+  (`reports-insights` shows 6 pre-existing, time-of-day-dependent failures
+  present on the base commit — unrelated to this work.)

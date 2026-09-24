@@ -5247,6 +5247,30 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       insertSettingIfMissing('loyalty_tier_gold_spend', '300');
     },
   },
+  {
+    version: 94,
+    name: 'digital_receipt_deliveries',
+    up: () => {
+      // DIGITAL RECEIPTS (Meridian integration). Auditable log of digital
+      // receipt requests (email/SMS/share-link). The desktop build has no mail
+      // transport, so a request is RECORDED with the authoritative receipt
+      // payload for the client to deliver via its own channel — never a
+      // silent claim that mail was sent.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS receipt_deliveries (
+          id            TEXT PRIMARY KEY,
+          bill_id       INTEGER NOT NULL,
+          channel       TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'link')),
+          destination   TEXT,
+          status        TEXT NOT NULL DEFAULT 'recorded',
+          actor_user_id TEXT,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (bill_id) REFERENCES bills(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_receipt_deliveries_bill ON receipt_deliveries(bill_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

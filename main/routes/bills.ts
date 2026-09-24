@@ -28,6 +28,7 @@ import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-even
 import { recordAppliedPaymentLine } from '../core/payment';
 import { recordCashSaleForPayment } from '../core/cash';
 import { getCurrentLocationId } from '../core/location';
+import { buildDigitalReceipt, recordReceiptDelivery } from '../core/receipt-digital';
 import { ulid } from '../core/ids';
 
 const router = Router();
@@ -1022,6 +1023,36 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
     const statusCode = error.statusCode || 500;
     console.error('[API] Bill discount failed:', error);
     res.status(statusCode).json({ error: statusCode >= 500 ? 'Internal server error' : error.message });
+  }
+});
+
+// GET /:id/receipt — authoritative digital receipt payload (JSON + text).
+router.get('/:id/receipt', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    res.json({ receipt: buildDigitalReceipt(req.params.id as string) });
+  } catch (error: any) {
+    const status = error?.statusCode || 500;
+    if (status >= 500) console.error('[API] Digital receipt failed:', error);
+    res.status(status).json({ error: status >= 500 ? 'Internal server error' : error.message });
+  }
+});
+
+// POST /:id/receipt/deliver — record a digital-receipt request (email/sms/link)
+// and return the receipt for the client to deliver. No mail transport in the
+// desktop build, so the request is recorded, not silently "sent".
+router.post('/:id/receipt/deliver', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const { channel, destination } = req.body || {};
+    if (!['email', 'sms', 'link'].includes(channel)) {
+      return res.status(400).json({ error: 'channel must be email, sms or link' });
+    }
+    const receipt = buildDigitalReceipt(req.params.id as string);
+    const delivery = recordReceiptDelivery({ billId: req.params.id as string, channel, destination: destination ?? null, actorUserId: String((req as any).user.userId) });
+    res.status(201).json({ delivery, receipt });
+  } catch (error: any) {
+    const status = error?.statusCode || 500;
+    if (status >= 500) console.error('[API] Receipt delivery failed:', error);
+    res.status(status).json({ error: status >= 500 ? 'Internal server error' : error.message });
   }
 });
 

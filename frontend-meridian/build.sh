@@ -21,6 +21,7 @@ mkdir -p dist
       src/03f-plemmo-inventory.js \
       src/03g-plemmo-tables.js \
       src/03h-plemmo-staff.js \
+      src/03i-plemmo-reports.js \
       src/04-register-kitchen.js \
       src/05-backoffice.js \
       src/06-dashboard-ai-kiosk.js
@@ -29,7 +30,7 @@ mkdir -p dist
 
 # Optional syntax check if Node is available
 if command -v node >/dev/null 2>&1; then
-  cat src/00-plemmo-api.js src/02-data.js src/03-app-shell.js src/03b-plemmo-session.js src/03c-plemmo-catalogue.js src/03d-plemmo-orders.js src/03e-plemmo-cash.js src/03f-plemmo-inventory.js src/03g-plemmo-tables.js src/03h-plemmo-staff.js \
+  cat src/00-plemmo-api.js src/02-data.js src/03-app-shell.js src/03b-plemmo-session.js src/03c-plemmo-catalogue.js src/03d-plemmo-orders.js src/03e-plemmo-cash.js src/03f-plemmo-inventory.js src/03g-plemmo-tables.js src/03h-plemmo-staff.js src/03i-plemmo-reports.js \
       src/04-register-kitchen.js \
       src/05-backoffice.js src/06-dashboard-ai-kiosk.js > /tmp/meridian-check.js
   node --check /tmp/meridian-check.js && echo "JS syntax OK"

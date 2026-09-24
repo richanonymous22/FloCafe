@@ -53,6 +53,8 @@ export type AuditEventType =
   | 'sale.discount_applied'
   | 'payment.recorded'
   | 'payment.voided'
+  | 'receipt.delivered'
+  | 'ai.query'
   // Catalogue
   | 'product.created'
   | 'product.updated'

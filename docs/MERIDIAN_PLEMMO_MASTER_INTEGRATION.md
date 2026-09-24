@@ -240,7 +240,8 @@ verified in a real browser env via jsdom (`test:meridian-ui-boot`).
 | Cash-drawer screen → `PlemmoCash` (open/pay-in/pay-out/no-sale/close; authoritative expected + variance) | ✅ done & jsdom-verified |
 | Dine-in: seat table → send-to-kitchen creates/appends the authoritative Plemmo order (real KDS) → checkout bills + pays that order; floor-plan layout loaded from Plemmo at boot (no drag-editor UI in Meridian — `saveLayout`/`create` adapters await one) | ✅ done & jsdom-verified |
 | Customers create/edit → authoritative `/api/customers` (+ tier); kiosk submit → authoritative Plemmo sale (`PlemmoKiosk` → bill → card payment); self timeclock → `PlemmoStaff` clock-in/out | ✅ done & jsdom-verified |
-| Remaining view handlers: reports-view figures (dashboard/reports still compute over local orders) | ⏳ adapter (`PlemmoReports`) ready; view still local |
+| Reports/dashboard/Z-report/CSV → authoritative order history hydrated into `S.orders` at boot (`PlemmoOrders.history`, last 30 days) + `PlemmoReports` adapter | ✅ done & jsdom-verified |
+| **All Meridian merchant views now run on authoritative Plemmo data.** Remaining: retire the old Next.js UI (Phase 9), Playwright visual QA, real-PG cloud-sync suites | ⏳ needs a Playwright/PostgreSQL environment |
 
 ## 11. Status log
 

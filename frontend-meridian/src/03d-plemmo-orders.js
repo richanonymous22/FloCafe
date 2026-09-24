@@ -59,10 +59,69 @@
     return (res && res.order) || res;
   }
 
+  // Plemmo sale channel → Meridian order type (reverse of orderTypeToChannel).
+  const CHANNEL_TO_TYPE = { dine_in: 'dine', takeaway: 'takeaway', delivery: 'delivery', online: 'takeaway', in_store: 'retail' };
+
+  function parseMaybeJson(v, fallback) {
+    if (v == null) return fallback;
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch (e) { return fallback; }
+  }
+
+  // A full authoritative Plemmo order (with items + bills) → Meridian's order
+  // shape, so the reports/dashboard/Z-report/CSV compute over real history.
+  function mapPlemmoOrder(o) {
+    const ts = o.created_at ? (Date.parse(o.created_at) || Date.now()) : Date.now();
+    const bills = o.bills || (o.bill ? [o.bill] : []);
+    const payments = []; let tip = 0;
+    bills.forEach((b) => {
+      parseMaybeJson(b && b.payment_details, []).forEach((p) => {
+        payments.push({ m: p.method === 'cash' ? 'cash' : 'card', a: Number(p.amount) || 0 });
+        tip += Number(p.tip) || 0;
+      });
+    });
+    const paid = bills.some((b) => b && b.payment_status === 'paid') || o.status === 'completed' || o.status === 'paid';
+    const status = (o.status === 'cancelled' || o.status === 'void') ? 'void'
+      : o.status === 'refunded' ? 'refunded' : paid ? 'paid' : 'open';
+    const items = (o.items || []).map((i) => {
+      const mods = [];
+      parseMaybeJson(i.addons, []).forEach((a) => mods.push({ n: (a && (a.name || a)) || '' }));
+      return { pid: i.product_id, name: i.product_name, price: Number(i.unit_price) || 0, cost: 0,
+        qty: Number(i.quantity) || 0, mods: mods, note: i.special_instructions || '', sent: true, uid: 'l' + i.id };
+    });
+    return {
+      id: 'po' + o.id, no: o.order_number || o.id, plemmoOrderId: o.id,
+      ts: ts, opened: ts, empId: o.user_id || null,
+      type: CHANNEL_TO_TYPE[o.type] || 'takeaway', table: o.table_id || null, custId: o.customer_id || null,
+      source: 'pos', items: items,
+      subtotal: Number(o.subtotal) || 0, tax: Number(o.tax_amount) || 0, discAmt: Number(o.discount_amount) || 0,
+      total: Number(o.total) || 0, tip: Math.round(tip * 100) / 100, payments: payments, status: status, pts: 0, discount: null,
+    };
+  }
+
+  // Load recent authoritative order history (paged) mapped to Meridian's shape.
+  async function history(opts) {
+    opts = opts || {};
+    const api = window.PlemmoAPI;
+    const per = 100, max = opts.max || 400;
+    let before = null, out = [], guard = 0;
+    const range = 'start_date=' + encodeURIComponent(opts.fromDate) + (opts.toDate ? '&end_date=' + encodeURIComponent(opts.toDate) : '');
+    do {
+      const res = await api.get('/orders?per_page=' + per + '&' + range + (before ? '&before_id=' + before : ''));
+      const orders = (res && res.orders) || [];
+      for (let i = 0; i < orders.length; i++) out.push(mapPlemmoOrder(orders[i]));
+      before = res && res.nextCursor;
+      guard++;
+    } while (before && out.length < max && guard < 10);
+    return out;
+  }
+
   window.PlemmoOrders = {
     orderTypeToChannel: orderTypeToChannel,
     cartLineToItem: cartLineToItem,
     cartToOrderBody: cartToOrderBody,
-    createOrder: createOrder
+    createOrder: createOrder,
+    mapPlemmoOrder: mapPlemmoOrder,
+    history: history
   };
 })();

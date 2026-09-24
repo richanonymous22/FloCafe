@@ -185,6 +185,20 @@ async function run() {
     const shiftRow = db.prepare(`SELECT clock_out FROM staff_shifts WHERE user_id = 'u-own' ORDER BY clock_in DESC LIMIT 1`).get() as any;
     assert(shiftRow && !!shiftRow.clock_out, 'the shift is recorded authoritatively');
 
+    // 14. Reports read-path: authoritative order history (what boot hydrates into
+    // S.orders for the dashboard/reports/Z-report/CSV). Earlier steps paid a
+    // couple of counter/dine-in/kiosk orders — history must map them as paid,
+    // with real totals, items and payments.
+    const today = new Date().toISOString().slice(0, 10);
+    const hist = await win.PlemmoOrders.history({ fromDate: today, max: 100 });
+    assert(Array.isArray(hist) && hist.length >= 3, `order history returns the paid orders (got ${hist.length})`);
+    const paidOrders = hist.filter((o: any) => o.status === 'paid');
+    assert(paidOrders.length >= 3, 'history maps completed orders as paid');
+    const withItems = hist.find((o: any) => o.items && o.items.length && o.total > 0);
+    assert(!!withItems, 'mapped history orders carry items + authoritative totals');
+    const anyPayment = hist.find((o: any) => o.payments && o.payments.length);
+    assert(!!anyPayment && (anyPayment.payments[0].m === 'cash' || anyPayment.payments[0].m === 'card'), 'mapped history carries payment method (for the payment-mix report)');
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

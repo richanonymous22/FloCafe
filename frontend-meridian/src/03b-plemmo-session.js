@@ -122,6 +122,16 @@ async function bootstrapFromPlemmo() {
   } catch (e) { /* keep the single signed-in operator */ }
   try { if (window.PlemmoCatalogue) await window.PlemmoCatalogue.load(S); } catch (e) { /* offline cache */ }
   try { if (window.PlemmoTables && S.settings.tables) await window.PlemmoTables.load(S); } catch (e) { /* tables optional */ }
+  // Hydrate recent authoritative order history so the home dashboard, reports,
+  // Z-report and CSV export compute over real Plemmo data, not just this
+  // session's sales. Bounded window; best-effort (offline keeps what we have).
+  try {
+    if (window.PlemmoOrders && window.PlemmoOrders.history) {
+      const from = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const hist = await window.PlemmoOrders.history({ fromDate: from, max: 400 });
+      if (Array.isArray(hist)) S.orders = hist;
+    }
+  } catch (e) { /* reports fall back to session orders */ }
 
   U.user = user.id;
   U.cart = (typeof newCart === 'function') ? newCart() : U.cart;

@@ -67,12 +67,11 @@ settle) → customer create → kiosk sale → self clock-in/out.
 
 ## 2. REMAINING BLOCKERS (before calling it production-ready)
 
-1. **Reports/dashboard read-path is still local.** `VIEWS.home` / `VIEWS.reports`
-   (and the Z-report/CSV) compute over `S.orders`, which now holds only this
-   device's session orders — so historical/cross-device reporting is incomplete.
-   The `PlemmoReports` adapter is ready; the fix is to hydrate order history from
-   `/api/reports` (or `/api/orders`) into the reporting path. **Read-only; not a
-   data-integrity risk, but not production-complete.**
+1. ~~Reports/dashboard read-path is still local.~~ **RESOLVED** — boot now
+   hydrates the last 30 days of authoritative order history into `S.orders`
+   (`PlemmoOrders.history` over `/api/orders`, mapped to Meridian's order shape
+   incl. items + payment method + tip), so the home dashboard, reports, Z-report
+   and CSV compute over real Plemmo data. Verified by `test:meridian-ui-boot`.
 2. **Old Next.js merchant UI not yet retired (Phase 9).** Both frontends exist;
    Meridian is served only behind the flag. Retirement is safe only after the
    reports read-path lands and a full-screen browser QA pass (below) confirms
@@ -112,7 +111,7 @@ needing real PostgreSQL (documented) and Playwright visual QA.
 
 ## 5. PRODUCTION RELEASE CHECKLIST
 
-- [ ] Wire the reports/dashboard read-path to authoritative data (blocker #1).
+- [x] Wire the reports/dashboard read-path to authoritative data (done).
 - [ ] Run full Playwright visual QA across every Meridian screen (blocker #3).
 - [ ] Run `sync-f` / `sync-g` / `commercialization` against a real PostgreSQL (blocker #4).
 - [ ] Run the complete `npm test` suite on a machine with all native deps + Electron.

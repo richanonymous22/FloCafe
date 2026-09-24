@@ -236,7 +236,9 @@ verified in a real browser env via jsdom (`test:meridian-ui-boot`).
 | Register **counter-sale** checkout → `PlemmoOrders` + `/bills/generate` + `PlemmoPayments` (authoritative totals/tax/stock/loyalty + tip; idempotent-retry on failure) | ✅ done & jsdom-verified |
 | Connection/licence **status pill** → `/api/sync/status` | ✅ done & verified |
 | Catalogue render → hydrated from Plemmo | ✅ done (boot) |
-| Remaining view handlers: dine-in send-to-kitchen + table seating, items/stock buttons, team/timeclock, customers/loyalty, cash-drawer screen, reports view figures, digital-receipt email button, kiosk submit | ⏳ handlers still local; adapters + backends ready and tested |
+| Items stock-adjust → `PlemmoInventory` (single ledger); digital-receipt email → `PlemmoReceipts` | ✅ done & jsdom-verified |
+| Cash-drawer screen → `PlemmoCash` (open/pay-in/pay-out/no-sale/close; authoritative expected + variance) | ✅ done & jsdom-verified |
+| Remaining view handlers: dine-in send-to-kitchen + table seating, team/timeclock, customers/loyalty create, reports view figures, kiosk submit | ⏳ handlers still local; adapters + backends ready and tested |
 
 ## 11. Status log
 

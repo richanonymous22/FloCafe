@@ -137,6 +137,19 @@ async function run() {
     const deliver = await win.PlemmoReceipts.deliver(bill.id, 'email', 'guest@x.com');
     assert(deliver.delivery && deliver.delivery.status === 'recorded' && !!deliver.receipt, 'receipt delivery recorded with payload');
 
+    // 9. Cash drawer path (what the drawer handlers run): open with a float,
+    // pay in, and confirm the authoritative expected reflects float + movement.
+    const open = await win.PlemmoCash.open({ openingFloatMinor: 15000 });
+    const sessId = open.session.id;
+    assert(open.session.opening_float_minor === 15000, 'drawer opens with the float');
+    await win.PlemmoCash.payIn(sessId, 2000, 'change');
+    const cur = await win.PlemmoCash.current();
+    assert(cur.session && cur.session.live_expected_minor === 17000, `expected reflects float + pay-in (got ${cur.session && cur.session.live_expected_minor})`);
+    const closed = await win.PlemmoCash.close(sessId, { countedMinor: 16800 });
+    assert(closed.expectedMinor === 17000 && closed.varianceMinor === -200, `close computes authoritative variance (got ${JSON.stringify({ e: closed.expectedMinor, v: closed.varianceMinor })})`);
+    const dbSess = db.prepare(`SELECT status, variance_minor FROM cash_sessions WHERE id = ?`).get(sessId) as any;
+    assert(dbSess.status === 'closed' && dbSess.variance_minor === -200, 'the cash session is closed authoritatively with its variance');
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

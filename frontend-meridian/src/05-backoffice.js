@@ -257,7 +257,29 @@ A.tmEdit=d=>{
 /* =====================================================================
    CASH DRAWER
    ===================================================================== */
+// Plemmo owns cash sessions. When signed in, the drawer's numbers come from the
+// authoritative session (float + signed movements); the local computation is
+// only used offline / un-authenticated.
+function usePlemmoCash(){return !!(window.PlemmoCash&&PlemmoAPI.isAuthenticated());}
+// Map an authoritative Plemmo cash session (with movements) into Meridian's
+// S.drawer.open display shape.
+function mapPlemmoDrawer(session){
+  const moves=(session.movements||[]).map(m=>({
+    ts:m.created_at?(Date.parse(m.created_at)||Date.now()):Date.now(),
+    kind:m.type==='pay_in'?'in':m.type==='pay_out'||m.type==='drop'?'out':m.type==='no_sale'?'nosale':m.type,
+    amount:Math.abs(m.amount_minor||0)/100,reason:m.reason||'',by:m.actor_user_id||null,_type:m.type}));
+  return {id:session.id,plemmoId:session.id,_plemmo:true,ts:session.opened_at?(Date.parse(session.opened_at)||Date.now()):Date.now(),
+    float:(session.opening_float_minor||0)/100,by:session.opened_by||U.user,moves:moves,
+    _expectedMinor:(session.live_expected_minor!=null?session.live_expected_minor:session.expected_minor)||0};
+}
 function drawerNumbers(sess){
+  if(sess._plemmo){
+    const mv=t=>sum(sess.moves.filter(m=>m._type===t),m=>m.amount);
+    return{float:sess.float,cashSales:r2(mv('sale')+mv('tip')),refunds:r2(mv('refund')),
+      pin:r2(mv('pay_in')),pout:r2(mv('pay_out')+mv('drop')),
+      expected:r2((sess._expectedMinor||0)/100),
+      cardSales:r2(sum(S.orders.filter(o=>o.ts>=sess.ts&&o.status!=='open'&&o.status!=='void'),o=>sum((o.payments||[]).filter(p=>p.m==='card'),p=>p.a)))};
+  }
   const from=sess.ts,to=sess.closedTs||Date.now();
   const inRange=S.orders.filter(o=>o.ts>=from&&o.ts<to&&o.status!=='open'&&o.status!=='void');
   const cashSales=sum(inRange,o=>sum(o.payments.filter(p=>p.m==='cash'),p=>p.a));
@@ -285,14 +307,46 @@ VIEWS.cash=()=>{
     ${hist.map(h=>`<tr><td>${fmtD(h.ts)}</td><td class="num">${fmtT(h.ts)} to ${fmtT(h.closedTs)}</td><td>${esc(first((emp(h.closedBy)||{}).name||''))}</td><td class="r num">${money(h.expected)}</td><td class="r num">${money(h.counted)}</td><td>${varBadge(h.variance)}</td><td class="r"><button class="btn btn-sm btn-ghost" data-act="zFor" data-t="${dayStart(0,h.ts)}">Day report</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">No closed sessions yet</td></tr>'}
    </tbody></table></div></div></div></div>`;
 };
-A.drOpen=()=>{const f=r2(+($('#flt')||{}).value||0);S.drawer.open={id:uid('dr'),ts:Date.now(),float:f,by:U.user,moves:[]};save();renderView();toast(`Drawer opened with a ${money(f)} float`);};
+// Refresh the open drawer from the authoritative Plemmo session when the cash
+// view is shown, so expected/movements reflect real cash-session state.
+AFTER.cash=async()=>{
+  if(!usePlemmoCash())return;
+  try{
+    const res=await PlemmoCash.current();
+    const session=res&&res.session;
+    if(session){S.drawer.open=mapPlemmoDrawer(session);}
+    else if(S.drawer.open&&S.drawer.open._plemmo){S.drawer.open=null;}
+    if(U.view==='cash')renderView();
+  }catch(e){/* keep whatever we have; offline */}
+};
+A.drOpen=async()=>{
+  const f=r2(+($('#flt')||{}).value||0);
+  if(usePlemmoCash()){
+    try{const res=await PlemmoCash.open({openingFloatMinor:Math.round(f*100)});S.drawer.open=mapPlemmoDrawer((res&&res.session)||{opening_float_minor:Math.round(f*100),opened_at:new Date().toISOString()});renderView();toast(`Drawer opened with a ${money(f)} float`);}
+    catch(e){toast((e&&e.status===409)?'A drawer session is already open':(e&&e.message)||'Could not open the drawer on Plemmo','warn');}
+    return;
+  }
+  S.drawer.open={id:uid('dr'),ts:Date.now(),float:f,by:U.user,moves:[]};save();renderView();toast(`Drawer opened with a ${money(f)} float`);
+};
 A.drMove=async d=>{
   const v=await promptBox({title:d.k==='in'?'Pay money in':'Pay money out',label:'Amount',type:'number',ok:d.k==='in'?'Pay in':'Pay out'});if(v===null)return;
   const amt=r2(+v||0);if(amt<=0){toast('Enter an amount above zero','warn');return;}
   const reason=await promptBox({title:'What’s it for?',label:'Reason',placeholder:d.k==='in'?'For example, change from the bank':'For example, window cleaner',ok:'Save'});if(reason===null)return;
+  if(usePlemmoCash()&&S.drawer.open&&S.drawer.open.plemmoId){
+    try{const fn=d.k==='in'?PlemmoCash.payIn:PlemmoCash.payOut;await fn.call(PlemmoCash,S.drawer.open.plemmoId,Math.round(amt*100),reason.trim());await AFTER.cash();toast(`${money(amt)} paid ${d.k}`);}
+    catch(e){toast((e&&e.message)||'Could not record the movement on Plemmo','warn');}
+    return;
+  }
   S.drawer.open.moves.push({ts:Date.now(),kind:d.k,amount:amt,reason:reason.trim(),by:U.user});save();renderView();toast(`${money(amt)} paid ${d.k}`);
 };
-A.drNoSale=()=>{S.drawer.open.moves.push({ts:Date.now(),kind:'nosale',amount:0,reason:'',by:U.user});save();renderView();toast('Drawer opened. No sale recorded against your name.','info');};
+A.drNoSale=async()=>{
+  if(usePlemmoCash()&&S.drawer.open&&S.drawer.open.plemmoId){
+    try{await PlemmoCash.noSale(S.drawer.open.plemmoId,'');await AFTER.cash();toast('Drawer opened. No sale recorded against your name.','info');}
+    catch(e){toast((e&&e.message)||'Could not record the no-sale on Plemmo','warn');}
+    return;
+  }
+  S.drawer.open.moves.push({ts:Date.now(),kind:'nosale',amount:0,reason:'',by:U.user});save();renderView();toast('Drawer opened. No sale recorded against your name.','info');
+};
 A.drClose=()=>openCloseDrawer();
 function openCloseDrawer(){
   const d=S.drawer.open;if(!d)return;const n=drawerNumbers(d);
@@ -302,6 +356,17 @@ function openCloseDrawer(){
   const upd=()=>{const tot=r2(sum(den,v=>v*(cnt[v]||0))),vr=r2(tot-n.expected);const el=L.el.querySelector('#cntRes');el.className='change-line mt '+(Math.abs(vr)>5?'short':'');el.innerHTML=`<span>Counted ${money(tot)}</span><span>${Math.abs(vr)<0.01?'Balanced':(vr>0?'Over by ':'Short by ')+money(Math.abs(vr))}</span>`;return{tot,vr};};
   L.el.addEventListener('input',e=>{const i=e.target.closest('[data-dn]');if(i){cnt[i.dataset.dn]=Math.max(0,Math.floor(+i.value||0));upd();}});upd();
   L.el.querySelector('#cntGo').onclick=async()=>{const {tot,vr}=upd();if(tot===0&&!await confirmBox({title:'Close with nothing counted?',text:'You haven’t entered any cash. The session will close as short by the full amount.',ok:'Close anyway',danger:true}))return;
+    if(usePlemmoCash()&&d._plemmo&&d.plemmoId){
+      try{
+        const res=await PlemmoCash.close(d.plemmoId,{countedMinor:Math.round(tot*100)});
+        const r=res||{};const expected=(r.expectedMinor!=null?r.expectedMinor:n.expected*100)/100,variance=(r.varianceMinor!=null?r.varianceMinor:vr*100)/100;
+        S.drawer.history.push({...d,closedTs:Date.now(),expected:r2(expected),counted:tot,variance:r2(variance),closedBy:U.user});
+        S.drawer.open=null;save();L.close();renderView();
+        toast(Math.abs(variance)<0.01?'Drawer closed and balanced':`Drawer closed, ${variance>0?'over':'short'} by ${money(Math.abs(variance))}`,Math.abs(variance)>5?'warn':'');
+        showZ(dayStart(0));
+      }catch(e){toast((e&&e.status===403)?'Only a manager can close the drawer':(e&&e.message)||'Could not close the drawer on Plemmo','warn');}
+      return;
+    }
     S.drawer.history.push({...d,closedTs:Date.now(),expected:n.expected,counted:tot,variance:vr,closedBy:U.user});S.drawer.open=null;save();L.close();renderView();toast(Math.abs(vr)<0.01?'Drawer closed and balanced':`Drawer closed, ${vr>0?'over':'short'} by ${money(Math.abs(vr))}`,Math.abs(vr)>5?'warn':'');showZ(dayStart(0));};
 }
 A.zFor=d=>showZ(+d.t);

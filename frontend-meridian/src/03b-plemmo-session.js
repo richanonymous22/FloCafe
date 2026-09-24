@@ -76,6 +76,65 @@ async function plemmoStart(next) {
   }
 }
 
+// Map a Plemmo role to a Meridian role key (Meridian's can()/S.roles only
+// knows owner/manager/staff; other POS roles fold into staff).
+function plemmoRoleToMeridian(role) {
+  return (role === 'owner' || role === 'manager') ? role : 'staff';
+}
+
+// Build a running Meridian state from the authoritative Plemmo tenant + data,
+// then enter the app signed in as the real Plemmo user. This replaces
+// Meridian's local onboarding + per-staff PIN lock for the authenticated path:
+// tenancy, identity and the catalogue are all real Plemmo data, not a local
+// business rebuilt from scratch.
+async function bootstrapFromPlemmo() {
+  const ctx = PlemmoSession.ctx;
+  const biz = ctx.business || {};
+  const user = ctx.user || { id: 'plemmo-user', name: 'Owner', role: 'owner' };
+  const cfg = {
+    name: biz.name || 'My business',
+    type: biz.type === 'retail' ? 'retail' : 'restaurant',
+    ownerName: user.name || 'Owner',
+    currency: biz.currencySymbol || '£',
+    catalog: 'empty',
+    demo: false,
+  };
+  S = buildBusiness(cfg);
+  S.settings.language = biz.language || S.settings.language;
+
+  // The signed-in Plemmo user is the current operator.
+  const meRole = plemmoRoleToMeridian(user.role);
+  S.employees = [{ id: user.id, name: user.name || 'Owner', role: meRole, plemmoRole: user.role,
+    position: user.role ? user.role[0].toUpperCase() + user.role.slice(1) : 'Owner',
+    pin: null, rate: 0, color: '#E8912D', active: true }];
+
+  // Hydrate the real team, catalogue and floor plan (best-effort; the app still
+  // runs if an optional endpoint is unavailable, e.g. tables when hospitality
+  // tables aren't enabled).
+  try {
+    if (window.PlemmoStaff) {
+      const staff = await window.PlemmoStaff.list();
+      const merged = staff.map((s, i) => ({ id: s.id, name: s.name, role: plemmoRoleToMeridian(s.role), plemmoRole: s.role,
+        position: s.position, rate: s.rate || 0, pin: null, active: s.active, color: EMP_COLORS[i % EMP_COLORS.length] }));
+      if (merged.length) S.employees = merged;
+      if (!S.employees.find((e) => e.id === user.id)) S.employees.unshift({ id: user.id, name: user.name, role: meRole, plemmoRole: user.role, position: 'Owner', pin: null, rate: 0, color: '#E8912D', active: true });
+    }
+  } catch (e) { /* keep the single signed-in operator */ }
+  try { if (window.PlemmoCatalogue) await window.PlemmoCatalogue.load(S); } catch (e) { /* offline cache */ }
+  try { if (window.PlemmoTables && S.settings.tables) await window.PlemmoTables.load(S); } catch (e) { /* tables optional */ }
+
+  U.user = user.id;
+  U.cart = (typeof newCart === 'function') ? newCart() : U.cart;
+  U.view = meRole === 'staff' ? 'pos' : 'home';
+  applyTheme();
+  hidePlemmoAuth();
+  $('#lock').hidden = true; $('#onboard').hidden = true; $('#kiosk').hidden = true; $('#app').hidden = false;
+  try { saveNow(); } catch (e) { /* cache best-effort */ }
+  render();
+  updatePlemmoStatus();
+  if (typeof resolveCaps === 'function') resolveCaps();
+}
+
 function renderPlemmoAuth(msg) {
   const el = $('#plemmo-auth');
   if (!el) return;

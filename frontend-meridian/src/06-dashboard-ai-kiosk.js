@@ -726,8 +726,20 @@ async function resolveCaps(){
   CAPS_READY=true;
   if(U.user&&U.view==='assistant'&&!AI_CTL&&!$('#app').hidden)renderView();
 }
-// Meridian's original boot, now gated behind real Plemmo authentication.
+// Meridian's boot, gated behind real Plemmo authentication.
+// When a Plemmo session exists, build the running state from the authoritative
+// tenant + data and enter the app signed in as the real user (no local
+// onboarding, no per-staff PIN). Only the un-authenticated / offline path falls
+// back to Meridian's original local flow.
 function meridianBoot(){
+  if(typeof bootstrapFromPlemmo==='function'&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated()){
+    bootstrapFromPlemmo().catch((e)=>{
+      // If bootstrapping from Plemmo fails unexpectedly, don't strand the user.
+      try{if(typeof toast==='function')toast('Could not load your business from Plemmo','warn');}catch(_){}
+      console&&console.error&&console.error('[Plemmo] bootstrap failed',e);
+    });
+    return;
+  }
   try{S=loadState();}catch(e){S=null;}
   if(S&&S.onboarded&&S.settings&&Array.isArray(S.orders)){applyTheme();LK.sel=(S.employees[0]||{}).id;showLock();hydratePlemmoCatalogue();}
   else{S=null;showOnboarding();}
@@ -758,3 +770,6 @@ A.plemmoSyncCatalogue=()=>hydratePlemmoCatalogue();
   if(typeof plemmoStart==='function'&&window.PlemmoAPI){plemmoStart(meridianBoot);}
   else{meridianBoot();}
 })();
+
+// Read-only access to core state for tests/diagnostics (never a write path).
+if(typeof window!=="undefined"){window.__meridian={get S(){return S;},get U(){return U;}};}

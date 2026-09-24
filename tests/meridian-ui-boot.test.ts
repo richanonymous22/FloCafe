@@ -88,6 +88,17 @@ async function run() {
     await waitFor(() => !!(win.PlemmoSession && win.PlemmoSession.ctx && win.PlemmoSession.ctx.business), 5000, 'session context');
     assert(win.PlemmoSession.ctx.business.name === 'Meridian Cafe', 'business context loaded from Plemmo');
 
+    // 3b. The app boots into the main view on authoritative Plemmo data — not
+    // Meridian's local onboarding — signed in as the real user.
+    await waitFor(() => { const a = win.document.getElementById('app'); return !!a && !a.hidden; }, 8000, 'app view');
+    assert(win.document.getElementById('onboard').hidden, 'local onboarding is skipped for a Plemmo session');
+    await waitFor(() => !!(win.__meridian && win.__meridian.S && Array.isArray(win.__meridian.S.products)), 5000, 'state built');
+    const mS = win.__meridian.S; const mU = win.__meridian.U;
+    assert(mU.user === 'u-own', 'signed in as the real Plemmo user');
+    assert(mS.settings.name === 'Meridian Cafe', 'business settings come from the Plemmo tenant');
+    assert(mS.products.some((p: any) => p.name === 'Latte'), 'catalogue is hydrated from Plemmo (Latte present)');
+    assert(mS.employees.some((e: any) => e.id === 'u-own'), 'the signed-in user is on the team');
+
     // 4. Browser-side AI client answers from authoritative data (advisory).
     const ai = await win.PlemmoAI.ask('how many orders today?');
     assert(ai && typeof ai.answer === 'string' && ai.source === 'local', 'AI client returns an advisory answer');

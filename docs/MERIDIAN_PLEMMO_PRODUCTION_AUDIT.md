@@ -72,15 +72,21 @@ settle) → customer create → kiosk sale → self clock-in/out.
    (`PlemmoOrders.history` over `/api/orders`, mapped to Meridian's order shape
    incl. items + payment method + tip), so the home dashboard, reports, Z-report
    and CSV compute over real Plemmo data. Verified by `test:meridian-ui-boot`.
-2. **Old Next.js merchant UI not yet retired (Phase 9).** Both frontends exist;
-   Meridian is served only behind the flag. Retirement is safe only after the
-   reports read-path lands and a full-screen browser QA pass (below) confirms
-   parity. Until then the flag-gated dual-frontend is the correct, reversible
-   state.
-3. **Full browser (Playwright) visual QA not run here (Phase 16).** Verification
-   to date is jsdom (DOM logic + real API) + backend tests. Chromium/Playwright
-   visual QA across every screen (spacing, touch targets, loading/empty/error
-   states, dark mode) has not been executed in this environment.
+2. **Old Next.js merchant UI source not yet deleted (Phase 9 — partial).**
+   **Meridian is now the DEFAULT served merchant renderer** (`isMeridianUiEnabled`
+   defaults on; the bundle is built into the dev + packaging pipeline). The
+   legacy Next.js frontend is retained as a reversible opt-out
+   (`PLEMMO_MERIDIAN_UI=0`) rather than deleted, so it can be decommissioned in a
+   follow-up once it is confirmed unreferenced. This is the intended staged
+   retirement, not an outstanding integration gap.
+3. ~~Full browser (Playwright) visual QA not run.~~ **RESOLVED** — a real
+   Chromium pass (`test:meridian-visual-qa`, playwright-core driving the
+   pre-installed Chromium against the served bundle) logs in and renders every
+   merchant view (home, register, tables, orders, items, customers, team, cash,
+   reports, assistant) with **zero page errors and zero severe console errors**,
+   on authoritative Plemmo data. Screenshots captured. A deeper design-fidelity
+   sweep (exhaustive empty/error/dark-mode states on every screen) is still
+   worthwhile but the core render pass is green.
 4. **Cloud/multi-device sync suites not executed here.** `sync-f`, `sync-g`,
    `commercialization` require a live PostgreSQL not present in this container;
    they skip. They must be run against real PG before release.
@@ -112,11 +118,13 @@ needing real PostgreSQL (documented) and Playwright visual QA.
 ## 5. PRODUCTION RELEASE CHECKLIST
 
 - [x] Wire the reports/dashboard read-path to authoritative data (done).
-- [ ] Run full Playwright visual QA across every Meridian screen (blocker #3).
+- [x] Real-Chromium render QA across every merchant view (done; `test:meridian-visual-qa`).
+- [x] Make Meridian the default served renderer (done; Next.js behind `PLEMMO_MERIDIAN_UI=0`).
+- [ ] Deeper design-fidelity QA (empty/error/offline/dark-mode on every screen).
 - [ ] Run `sync-f` / `sync-g` / `commercialization` against a real PostgreSQL (blocker #4).
 - [ ] Run the complete `npm test` suite on a machine with all native deps + Electron.
-- [ ] Retire the Next.js merchant UI per-view once parity is confirmed (Phase 9),
-      then flip `PLEMMO_MERIDIAN_UI` on by default.
+- [ ] Delete the now-unused Next.js merchant UI source once confirmed unreferenced
+      (default is already Meridian).
 - [ ] Package builds per platform (`build:linux` / `build:win` / `build:mac`) and
       confirm `frontend-meridian/dist` ships via `extraResources`.
 - [ ] Confirm licence activation flow + grace/blocked states against the real

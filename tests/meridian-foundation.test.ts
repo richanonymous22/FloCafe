@@ -93,9 +93,10 @@ async function run() {
     stopServer();
   }
 
-  // 4. Safe fallback: flag off → Meridian bundle is NOT served.
-  delete process.env.PLEMMO_MERIDIAN_UI;
-  assert(isMeridianUiEnabled() === false, 'flag reads as disabled when unset');
+  // 4. Safe fallback: explicit opt-out → Meridian bundle is NOT served
+  // (Meridian is now the default; PLEMMO_MERIDIAN_UI=0 falls back to Next.js).
+  process.env.PLEMMO_MERIDIAN_UI = '0';
+  assert(isMeridianUiEnabled() === false, 'flag reads as disabled when explicitly off');
   await startServer();
   const base2 = `http://127.0.0.1:${getServerPort()}`;
   try {

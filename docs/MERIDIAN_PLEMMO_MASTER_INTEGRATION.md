@@ -220,8 +220,8 @@ is UI/temporary + offline cache only.
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (gap now filled)** | **✅ complete & verified** (migration v93 + adapters) |
 | 7. Reports / AI / Receipts | reports on authoritative data; **AI service (built)**; **digital receipts (built)** | **✅ complete & verified** (AI service + receipt endpoints + migration v94) |
 | 8. Offline / Sync | surface Plemmo's existing outbox/idempotency/conflict + licence state; no second protocol | **✅ status surface complete & verified**; register/catalogue/orders already commit through Plemmo's authoritative APIs + idempotency (earlier phases) |
-| 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
-| 10. Final production audit | end-to-end verification + release checklist | ⏳ not started |
+| 9. Retire old frontend | Meridian is the DEFAULT served renderer (Next.js behind `PLEMMO_MERIDIAN_UI=0`); bundle built into dev+packaging | ✅ default flipped; source-deletion is a follow-up |
+| 10. Final production audit | end-to-end verification + release checklist + real-Chromium visual QA | ✅ done (`docs/MERIDIAN_PLEMMO_PRODUCTION_AUDIT.md`) |
 
 ## 10b. View-wiring progress (making Meridian's own UI use the adapters)
 

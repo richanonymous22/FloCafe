@@ -112,7 +112,13 @@ function getFrontendDir(): string | null {
  * never broken — flip `PLEMMO_MERIDIAN_UI=1` to serve Meridian.
  */
 export function isMeridianUiEnabled(): boolean {
-  return process.env.PLEMMO_MERIDIAN_UI === '1' || process.env.PLEMMO_MERIDIAN_UI === 'true';
+  // Phase 9: Meridian is the primary merchant renderer and is served by default
+  // whenever its bundle is present. Set PLEMMO_MERIDIAN_UI=0 (or false/off) to
+  // fall back to the legacy Next.js frontend — kept as a reversible escape hatch
+  // until the old merchant UI is fully decommissioned.
+  const v = process.env.PLEMMO_MERIDIAN_UI;
+  if (v === '0' || v === 'false' || v === 'off') return false;
+  return true;
 }
 
 /**

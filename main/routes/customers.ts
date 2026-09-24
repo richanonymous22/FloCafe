@@ -4,6 +4,7 @@ import { getDatabase, now, getSettingValue } from '../db';
 import { requireRole } from '../middleware/security';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
 import { snapshotCustomer } from '../core/sync/reference-entities';
+import { getTierConfig, tierForSpend } from '../core/loyalty';
 
 export function parseCustomer(c: any): any {
   if (!c) return c;
@@ -148,7 +149,10 @@ router.get('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Requ
       query += ` LIMIT 200`;
     }
 
-    const customers = db.prepare(query).all(...params);
+    const customers = db.prepare(query).all(...params) as any[];
+    // Loyalty tier derived from authoritative lifetime spend (Meridian).
+    const tierConfig = getTierConfig();
+    for (const c of customers) c.tier = tierForSpend(Number(c.total_spent) || 0, tierConfig);
     res.json({ data: customers });
   } catch (error: any) {
     console.error("[API] Internal error:", error);

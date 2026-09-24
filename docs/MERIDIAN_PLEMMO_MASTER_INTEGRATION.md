@@ -217,7 +217,7 @@ is UI/temporary + offline cache only.
 | 3. Payments + Cash | split/partial/tips/change/refund/void; **new backend: tips, cash sessions, denomination counting, drawer reconciliation** | **✅ backend complete & verified** + client adapter; wiring into Meridian's live pay/drawer buttons pending (adapters ready) |
 | 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo (single ledger, no second stockLog) | **✅ complete & verified** (adapter + client; reuses existing Plemmo ledger — no backend change) |
 | 5. Hospitality | tables/floor-plan (**geometry gap now filled**)/KDS/collection board/kiosk | **✅ complete & verified** (migration v92 + adapters) |
-| 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (backend gap)** | ⏳ not started |
+| 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (gap now filled)** | **✅ complete & verified** (migration v93 + adapters) |
 | 7. Reports / AI / Receipts | reports on authoritative data; **AI service (backend gap)**; digital receipts | ⏳ not started |
 | 8. Offline / Sync | integrate Plemmo outbox/idempotency/conflict; remove localStorage-as-truth | ⏳ not started |
 | 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
@@ -300,3 +300,19 @@ is UI/temporary + offline cache only.
   layout edit that stays durable on re-read, KDS reachable); regressions
   `issue-134-mgmt` (29), `tables-string-ids`, `kds-integration`,
   `schema-health`, `upgrade-path`, `migration-v56-v57` all green.
+- **2026-09-24** — **Kiosk / Loyalty / Staff phase complete & verified.**
+  Backend gaps filled via **migration v93**: (a) `staff_shifts` timeclock table
+  (one-open-shift-per-user index) with a `main/core/shifts.ts` service +
+  `main/routes/shifts.ts` (`/api/shifts/clock-in|clock-out|me`, manager
+  timesheet + worked-hours), server-enforced; (b) **loyalty tiers** derived
+  authoritatively from lifetime spend via `main/core/loyalty.ts`
+  (`bronze/silver/gold`, thresholds seeded in settings), surfaced as `tier` on
+  the customers API. Kiosk already runs through the authoritative order path
+  (`PlemmoKiosk`, prior phase). New client `03h-plemmo-staff.js`: `PlemmoStaff`
+  (CRUD + clock-in/out + timesheet) and `PlemmoLoyalty` (tier display meta);
+  the catalogue customer mapper now carries `tier`. Verified:
+  `test:meridian-staff-loyalty` (mappers + a live contract test: clock-in,
+  one-open-shift guard, clock-out, timesheet authz, and server-derived
+  gold/bronze tiers from a real order's spend); regressions `staff-authz` (36),
+  `customer-auth` (21), `plemmo-access-control` (42), `schema-health`,
+  `upgrade-path` all green.

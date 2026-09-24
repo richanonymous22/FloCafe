@@ -82,7 +82,8 @@
       visits: Number(c.visits_count != null ? c.visits_count : (c.visits || c.order_count)) || 0,
       spend: Number(c.total_spent != null ? c.total_spent : (c.total_spend || c.lifetime_spend)) || 0,
       last: last ? (Date.parse(last) || null) : null,
-      notes: c.notes || ''
+      notes: c.notes || '',
+      tier: c.tier || 'bronze'
     };
   }
 

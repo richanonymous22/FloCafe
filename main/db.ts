@@ -5217,6 +5217,36 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       if (!has('rotation')) db.exec(`ALTER TABLE tables ADD COLUMN rotation REAL DEFAULT 0`);
     },
   },
+  {
+    version: 93,
+    name: 'staff_shifts_and_loyalty_tiers',
+    up: () => {
+      // STAFF SHIFTS / TIMECLOCK (Meridian integration). Authoritative clock
+      // in/out records so timesheets and "who's on shift" are backend data.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS staff_shifts (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL,
+          location_id  TEXT,
+          clock_in     TEXT NOT NULL,
+          clock_out    TEXT,
+          note         TEXT,
+          created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_staff_shifts_user ON staff_shifts(user_id, clock_in);
+        -- At most one open shift per user.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_shifts_open_per_user
+          ON staff_shifts(user_id) WHERE clock_out IS NULL;
+      `);
+
+      // LOYALTY TIERS. Derived from authoritative lifetime spend against
+      // configurable thresholds (server-computed, never client-asserted).
+      insertSettingIfMissing('loyalty_tier_silver_spend', '120');
+      insertSettingIfMissing('loyalty_tier_gold_spend', '300');
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

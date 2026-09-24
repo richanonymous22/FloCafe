@@ -123,8 +123,8 @@ needing real PostgreSQL (documented) and Playwright visual QA.
 - [ ] Deeper design-fidelity QA (empty/error/offline/dark-mode on every screen).
 - [ ] Run `sync-f` / `sync-g` / `commercialization` against a real PostgreSQL (blocker #4).
 - [ ] Run the complete `npm test` suite on a machine with all native deps + Electron.
-- [ ] Delete the now-unused Next.js merchant UI source once confirmed unreferenced
-      (default is already Meridian).
+- [x] Delete the now-unused Next.js merchant UI source (done — dashboard/auth/setup
+      + pos/orders/products removed; Next build now emits only the KDS/server station apps).
 - [ ] Package builds per platform (`build:linux` / `build:win` / `build:mac`) and
       confirm `frontend-meridian/dist` ships via `extraResources`.
 - [ ] Confirm licence activation flow + grace/blocked states against the real

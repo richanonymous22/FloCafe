@@ -25,6 +25,7 @@ const PlemmoSession = {
   ctx: { user: null, tenant: null, business: null, location: null, device: null, license: null },
   _next: null,
   _pollTimer: null,
+  _sync: null,
 
   /** Load authoritative session context from Plemmo (/auth/me). */
   load: async function () {
@@ -193,3 +194,6 @@ function startPlemmoStatus() {
   pollPlemmoSync();
   PlemmoSession._pollTimer = setInterval(pollPlemmoSync, 30000);
 }
+
+// Expose the session module for tests and cross-file access in the browser.
+if (typeof window !== "undefined") window.PlemmoSession = PlemmoSession;

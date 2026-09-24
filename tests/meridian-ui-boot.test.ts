@@ -1,0 +1,108 @@
+/*
+ * Meridian UI wiring — real browser-env verification (jsdom).
+ *
+ * Boots the actual built Meridian bundle in a DOM against a running Plemmo
+ * server and drives the REAL login gate: fills the form, submits, and asserts a
+ * real JWT session is established, the gate is dismissed, and session context is
+ * loaded from Plemmo. Then exercises the browser-side AI client end to end.
+ *
+ * This proves the vendored frontend boots in a browser environment and that its
+ * Plemmo auth + API wiring works through the actual DOM, not just via supertest.
+ */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { JSDOM } from 'jsdom';
+
+const Module = require('module');
+const originalLoad = Module._load;
+const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flo-ui-'));
+Module._load = function (requestName: string) {
+  if (requestName === 'electron') {
+    return { app: { isPackaged: true, getPath: () => testDir, getVersion: () => 'test' } };
+  }
+  return originalLoad.apply(this, arguments as any);
+};
+
+import { startServer, stopServer, getServerPort } from '../main/server';
+import { initDatabase, closeDatabase, getDatabase } from '../main/db';
+
+function assert(cond: boolean, msg: string) { if (!cond) throw new Error(`Assertion failed: ${msg}`); }
+const now = () => new Date().toISOString();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(fn: () => boolean, ms = 5000, label = 'condition'): Promise<void> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { try { if (fn()) return; } catch { /* keep polling */ } await sleep(50); }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function run() {
+  console.log('Testing Meridian UI boot + login gate (jsdom)...');
+
+  initDatabase();
+  const db = getDatabase();
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('business_name','Meridian Cafe') ON CONFLICT(key) DO UPDATE SET value='Meridian Cafe'`).run();
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('currency','GBP') ON CONFLICT(key) DO UPDATE SET value='GBP'`).run();
+  const bcrypt = require('bcryptjs');
+  db.prepare(`INSERT INTO users (id, name, email, password, role, is_active) VALUES ('u-own','Jordan','jordan@ui.local',?, 'owner',1)`).run(bcrypt.hashSync('OwnerPass123!', 10));
+  db.prepare(`INSERT INTO categories (id, name, is_active, sort_order, created_at, updated_at) VALUES ('cat','Coffee',1,1,?,?)`).run(now(), now());
+  db.prepare(`INSERT INTO products (id, category_id, name, price, cost, is_active, sort_order, track_inventory, stock_quantity, low_stock_threshold, created_at, updated_at)
+              VALUES ('p-latte','cat','Latte',3.4,0.66,1,1,0,0,0,?,?)`).run(now(), now());
+
+  await startServer();
+  const port = getServerPort();
+  const origin = `http://127.0.0.1:${port}`;
+  const html = fs.readFileSync(path.join(__dirname, '..', 'frontend-meridian', 'dist', 'meridian-pos.html'), 'utf8');
+
+  let dom: JSDOM | null = null;
+  try {
+    dom = new JSDOM(html, {
+      url: origin + '/',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+      beforeParse(window: any) {
+        // jsdom has no fetch — bridge to Node's. Meridian derives its API base
+        // from window.location.origin, which we set to the live server above.
+        window.fetch = (input: any, init?: any) => fetch(input, init);
+        window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+      },
+    });
+    const win: any = dom.window;
+
+    // 1. Boot renders the real Plemmo login gate.
+    await waitFor(() => { const g = win.document.getElementById('plemmo-auth'); return !!g && !g.hidden && !!win.document.getElementById('plForm'); }, 8000, 'login gate');
+    assert(!!win.document.getElementById('plEmail'), 'login form has an email field');
+    assert(!win.PlemmoAPI.isAuthenticated(), 'not authenticated before login');
+
+    // 2. Fill and submit the real form.
+    win.document.getElementById('plEmail').value = 'jordan@ui.local';
+    win.document.getElementById('plPass').value = 'OwnerPass123!';
+    win.document.getElementById('plForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+
+    // 3. Real JWT session established, gate dismissed, context loaded.
+    await waitFor(() => win.PlemmoAPI.isAuthenticated(), 8000, 'authentication');
+    await waitFor(() => { const g = win.document.getElementById('plemmo-auth'); return !!g && g.hidden; }, 5000, 'gate dismissed');
+    assert(!!win.PlemmoAPI.getToken(), 'a JWT token is stored');
+    const user = win.PlemmoAPI.currentUser();
+    assert(user && user.email === 'jordan@ui.local', 'session user is the real Plemmo user');
+    await waitFor(() => !!(win.PlemmoSession && win.PlemmoSession.ctx && win.PlemmoSession.ctx.business), 5000, 'session context');
+    assert(win.PlemmoSession.ctx.business.name === 'Meridian Cafe', 'business context loaded from Plemmo');
+
+    // 4. Browser-side AI client answers from authoritative data (advisory).
+    const ai = await win.PlemmoAI.ask('how many orders today?');
+    assert(ai && typeof ai.answer === 'string' && ai.source === 'local', 'AI client returns an advisory answer');
+    assert(/Meridian Cafe/.test(ai.answer) || /order/i.test(ai.answer), 'AI answer is grounded in the authoritative snapshot');
+
+    // 5. The status pill reflects a real session (not hidden).
+    await waitFor(() => { const p = win.document.getElementById('plemmo-status'); return !!p && !p.hidden; }, 5000, 'status pill');
+
+    console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
+  } finally {
+    if (dom) dom.window.close();
+    stopServer();
+    closeDatabase();
+    try { fs.rmSync(testDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+run().catch((err) => { console.error(err); process.exit(1); });

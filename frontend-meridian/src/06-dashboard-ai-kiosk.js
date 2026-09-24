@@ -447,16 +447,16 @@ VIEWS.assistant=()=>{
    </aside></div>`;
 };
 function chatHTML(){
-  if(!U.chat.length){const live=aiLive(),tools=live&&TOOLS_OK&&can('products');
-    return`<div class="chat-welcome"><div class="it-em" style="--c:var(--accent);width:56px;height:56px;border-radius:18px;color:var(--accent-text)">${ic('sparkle',28)}</div><h3>Ask anything about ${esc(S.settings.name)}.</h3><p class="muted" style="font-size:15px">I read this till’s live sales, stock, team and customers. ${live?'Answers come from Claude.':'Answers come from the built-in insights engine, so they work offline.'} ${tools||!live?'I can also change prices, stock counts and sold-out items for you, and every change can be undone.':''}</p>
-     <div class="sugs">${[...AI_SUGS,'Mark Almond Croissant as sold out'].map(s=>`<button class="sug" data-act="aiSug" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;}
+  if(!U.chat.length){const plemmo=window.PlemmoAI&&PlemmoAPI.isAuthenticated();
+    return`<div class="chat-welcome"><div class="it-em" style="--c:var(--accent);width:56px;height:56px;border-radius:18px;color:var(--accent-text)">${ic('sparkle',28)}</div><h3>Ask anything about ${esc(S.settings.name)}.</h3><p class="muted" style="font-size:15px">I read this business’s live sales, stock, team and customers from Plemmo. ${plemmo?'Answers come from Plemmo’s assistant and are advisory — I don’t change anything on my own; use the Items and Team pages for that.':'Plemmo isn’t connected, so answers come from the built-in offline insights engine.'}</p>
+     <div class="sugs">${AI_SUGS.map(s=>`<button class="sug" data-act="aiSug" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`;}
   return U.chat.map(msgHTML).join('');
 }
 function msgHTML(m){
   if(m.role==='user')return`<div class="msg user">${esc(m.text)}</div>`;
   return`<div class="msg ai" id="m-${m.id}"><span class="ai-av">${ic('sparkle',18)}</span><div class="bub"><div class="bub-body">${m.state==='thinking'?'<span class="thinking" role="status" aria-label="Thinking"><i></i><i></i><i></i></span>':md(m.text)}</div>
    <div class="bub-acts">${actsHTML(m)}</div>
-   ${m.state==='done'?`<div class="bub-foot">${m.src==='claude'?`${ic('sparkle',13)} Claude${m.tier?', '+(m.tier==='quick'?'Fast':'Thorough'):''}`:`${ic('bulb',13)} Built-in insights`}${m.note?`<span>· ${esc(m.note)}</span>`:''}</div>`:''}</div></div>`;
+   ${m.state==='done'?`<div class="bub-foot">${m.src==='claude'?`${ic('sparkle',13)} Claude via Plemmo`:m.src==='plemmo'?`${ic('sparkle',13)} Plemmo insights`:`${ic('bulb',13)} Built-in insights (offline)`}${m.note?`<span>· ${esc(m.note)}</span>`:''}</div>`:''}</div></div>`;
 }
 function actsHTML(m){return(m.actions||[]).map(a=>`<div class="ai-act ${a.undone?'undone':''}">${ic('check',16)}<span>${esc(a.label)}</span><span class="spacer"></span>${a.undone?'<span>Undone</span>':`<button class="btn btn-sm" data-act="aiUndo" data-id="${a.id}" data-m="${m.id}">Undo</button>`}</div>`).join('');}
 function renderChat(){const log=$('#chatLog');if(!log)return;log.innerHTML=chatHTML();log.scrollTop=log.scrollHeight;setSendBtn();}
@@ -489,26 +489,28 @@ async function aiSend(text){
   text=String(text||'').trim();if(!text||AI_CTL)return;
   const inp=$('#aiIn');if(inp){inp.value='';inp.style.height='';}
   U.chat.push({role:'user',text,id:uid('m')});
-  const m={role:'ai',id:uid('m'),text:'',state:'thinking',actions:[],src:'local'};U.chat.push(m);
+  const m={role:'ai',id:uid('m'),text:'',state:'thinking',actions:[],src:'plemmo'};U.chat.push(m);
   if(U.chat.length===2)renderView();else renderChat();
-  if(!aiLive()){await sleep(380+Math.random()*300);m.text=localAnswer(text,m);m.state='done';renderChat();return;}
-  AI_CTL=new AbortController();setSendBtn();
-  const tools=TOOLS_OK&&can('products')?[updateTool(m)]:null;
-  const opts={signal:AI_CTL.signal,modelTier:U.aiMode==='fast'?'quick':'default',onText:({text:tx})=>{m.text=tx;m.state='streaming';updateBubble(m);}};
-  if(tools)opts.tools=tools;else opts.cache=false;
-  try{
-    const res=await SAMPLE(buildTurns(text,!!tools),opts);
-    m.text=res.text;m.src='claude';m.tier=res.modelTierApplied;if(res.truncated)m.note='Cut short. Ask for less at a time.';
-  }catch(e){
-    const c=e&&e.code;m.src='claude';
-    const fallback=note=>{m.text=localAnswer(text,m);m.src='local';m.note=note;};
-    if(c==='cancelled'){m.text=e.text||'Stopped before an answer.';m.note='Stopped';}
-    else if(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(c)){U.aiOff=true;fallback('Claude isn’t available here, so the built-in insights answered');}
-    else if(c==='tools_unavailable'){TOOLS_OK=false;fallback('Editing through Claude isn’t available in this view');}
-    else if(c==='refused'){fallback('Claude couldn’t answer that, so the built-in insights did');}
-    else if(e&&e.text){m.text=e.text;m.note=c==='rate_limited'?'Interrupted: usage limit reached. Try again later.':'Interrupted. Send it again to retry.';}
-    else fallback(c==='rate_limited'?'Claude is busy right now. Try again in a little while.':c==='session_expired'?'Sign in to Claude again to use it here':'Claude didn’t respond, so the built-in insights answered');
-  }finally{AI_CTL=null;m.state='done';if(U.view==='assistant'){renderChat();const i=$('#aiIn');if(i&&matchMedia('(pointer:fine)').matches)i.focus();}}
+
+  // Plemmo integration: the assistant is advisory and answers through the
+  // authoritative Plemmo AI service (permission-gated, audited, computed from
+  // real business data — never the local S cache, never a client-side mutation
+  // tool). If the service is unreachable, fall back to the built-in offline
+  // engine over the local snapshot so the till still answers.
+  if(window.PlemmoAI&&PlemmoAPI.isAuthenticated()){
+    try{
+      const res=await PlemmoAI.ask(text);
+      m.text=res.answer||'';
+      m.src=res.source==='anthropic'?'claude':'plemmo';
+    }catch(e){
+      m.text=localAnswer(text,m);m.src='local';
+      m.note=(e&&e.status===403)?'You don’t have permission to use the assistant':'Plemmo is unreachable, so the built-in insights answered';
+    }finally{m.state='done';if(U.view==='assistant'){renderChat();const i=$('#aiIn');if(i&&matchMedia('(pointer:fine)').matches)i.focus();}}
+    return;
+  }
+
+  // No Plemmo session — offline built-in insights over the local snapshot.
+  await sleep(380+Math.random()*300);m.text=localAnswer(text,m);m.src='local';m.state='done';renderChat();
 }
 A.aiSend=()=>{const i=$('#aiIn');aiSend(i?i.value:'');};
 A.aiStop=()=>{if(AI_CTL)AI_CTL.abort();};

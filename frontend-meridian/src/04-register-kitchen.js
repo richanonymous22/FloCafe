@@ -408,7 +408,58 @@ A.payCash=()=>{
 A.paySplitCard=async()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.method='card';if(!(await cardFlow(amt)))return;PAY.method='split';PAY.splitAmt='';afterPayment();};
 A.paySplitCash=()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.payments.push({m:'cash',a:r2(amt)});PAY.splitAmt='';if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});afterPayment();};
 function afterPayment(){if(payRem()<=0.004)finishSale();else renderPay();}
+// Plemmo is authoritative for prices/tax/totals/stock/loyalty. A fresh counter
+// sale commits to Plemmo (order → bill → payments incl. tip). Dine-in orders
+// already opened locally, and the offline/un-authenticated case, use the local
+// flow. On a Plemmo commit failure the pay modal stays open so staff can retry
+// (the idempotency key makes retries safe — no double charge).
 function finishSale(){
+  const c=U.cart;
+  const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&!c.orderId;
+  if(usePlemmo){finishSalePlemmo().catch((e)=>{
+    const msg=(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+    toast(msg,'warn');
+    if(PAY){PAY.stage='idle';renderPay();}
+  });return;}
+  finishSaleLocal();
+}
+async function finishSalePlemmo(){
+  const c=U.cart;
+  // 1. Authoritative order (Plemmo computes subtotal/tax/total + deducts stock).
+  const order=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);
+  // 2. Bill for the order.
+  let bill;
+  try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:order.id},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+  if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(order.id));bill=b&&b.bill;}
+  if(!bill)throw new Error('No bill for order');
+  // 3. Payments (tip on the first line; cash tendered carries the change).
+  const lines=PAY.payments.map((p,i)=>{
+    const line={method:p.m==='card'?'card':'cash',amount:r2(p.a)};
+    if(i===0&&PAY.tip)line.tip=r2(PAY.tip);
+    if(p.m==='cash'&&i===PAY.payments.length-1&&PAY.change)line.tendered=r2(p.a+PAY.change);
+    return line;
+  });
+  await PlemmoPayments.paySplit(bill.id,lines,c.custId);
+  // 4. Build a local display order from the AUTHORITATIVE result (receipt +
+  // history cache). No local stock/loyalty mutation — Plemmo already did both.
+  const o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,plemmoBillId:bill.id,
+    opened:Date.now(),ts:Date.now(),empId:U.user,closedBy:U.user,source:'pos',type:c.type,table:c.table,custId:c.custId,
+    items:c.items.map(l=>({...l,sent:true})),
+    subtotal:Number(order.subtotal)||cartTotals(c).subtotal,tax:Number(order.tax_amount)||0,
+    discAmt:Number(order.discount_amount)||0,total:Number(order.total)||0,
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:0,discount:c.discount||null};
+  S.orders.push(o);
+  const change=PAY.change||0;
+  PAY.done=true;PAY.L.close();PAY=null;
+  U.cart=newCart();U.selLine=null;U.mobCart=false;
+  try{saveNow();}catch(e){}
+  if(U.view==='pos'){$('#pos').classList.remove('cart-open');refreshPos();}
+  renderRail();
+  showReceipt(o,{change,fresh:true});
+  // Refresh authoritative stock in the background so the Items view is current.
+  if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).then(()=>{if(U.view==='items'||U.view==='home')renderView();}).catch(()=>{});
+}
+function finishSaleLocal(){
   const c=U.cart,t=cartTotals(c);
   let o=c.orderId?orderOf(c.orderId):null;
   const unsent=c.items.filter(l=>!l.sent);

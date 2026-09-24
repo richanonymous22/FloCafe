@@ -107,6 +107,23 @@ async function run() {
     // 5. The status pill reflects a real session (not hidden).
     await waitFor(() => { const p = win.document.getElementById('plemmo-status'); return !!p && !p.hidden; }, 5000, 'status pill');
 
+    // 6. Checkout commit path (exactly what finishSalePlemmo runs) via the real
+    // browser-side adapters against the live server: order → bill → payment+tip.
+    const ordersBefore = (db.prepare(`SELECT COUNT(*) AS n FROM orders`).get() as any).n;
+    const order = await win.PlemmoOrders.createOrder({ type: 'takeaway', items: [{ pid: 'p-latte', qty: 2, mods: [] }] }, win.__meridian.S._plemmoAddons);
+    assert(Math.abs(order.subtotal - 6.8) < 0.01, `Plemmo computes the authoritative subtotal (got ${order.subtotal})`);
+    const gen = await win.PlemmoAPI.post('/bills/generate', { order_id: order.id }, { idempotent: true });
+    const bill = gen.bill || (await win.PlemmoAPI.get('/bills/order/' + order.id)).bill;
+    assert(!!bill, 'a bill is generated for the order');
+    await win.PlemmoPayments.paySplit(bill.id, [{ method: 'cash', amount: 6.8, tip: 1, tendered: 10 }]);
+
+    const ordersAfter = (db.prepare(`SELECT COUNT(*) AS n FROM orders`).get() as any).n;
+    assert(ordersAfter === ordersBefore + 1, 'exactly one authoritative order was created');
+    const paidBill = db.prepare(`SELECT payment_status, balance FROM bills WHERE id = ?`).get(bill.id) as any;
+    assert(paidBill.payment_status === 'paid' && paidBill.balance <= 0.001, 'the bill is settled authoritatively');
+    const tip = db.prepare(`SELECT COALESCE(SUM(tip_minor),0) AS t FROM payments WHERE bill_id = ?`).get(bill.id) as any;
+    assert(tip.t === 100, `the £1 tip is persisted authoritatively (got ${tip.t})`);
+
     console.log('✅ Meridian UI boot + login gate (jsdom) tests passed');
   } finally {
     if (dom) dom.window.close();

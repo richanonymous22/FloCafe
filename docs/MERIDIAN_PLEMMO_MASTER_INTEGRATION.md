@@ -223,6 +223,21 @@ is UI/temporary + offline cache only.
 | 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
 | 10. Final production audit | end-to-end verification + release checklist | ⏳ not started |
 
+## 10b. View-wiring progress (making Meridian's own UI use the adapters)
+
+The phases above built + verified the backend and typed adapters. This section
+tracks connecting Meridian's actual view handlers to them (the last mile), each
+verified in a real browser env via jsdom (`test:meridian-ui-boot`).
+
+| Wiring | Status |
+| --- | --- |
+| Boot from Plemmo (real login → build state from tenant, sign in real user, hydrate catalogue/team/tables; no local onboarding/PIN) | ✅ done & jsdom-verified |
+| Assistant view → `PlemmoAI` (advisory, audited; local engine offline fallback; client mutation tool removed) | ✅ done & verified |
+| Register **counter-sale** checkout → `PlemmoOrders` + `/bills/generate` + `PlemmoPayments` (authoritative totals/tax/stock/loyalty + tip; idempotent-retry on failure) | ✅ done & jsdom-verified |
+| Connection/licence **status pill** → `/api/sync/status` | ✅ done & verified |
+| Catalogue render → hydrated from Plemmo | ✅ done (boot) |
+| Remaining view handlers: dine-in send-to-kitchen + table seating, items/stock buttons, team/timeclock, customers/loyalty, cash-drawer screen, reports view figures, digital-receipt email button, kiosk submit | ⏳ handlers still local; adapters + backends ready and tested |
+
 ## 11. Status log
 
 - **2026-09-24** — Audit complete (Phases 1–5). This map created. Foundation

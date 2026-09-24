@@ -26,6 +26,8 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
 import { recordAppliedPaymentLine } from '../core/payment';
+import { recordCashSaleForPayment } from '../core/cash';
+import { getCurrentLocationId } from '../core/location';
 import { ulid } from '../core/ids';
 
 const router = Router();
@@ -376,6 +378,8 @@ interface PaymentInput {
   method: string;
   payment_method_id?: number;
   amount?: number | string | null;
+  /** Optional gratuity on this tender (decimal, same currency as the bill). */
+  tip?: number | string | null;
   transaction_id?: string;
   notes?: string;
 }
@@ -586,6 +590,7 @@ function preparePaymentBatch(
     };
     if (payment.transaction_id !== undefined) normalizedPayment.transaction_id = payment.transaction_id;
     if (payment.notes !== undefined) normalizedPayment.notes = payment.notes;
+    if (payment.tip !== undefined && payment.tip !== null) normalizedPayment.tip = payment.tip;
     return {
       payment: normalizedPayment,
       method: normalizedPayment.method,
@@ -714,6 +719,7 @@ function applyPaymentBatch(
   // See main/core/payment.ts's module docstring for the full reasoning; in
   // short, this never throws and can never affect the outcome above it.
   for (const line of prepared) {
+    const tipCents = Math.max(0, Math.round(Number((line.payment as any).tip || 0) * 100));
     recordAppliedPaymentLine({
       billId, orderId: bill.order_id,
       line: {
@@ -722,11 +728,29 @@ function applyPaymentBatch(
         amountCents: line.amountCents,
         tenderedCents: line.tenderedCents ?? null,
         changeCents: line.changeCents ?? null,
+        tipCents,
         transactionId: line.payment.transaction_id ?? null,
         notes: line.payment.notes ?? null,
       },
       actorUserId: idempotencyUserId ?? null,
     });
+    // Keep the cash drawer authoritative: a cash tender (and any cash tip)
+    // moves the open drawer for this location. Best-effort — a drawer write
+    // must never roll back the payment itself.
+    if (line.payment.method === 'cash') {
+      try {
+        recordCashSaleForPayment({
+          locationId: getCurrentLocationId(),
+          adapter: 'cash',
+          amountMinor: line.amountCents,
+          tipMinor: tipCents,
+          actorUserId: idempotencyUserId ?? null,
+          reference: String(billId),
+        });
+      } catch (err) {
+        console.error('[Bills] Cash drawer movement failed (payment unaffected):', err);
+      }
+    }
   }
 
   let loyaltyPointsEarned = 0;

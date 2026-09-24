@@ -214,7 +214,7 @@ is UI/temporary + offline cache only.
 | 1. Foundation | Meridian in repo, serving path, API client, **real auth**, session context, licence/sync status, safe fallback | **✅ complete & verified** |
 | 2. Catalogue | products/categories/modifiers/customers from Plemmo (authoritative, read-through cache) | **✅ complete & verified** |
 | Core POS — order write path | Meridian cart → Plemmo sale, **authoritative totals/tax**, idempotency (adapter + tests) | **✅ adapter complete & verified**; wiring into Meridian's live pay/checkout button is Phase 3 work (not yet wired, to avoid a half-integrated pay flow) |
-| 3. Payments + Cash | split/partial/tips/change/refund/void UI → Plemmo; **backend gaps: tips, cash sessions, denomination counting** | ⏳ not started (backend extensions + migrations + tests required) |
+| 3. Payments + Cash | split/partial/tips/change/refund/void; **new backend: tips, cash sessions, denomination counting, drawer reconciliation** | **✅ backend complete & verified** + client adapter; wiring into Meridian's live pay/drawer buttons pending (adapters ready) |
 | 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo | ⏳ not started |
 | 5. Hospitality | tables/floor-plan (**backend gap: geometry**)/KDS/collection board | ⏳ not started |
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (backend gap)** | ⏳ not started |
@@ -250,3 +250,24 @@ is UI/temporary + offline cache only.
   authoritative totals and idempotent replay / no duplicate). Wiring this into
   Meridian's live pay/checkout button is deferred to the Payments phase so the
   running app is never left with a half-integrated pay flow.
+- **2026-09-24** — **Payments + Cash phase — backend complete & verified.**
+  New authoritative capabilities (migration **v91**, additive/non-destructive):
+  (a) **tips/gratuity** persisted on `payments.tip_minor`, captured through the
+  bills payment route and the payment core; (b) **cash drawer sessions**
+  (`cash_sessions`) with float, **denomination counting** (JSON counts →
+  minor-unit totals), one-open-per-location, expected-vs-counted **variance**
+  at close; (c) **cash movements** (`cash_movements`): pay-in/pay-out/drop/
+  no-sale/float-adjust, plus cash sales & cash tips auto-recorded from the
+  payment path so the drawer stays authoritative without the frontend being the
+  source. New `main/core/cash.ts` service + `main/routes/cash.ts` API
+  (`/api/cash/session*`), role-enforced, idempotent (shared
+  `payment_idempotency`), audited. Client adapters `03e-plemmo-cash.js`
+  (`PlemmoCash`, `PlemmoPayments`). Verified: `test:plemmo-cash` (open/float/
+  denomination, movements + validation, cash sale+tip → drawer, reconciliation
+  math, close variance, closed-session guard, cashier-cannot-close authz, tip
+  persistence, idempotency) and `test:meridian-cash-adapter`; payment
+  regressions (integration-payments, plemmo-payment-service,
+  payment-methods-split, integration-reconciliation), schema-health and
+  upgrade-path all green. Split/partial/change/refund/void already existed in
+  the payment core and are unchanged. Wiring Meridian's live pay/drawer UI to
+  these adapters is the remaining frontend step.

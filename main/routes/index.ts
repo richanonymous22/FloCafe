@@ -27,6 +27,7 @@ import { databaseToolsRoutes } from './database-tools';
 import { menuCsvRoutes } from './menu-csv';
 import { taxPackRoutes } from './tax-packs';
 import { heldOrderRoutes } from './held-orders';
+import { cashRoutes } from './cash';
 import { supportTicketRoutes } from './support-ticket';
 import salesReconciliationRoutes from './sales-reconciliation';
 import adminReconciliationRoutes from './admin-reconciliation';
@@ -117,6 +118,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/menu-csv', menuCsvRoutes);
   app.use('/api/tax-packs', taxPackRoutes);
   app.use('/api/held-orders', heldOrderRoutes);
+  app.use('/api/cash', cashRoutes);
   app.use('/api/support-ticket', supportTicketRoutes);
   app.use('/api/sales', salesReconciliationRoutes);   // SYNC-F conflict + reconciliation APIs
   app.use('/api/admin', adminReconciliationRoutes);   // SYNC-G admin sales console + reconciliation

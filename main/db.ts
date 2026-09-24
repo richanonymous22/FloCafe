@@ -5137,6 +5137,69 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 91,
+    name: 'payments_tips_and_cash_sessions',
+    up: () => {
+      // PAYMENTS + CASH (Meridian integration). Additive only — no existing
+      // data touched, safe on both fresh and upgraded databases.
+      //
+      // 1) Tips/gratuity captured on a payment (minor units, like every other
+      //    money column on `payments`). Defaults to 0 so existing rows are
+      //    unaffected and older code paths that never set it stay correct.
+      const paymentCols = db.prepare(`PRAGMA table_info(payments)`).all() as { name: string }[];
+      if (!paymentCols.some((c) => c.name === 'tip_minor')) {
+        db.exec(`ALTER TABLE payments ADD COLUMN tip_minor INTEGER NOT NULL DEFAULT 0`);
+      }
+
+      // 2) Cash drawer sessions: float, denomination counts (JSON), expected vs
+      //    counted at close, and the variance. One open session per location.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cash_sessions (
+          id                  TEXT PRIMARY KEY,
+          location_id         TEXT,
+          currency            TEXT NOT NULL,
+          status              TEXT NOT NULL DEFAULT 'open'
+            CHECK (status IN ('open', 'closed')),
+          opening_float_minor INTEGER NOT NULL DEFAULT 0,
+          opening_counts      TEXT,
+          opened_by           TEXT,
+          opened_at           TEXT NOT NULL,
+          closing_counts      TEXT,
+          counted_minor       INTEGER,
+          expected_minor      INTEGER,
+          variance_minor      INTEGER,
+          closed_by           TEXT,
+          closed_at           TEXT,
+          notes               TEXT,
+          created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        -- At most one open session per location (NULL location_id allowed once).
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_open_per_location
+          ON cash_sessions(location_id) WHERE status = 'open';
+
+        -- 3) Every drawer movement. amount_minor is SIGNED: positive adds cash
+        --    to the drawer (sale, pay_in, tip kept in drawer), negative removes
+        --    it (pay_out, drop, cash refund). no_sale is a 0 movement (drawer
+        --    opened for change / inspection), recorded for the audit trail.
+        CREATE TABLE IF NOT EXISTS cash_movements (
+          id            TEXT PRIMARY KEY,
+          session_id    TEXT NOT NULL,
+          type          TEXT NOT NULL
+            CHECK (type IN ('sale', 'refund', 'tip', 'pay_in', 'pay_out', 'drop', 'no_sale', 'float_adjust')),
+          amount_minor  INTEGER NOT NULL DEFAULT 0,
+          currency      TEXT NOT NULL,
+          reason        TEXT,
+          reference     TEXT,
+          actor_user_id TEXT,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES cash_sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(session_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

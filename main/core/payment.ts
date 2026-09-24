@@ -126,6 +126,8 @@ export interface TenderRequest {
   currency: string;
   /** Cash only. */
   tenderedMinor?: number;
+  /** Optional gratuity captured with this tender, in minor units. Defaults to 0. */
+  tipMinor?: number;
   /** An external reference — a card transaction id, a terminal receipt number. */
   providerReference?: string | null;
   notes?: string | null;
@@ -353,14 +355,15 @@ function persistPayment(input: PersistPaymentInput): PaymentRecord {
   db.prepare(`
     INSERT INTO payments (
       id, bill_id, order_id, bill_uid, order_uid, adapter, method, state,
-      amount_minor, currency, refunded_minor, tendered_minor, change_minor,
+      amount_minor, currency, refunded_minor, tendered_minor, change_minor, tip_minor,
       provider_reference, actor_user_id, notes, metadata,
       requested_at, settled_at, created_at, updated_at, organization_id, location_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, input.billId, input.orderId ?? null, billUid, orderUid, t.adapter, t.method, result.state,
     t.amountMinor, t.currency, t.tenderedMinor ?? null,
     t.tenderedMinor !== undefined ? Math.max(0, t.tenderedMinor - t.amountMinor) : null,
+    Math.max(0, Math.round(t.tipMinor ?? 0)),
     result.providerReference ?? null, input.actorUserId ?? null, t.notes ?? null,
     t.metadata || result.metadata ? JSON.stringify({ ...t.metadata, ...result.metadata }) : null,
     requestedAt, settledAt, requestedAt, requestedAt,
@@ -686,6 +689,8 @@ export interface AppliedPaymentLine {
   amountCents: number;
   tenderedCents?: number | null;
   changeCents?: number | null;
+  /** Optional gratuity captured with this tender, in integer cents. */
+  tipCents?: number | null;
   transactionId?: string | null;
   notes?: string | null;
 }
@@ -733,6 +738,7 @@ export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): 
     amountMinor: input.line.amountCents,
     currency,
     tenderedMinor: input.line.tenderedCents ?? undefined,
+    tipMinor: input.line.tipCents ?? 0,
     providerReference: input.line.transactionId ?? null,
     notes: input.line.notes ?? null,
     metadata: input.line.paymentMethodId != null ? { payment_method_id: input.line.paymentMethodId } : null,

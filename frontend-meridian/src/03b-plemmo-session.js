@@ -134,15 +134,33 @@ A.plemmoSignOut = () => plemmoSignOut();
 
 /* ---------- Connection / licence status pill ---------- */
 
+// The last state fetched from Plemmo's real sync/licence engine (03j).
+// null until the first successful poll; a failed poll means we can't reach the
+// server, i.e. offline.
+PlemmoSession._sync = null;
+
+// Map the authoritative /api/sync/status `state` to a pill style + label.
+var PLEMMO_SYNC_LABELS = {
+  online: { cls: 'ok', label: 'Online' },
+  syncing: { cls: 'syncing', label: 'Syncing' },
+  sync_failed: { cls: 'warn', label: 'Sync failed' },
+  license_grace: { cls: 'warn', label: 'Licence grace' },
+  license_blocked: { cls: 'bad', label: 'Licence blocked' },
+  offline: { cls: 'bad', label: 'Offline' },
+};
+
 function plemmoStatusState() {
-  if (!PlemmoAPI.isOnline()) return { cls: 'bad', label: 'Offline' };
-  const lic = PlemmoSession.ctx.license;
-  if (lic) {
-    if (lic.status === 'suspended' || lic.status === 'revoked' || lic.status === 'expired')
-      return { cls: 'bad', label: 'Licence blocked' };
-    if (lic.status === 'grace') return { cls: 'warn', label: 'Licence grace' };
+  if (!PlemmoAPI.isOnline()) return PLEMMO_SYNC_LABELS.offline;
+  var s = PlemmoSession._sync;
+  if (s && s.state && PLEMMO_SYNC_LABELS[s.state]) {
+    var base = PLEMMO_SYNC_LABELS[s.state];
+    // Surface the outbox backlog while syncing so staff see progress.
+    if (s.state === 'syncing' && s.sync && (s.sync.pending || s.sync.uploading)) {
+      return { cls: base.cls, label: base.label + ' (' + ((s.sync.pending || 0) + (s.sync.uploading || 0)) + ')' };
+    }
+    return base;
   }
-  return { cls: 'ok', label: 'Online' };
+  return PLEMMO_SYNC_LABELS.online;
 }
 
 function updatePlemmoStatus() {
@@ -157,15 +175,21 @@ function updatePlemmoStatus() {
   el.title = biz ? `Signed in to ${biz}` : 'Plemmo';
 }
 
+function pollPlemmoSync() {
+  // Reflects Plemmo's real sync engine + licence state (03j). A failed request
+  // means the server is unreachable → offline. Never starts sync work itself.
+  if (!PlemmoSession.isAuthed() || !window.PlemmoSync) {
+    return PlemmoAPI.request('/health', { idempotent: false }).then(() => updatePlemmoStatus()).catch(() => updatePlemmoStatus());
+  }
+  return window.PlemmoSync.status()
+    .then((s) => { PlemmoSession._sync = s; updatePlemmoStatus(); })
+    .catch(() => { PlemmoSession._sync = null; updatePlemmoStatus(); });
+}
+
 function startPlemmoStatus() {
   updatePlemmoStatus();
   PlemmoAPI.onConnectivity(() => updatePlemmoStatus());
   if (PlemmoSession._pollTimer) clearInterval(PlemmoSession._pollTimer);
-  // Lightweight heartbeat against the real API so the pill reflects reachability
-  // even when no request is in flight. /api/health needs no auth.
-  PlemmoSession._pollTimer = setInterval(() => {
-    PlemmoAPI.request('/health', { idempotent: false })
-      .then(() => updatePlemmoStatus())
-      .catch(() => updatePlemmoStatus());
-  }, 30000);
+  pollPlemmoSync();
+  PlemmoSession._pollTimer = setInterval(pollPlemmoSync, 30000);
 }

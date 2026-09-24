@@ -219,7 +219,7 @@ is UI/temporary + offline cache only.
 | 5. Hospitality | tables/floor-plan (**geometry gap now filled**)/KDS/collection board/kiosk | **✅ complete & verified** (migration v92 + adapters) |
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (gap now filled)** | **✅ complete & verified** (migration v93 + adapters) |
 | 7. Reports / AI / Receipts | reports on authoritative data; **AI service (built)**; **digital receipts (built)** | **✅ complete & verified** (AI service + receipt endpoints + migration v94) |
-| 8. Offline / Sync | integrate Plemmo outbox/idempotency/conflict; remove localStorage-as-truth | ⏳ not started |
+| 8. Offline / Sync | surface Plemmo's existing outbox/idempotency/conflict + licence state; no second protocol | **✅ status surface complete & verified**; register/catalogue/orders already commit through Plemmo's authoritative APIs + idempotency (earlier phases) |
 | 9. Retire old frontend | make Meridian the sole merchant renderer | ⏳ not started |
 | 10. Final production audit | end-to-end verification + release checklist | ⏳ not started |
 
@@ -337,3 +337,19 @@ is UI/temporary + offline cache only.
   `integration-payments` (33), `schema-health`, `upgrade-path` green.
   (`reports-insights` shows 6 pre-existing, time-of-day-dependent failures
   present on the base commit — unrelated to this work.)
+- **2026-09-24** — **Offline / Sync phase — status surface complete & verified.**
+  No second sync protocol: Plemmo's existing outbox / idempotency / uploader /
+  downloader / conflict engine remains the single source of offline correctness,
+  and Meridian already commits every mutation through the authoritative Plemmo
+  APIs with idempotency keys (catalogue/orders/payments/cash/inventory/tables/
+  shifts phases). New read-only `GET /api/sync/status`
+  (`main/routes/sync-status.ts`) composes `getSyncHealth` (outbox pending/
+  uploading/failed, last upload/error) + `effectiveStatus`/`withinOfflineGrace`
+  (licence) into the UI states online / offline / syncing / sync_failed /
+  license_grace / license_blocked. Client `03j-plemmo-sync.js` + the Meridian
+  status pill (03b) now poll it and show the live state + outbox backlog; a
+  failed poll = offline. Verified: `test:meridian-sync-status` (auth required,
+  unlicensed-desktop→online, expired→blocked, within-grace→grace, valid→online,
+  cashier may read); regressions `sync-a-local-foundation` (52), `schema-health`
+  green (`sync-f`/`sync-g`/`commercialization` skip — they need a live
+  PostgreSQL not present in this container).

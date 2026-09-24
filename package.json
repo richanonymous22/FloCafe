@@ -72,6 +72,7 @@
     "test:meridian-tables": "node tests/run-electron-node-test.cjs tests/meridian-tables.test.ts",
     "test:meridian-staff-loyalty": "node tests/run-electron-node-test.cjs tests/meridian-staff-loyalty.test.ts",
     "test:meridian-reports-ai": "node tests/run-electron-node-test.cjs tests/meridian-reports-ai.test.ts",
+    "test:meridian-sync-status": "node tests/run-electron-node-test.cjs tests/meridian-sync-status.test.ts",
     "test:payment-methods-split": "node tests/run-electron-node-test.cjs tests/payment-methods-split-checks.test.ts",
     "test:kds-integration": "node tests/run-electron-node-test.cjs tests/kds-integration.test.ts",
     "test:kds-contract": "node tests/run-electron-node-test.cjs tests/kds-contract.test.ts",

@@ -30,6 +30,7 @@ import { heldOrderRoutes } from './held-orders';
 import { cashRoutes } from './cash';
 import { shiftRoutes } from './shifts';
 import { aiRoutes } from './ai';
+import { syncStatusRoutes } from './sync-status';
 import { supportTicketRoutes } from './support-ticket';
 import salesReconciliationRoutes from './sales-reconciliation';
 import adminReconciliationRoutes from './admin-reconciliation';
@@ -123,6 +124,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/cash', cashRoutes);
   app.use('/api/shifts', shiftRoutes);
   app.use('/api/ai', aiRoutes);
+  app.use('/api/sync', syncStatusRoutes);
   app.use('/api/support-ticket', supportTicketRoutes);
   app.use('/api/sales', salesReconciliationRoutes);   // SYNC-F conflict + reconciliation APIs
   app.use('/api/admin', adminReconciliationRoutes);   // SYNC-G admin sales console + reconciliation

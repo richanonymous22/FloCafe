@@ -215,7 +215,7 @@ is UI/temporary + offline cache only.
 | 2. Catalogue | products/categories/modifiers/customers from Plemmo (authoritative, read-through cache) | **✅ complete & verified** |
 | Core POS — order write path | Meridian cart → Plemmo sale, **authoritative totals/tax**, idempotency (adapter + tests) | **✅ adapter complete & verified**; wiring into Meridian's live pay/checkout button is Phase 3 work (not yet wired, to avoid a half-integrated pay flow) |
 | 3. Payments + Cash | split/partial/tips/change/refund/void; **new backend: tips, cash sessions, denomination counting, drawer reconciliation** | **✅ backend complete & verified** + client adapter; wiring into Meridian's live pay/drawer buttons pending (adapters ready) |
-| 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo | ⏳ not started |
+| 4. Inventory / Purchasing | stock/adjust/stocktake/suppliers/PO/transfers on Plemmo (single ledger, no second stockLog) | **✅ complete & verified** (adapter + client; reuses existing Plemmo ledger — no backend change) |
 | 5. Hospitality | tables/floor-plan (**backend gap: geometry**)/KDS/collection board | ⏳ not started |
 | 6. Kiosk/Loyalty/Staff | kiosk, loyalty tiers, staff/roles, **shifts/timeclock (backend gap)** | ⏳ not started |
 | 7. Reports / AI / Receipts | reports on authoritative data; **AI service (backend gap)**; digital receipts | ⏳ not started |
@@ -271,3 +271,17 @@ is UI/temporary + offline cache only.
   upgrade-path all green. Split/partial/change/refund/void already existed in
   the payment core and are unchanged. Wiring Meridian's live pay/drawer UI to
   these adapters is the remaining frontend step.
+- **2026-09-24** — **Inventory / Purchasing phase complete & verified.** No
+  backend change required — Plemmo's existing single authoritative stock ledger
+  (`inventory_movements` + balances, with `products.stock_quantity` kept in
+  sync) already covers Meridian's needs. New client `03f-plemmo-inventory.js`:
+  `PlemmoInventory` maps Meridian's three stock actions to the one ledger
+  (receive→receipt, waste→adjustment, count→stocktake delta; zero-delta no-op)
+  and refreshes on-hand from the authoritative `balance_after` — Meridian's
+  `S.stockLog` is no longer a source of truth. Thin `PlemmoSuppliers`,
+  `PlemmoPurchasing`, `PlemmoTransfers` clients surface the existing purchasing
+  APIs. Verified: `test:meridian-inventory` (pure mapping + a live contract test
+  proving single-ledger balance/history/low-stock, `stock_quantity` sync with
+  no drift, and the negative-stock guard); backend regressions
+  `plemmo-inventory` (43), `plemmo-purchasing` (53), `plemmo-multi-location`
+  (42) all green.

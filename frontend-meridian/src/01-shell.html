@@ -873,6 +873,31 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
   .k-top .kt-biz{font-size:18px}
   .hero-stats{gap:18px}
 }
+/* ── Plemmo integration: auth gate + connection/licence status pill ──── */
+#plemmo-auth{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:24px}
+.pl-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius,14px);padding:32px 28px;box-shadow:0 18px 48px rgba(0,0,0,.18)}
+.pl-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.pl-brand .mark{width:34px;height:34px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:800;font-size:18px}
+.pl-brand b{font-family:var(--f-display,var(--f-ui));font-size:19px;letter-spacing:-.01em}
+.pl-card h2{margin:0 0 4px;font-size:18px}
+.pl-card .pl-sub{margin:0 0 20px;color:var(--muted);font-size:13px}
+.pl-field{display:block;margin-bottom:14px}
+.pl-field span{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px}
+.pl-field .input{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid var(--line-strong);border-radius:9px;background:var(--raised);color:var(--text);font-size:15px}
+.pl-field .input:focus{outline:2px solid var(--focus);outline-offset:1px;border-color:transparent}
+.pl-err{color:var(--bad);font-size:13px;min-height:18px;margin:2px 0 12px}
+.pl-btn{width:100%;padding:12px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+.pl-btn[disabled]{opacity:.6;cursor:progress}
+.pl-spin{width:15px;height:15px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:pl-spin .7s linear infinite}
+@keyframes pl-spin{to{transform:rotate(360deg)}}
+.pl-foot{margin-top:18px;text-align:center;color:var(--faint);font-size:12px}
+#plemmo-status{position:fixed;bottom:12px;right:12px;z-index:40;display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;background:var(--surface);border:1px solid var(--line);box-shadow:0 4px 14px rgba(0,0,0,.12);font-size:12px;font-weight:600;color:var(--muted);cursor:default}
+#plemmo-status .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+#plemmo-status.ok .dot{background:var(--ok)}
+#plemmo-status.warn .dot{background:var(--warn)}
+#plemmo-status.bad .dot{background:var(--bad)}
+#plemmo-status.syncing .dot{background:var(--info);animation:pl-pulse 1s ease-in-out infinite}
+@keyframes pl-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 </style>
 </head>
 <body>
@@ -886,6 +911,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
 <div id="lock" hidden></div>
 <div id="onboard" hidden></div>
 <div id="kiosk" hidden></div>
+<div id="plemmo-auth" hidden></div>
+<div id="plemmo-status" hidden></div>
 <div id="layer"></div>
 <div id="toasts" role="status" aria-live="polite"></div>
 <div id="tip" role="tooltip"></div>

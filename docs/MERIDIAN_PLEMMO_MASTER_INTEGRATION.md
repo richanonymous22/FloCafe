@@ -212,3 +212,13 @@ is UI/temporary + offline cache only.
 - **2026-09-24** — Audit complete (Phases 1–5). This map created. Foundation
   slice started: Meridian vendored, real auth/API client scaffolded, flagged
   serving path added. See PR on branch `PLEMMO-DELIVERY`.
+- **2026-09-24** — **Phase 1 Foundation complete & verified.** Real Plemmo
+  authentication gate wired into Meridian's boot (email/password → JWT), session
+  context loaded from `/auth/me` (user/tenant/business/licence), Meridian-styled
+  connection/licence **status pill**, API error/loading handling, and a safe
+  fallback to the Next.js frontend (flag off). Verified: `npm run build` (tsc,
+  0 errors), `npm run lint:backend` (0 errors), new `test:meridian-foundation`
+  integration test (serving path + real login/`me` flow + protected-route 401 +
+  fallback), plus smoke/cors/static-routes/first-run regressions — all green.
+  Meridian's per-staff PIN lock is preserved as the "who's on the till" UX and
+  will be backed by real Plemmo staff in the staff/shifts phase.

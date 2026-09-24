@@ -724,9 +724,18 @@ async function resolveCaps(){
   CAPS_READY=true;
   if(U.user&&U.view==='assistant'&&!AI_CTL&&!$('#app').hidden)renderView();
 }
-(function boot(){
+// Meridian's original boot, now gated behind real Plemmo authentication.
+function meridianBoot(){
   try{S=loadState();}catch(e){S=null;}
   if(S&&S.onboarded&&S.settings&&Array.isArray(S.orders)){applyTheme();LK.sel=(S.employees[0]||{}).id;showLock();}
   else{S=null;showOnboarding();}
   resolveCaps();
+  updatePlemmoStatus();
+}
+(function boot(){
+  // Phase 1 foundation: authenticate against Plemmo first, then run Meridian.
+  // window.PlemmoAPI is always present (00-plemmo-api.js). If it is somehow
+  // unavailable, fall back to Meridian's standalone boot so the app still runs.
+  if(typeof plemmoStart==='function'&&window.PlemmoAPI){plemmoStart(meridianBoot);}
+  else{meridianBoot();}
 })();

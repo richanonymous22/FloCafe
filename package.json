@@ -1,6 +1,6 @@
 {
   "name": "plemmo-epos",
-  "version": "3.0.5",
+  "version": "3.1.0",
   "description": "Plemmo EPOS \u2014 offline-first UK EPOS platform for hospitality and retail. Derived from FloCafe (MIT).",
   "engines": {
     "node": ">=22.12.0"

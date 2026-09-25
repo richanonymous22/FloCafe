@@ -168,7 +168,44 @@ jobs:
           path: frontend/playwright-report/
           retention-days: 10
 
-  # 6. PostgreSQL cloud-sync suites
+  # 6. Meridian frontend bundle suites
+  # The Meridian merchant UI is a vendored vanilla-JS bundle with its own
+  # adapters. These suites boot the built bundle in jsdom against the real
+  # embedded server (login, checkout, cash, inventory, tables, reports/AI,
+  # sync-status, floor-plan geometry). They need the bundle built first, so
+  # they run here rather than in the default `npm test`. The real-Chromium
+  # visual QA (test:meridian-visual-qa) stays local — it needs a preinstalled
+  # browser this runner does not have.
+  meridian:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules
+        run: npx @electron/rebuild -f -w better-sqlite3 || npm rebuild better-sqlite3
+
+      - name: Build main backend process
+        run: npm run build
+
+      - name: Build the Meridian bundle
+        run: npm run build:meridian
+
+      - name: Meridian bundle suites (jsdom + embedded server)
+        run: npm run test:meridian
+
+  # 7. PostgreSQL cloud-sync suites
   # The sync / commercialization / platform-hardening suites self-skip without a
   # reachable PostgreSQL. This job stands one up and runs them for real, so the
   # multi-device sync, reconciliation and licensing paths are verified in CI

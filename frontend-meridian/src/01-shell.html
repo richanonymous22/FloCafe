@@ -470,6 +470,14 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
 .ftable.round{border-radius:50%}
 .ftable.s{width:9%;aspect-ratio:1}.ftable.m{width:11%;aspect-ratio:1}.ftable.l{width:18%;aspect-ratio:1.8}
 .ftable.busy{background:var(--accent-soft);border-color:var(--accent)}
+.fp-editor{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:16px}
+.fp-floor{aspect-ratio:16/10;touch-action:none}
+.fp-floor .ftable{touch-action:none}
+.ftable.sel{outline:3px solid var(--accent);outline-offset:2px;z-index:2}
+.fp-panel{display:flex;flex-direction:column;gap:10px}
+.fp-panel h4{margin:0 0 2px}
+.fp-panel-actions{display:flex;gap:8px;margin-top:4px}
+@media (max-width:640px){.fp-editor{grid-template-columns:1fr}.fp-floor{aspect-ratio:1}}
 .ftable.long{background:var(--warn-soft);border-color:var(--warn)}
 .ftable .tn{font-family:var(--f-display);font-weight:700;font-size:clamp(14px,1.7vw,24px);line-height:1}
 .ftable .ti{font-size:clamp(9px,.85vw,12px);color:var(--muted);font-weight:600;line-height:1.2;white-space:nowrap}

@@ -582,7 +582,7 @@ VIEWS.tables=()=>{
     return`<button class="ftable ${t.shape} ${t.size} ${cls}" style="left:${t.x}%;top:${t.y}%" data-act="tableOpen" data-id="${t.id}" aria-label="Table ${esc(t.name)}, ${o?'seated '+mins+' minutes, '+money(o.total):'free, '+t.seats+' seats'}"><span class="tn">${esc(t.name)}</span><span class="ti">${o?`<span data-since="${o.opened}" data-fmt="min">${mins} min</span>`:t.seats+' seats'}</span>${o?`<span class="ti num">${money(o.total)}</span>`:''}</button>`;}).join('');
   return`<div class="page">
    <div class="page-head"><div><h2>Floor</h2><p class="sub">${seated} of ${S.tables.length} tables seated, ${covers} covers, ${money(value)} open</p></div>
-   <div class="ph-actions"><div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Seated</span><span><i class="long"></i>Seated over an hour</span></div></div></div>
+   <div class="ph-actions">${can('settings')?`<button class="btn" data-act="floorEdit">${ic('tables',16)} Edit floor plan</button>`:''}<div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Seated</span><span><i class="long"></i>Seated over an hour</span></div></div></div>
    <div class="floor-wrap">
     <div class="floor" role="group" aria-label="Floor plan">
      <div class="window"></div><span class="zone-l" style="left:4%;top:3%">Window</span>
@@ -599,6 +599,132 @@ A.tableOpen=d=>{
   const o=S.orders.find(x=>x.status==='open'&&x.table===d.id),t=tableOf(d.id);
   if(o){loadOrderToCart(o);go('pos');toast(`Table ${t.name}: add items, send to the kitchen or charge`,'info');}
   else{if(U.cart.items.length&&!U.cart.orderId){A.hold();}U.cart=newCart();U.cart.type='dine';U.cart.table=d.id;go('pos');toast(`Table ${t.name} seated. Add items, then send them to the kitchen.`,'info');}
+};
+
+/* =====================================================================
+   FLOOR-PLAN EDITOR (Meridian integration — geometry persisted to Plemmo)
+   ---------------------------------------------------------------------
+   Backend geometry (shape/size/x/y/rotation/seats/section, migration v92)
+   already round-trips through /api/tables via PlemmoTables. This is the
+   editor that authors it: add / move (drag) / resize / rotate / rename /
+   seats / shape / section / delete, then Save persists every table with
+   PlemmoTables.saveAll (authoritative) — never localStorage-only.
+
+   Geometry mutations are PURE (window.FloorPlan) so they are unit-testable
+   without pointer events; the DOM layer just calls them on a draft copy.
+   ===================================================================== */
+const FloorPlan = (function(){
+  const clampPct = n => Math.max(0, Math.min(94, Math.round((Number(n)||0)*10)/10));
+  const SHAPES=['round','square','rect'], SIZES=['s','m','l'];
+  function nextTableName(tables){
+    let max=0; (tables||[]).forEach(t=>{const n=parseInt(t.name,10); if(Number.isFinite(n)&&n>max)max=n;});
+    return String(max+1);
+  }
+  function addTable(tables, opts){
+    opts=opts||{};
+    const t={ id:uid('t'), name:opts.name||nextTableName(tables), seats:Number(opts.seats)||4,
+      shape:SHAPES.includes(opts.shape)?opts.shape:'square', size:SIZES.includes(opts.size)?opts.size:'m',
+      x:clampPct(opts.x!=null?opts.x:8), y:clampPct(opts.y!=null?opts.y:8), rotation:Number(opts.rotation)||0,
+      section:opts.section||null };
+    return { tables:(tables||[]).concat([t]), table:t };
+  }
+  function moveTable(tables,id,x,y){ return (tables||[]).map(t=>t.id===id?{...t,x:clampPct(x),y:clampPct(y)}:t); }
+  function updateTable(tables,id,patch){
+    return (tables||[]).map(t=>{ if(t.id!==id) return t; const n={...t,...patch};
+      if(patch.seats!=null) n.seats=Math.max(1,Number(patch.seats)||1);
+      if(patch.shape!=null&&!SHAPES.includes(patch.shape)) n.shape=t.shape;
+      if(patch.size!=null&&!SIZES.includes(patch.size)) n.size=t.size;
+      if(patch.rotation!=null) n.rotation=((Number(patch.rotation)||0)%360+360)%360;
+      if(patch.name!=null) n.name=String(patch.name).trim()||t.name;
+      return n; });
+  }
+  function removeTable(tables,id){ return (tables||[]).filter(t=>t.id!==id); }
+  return { clampPct, nextTableName, addTable, moveTable, updateTable, removeTable, SHAPES, SIZES };
+})();
+if (typeof window!=='undefined') window.FloorPlan = FloorPlan;
+
+A.floorEdit=()=>{
+  if(!can('settings')){toast('Only a manager can edit the floor plan','warn');return;}
+  const ed={ draft:S.tables.map(t=>({...t})), selId:null, L:null, dragging:false };
+
+  const nodeHtml=t=>`<button class="ftable ${t.shape} ${t.size} ${ed.selId===t.id?'sel':''}" data-fp="${t.id}" style="left:${t.x}%;top:${t.y}%;transform:rotate(${t.rotation||0}deg)" aria-label="Table ${esc(t.name)}"><span class="tn">${esc(t.name)}</span><span class="ti">${t.seats} seats</span></button>`;
+
+  const panelHtml=()=>{
+    const t=ed.draft.find(x=>x.id===ed.selId);
+    if(!t) return `<div class="fp-panel"><p class="muted">Tap a table to edit it, drag to move it, or add a new one.</p><button class="btn btn-primary" data-act="fpAdd">${ic('plus',16)} Add table</button></div>`;
+    const opt=(v,cur,lbl)=>`<option value="${v}" ${v===cur?'selected':''}>${lbl}</option>`;
+    return `<div class="fp-panel"><h4>Table ${esc(t.name)}</h4>
+      <label class="field"><span>Name</span><input class="input" id="fpName" value="${esc(t.name)}"></label>
+      <label class="field"><span>Seats</span><input class="input" id="fpSeats" type="number" min="1" value="${t.seats}"></label>
+      <label class="field"><span>Shape</span><select class="input" id="fpShape">${opt('round',t.shape,'Round')}${opt('square',t.shape,'Square')}${opt('rect',t.shape,'Rectangle')}</select></label>
+      <label class="field"><span>Size</span><select class="input" id="fpSize">${opt('s',t.size,'Small')}${opt('m',t.size,'Medium')}${opt('l',t.size,'Large')}</select></label>
+      <label class="field"><span>Section</span><input class="input" id="fpSection" value="${esc(t.section||'')}" placeholder="e.g. Terrace"></label>
+      <label class="field"><span>Rotation</span><input class="input" id="fpRot" type="number" step="15" value="${t.rotation||0}"></label>
+      <div class="fp-panel-actions"><button class="btn" data-act="fpAdd">${ic('plus',16)} Add</button><button class="btn btn-danger" data-act="fpDel">${ic('trash',16)} Delete</button></div></div>`;
+  };
+
+  const redraw=()=>{ const L=ed.L; if(!L)return;
+    const floor=L.el.querySelector('#fpFloor'); if(floor) floor.innerHTML=ed.draft.map(nodeHtml).join('');
+    const p=L.el.querySelector('#fpPanel'); if(p) p.innerHTML=panelHtml();
+  };
+
+  ed.L=modal({title:'Edit floor plan',cls:'wide',
+    body:`<div class="fp-editor"><div class="floor fp-floor" id="fpFloor" role="group" aria-label="Editable floor plan"></div><div id="fpPanel"></div></div>`,
+    foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="fpSave">Save floor plan</button>`,
+    onClose:()=>{}});
+  redraw();
+
+  const floor=ed.L.el.querySelector('#fpFloor');
+  // Pointer drag: move a table within the floor; a click without movement selects.
+  let drag=null;
+  floor.addEventListener('pointerdown',e=>{
+    const node=e.target.closest('[data-fp]'); if(!node)return;
+    const id=node.getAttribute('data-fp'); ed.selId=id;
+    const r=floor.getBoundingClientRect();
+    drag={id,node,r,moved:false,ox:e.clientX,oy:e.clientY};
+    node.setPointerCapture&&node.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  floor.addEventListener('pointermove',e=>{
+    if(!drag)return;
+    if(Math.abs(e.clientX-drag.ox)+Math.abs(e.clientY-drag.oy)>3) drag.moved=true;
+    const x=FloorPlan.clampPct(((e.clientX-drag.r.left)/drag.r.width)*100 - 3);
+    const y=FloorPlan.clampPct(((e.clientY-drag.r.top)/drag.r.height)*100 - 3);
+    drag.node.style.left=x+'%'; drag.node.style.top=y+'%';
+    ed.draft=FloorPlan.moveTable(ed.draft,drag.id,x,y);
+  });
+  const endDrag=()=>{ if(!drag)return; const wasMove=drag.moved; drag=null; redraw(); if(!wasMove){/* selection only */} };
+  floor.addEventListener('pointerup',endDrag);
+  floor.addEventListener('pointercancel',endDrag);
+
+  A.fpAdd=()=>{ const r=FloorPlan.addTable(ed.draft,{}); ed.draft=r.tables; ed.selId=r.table.id; redraw(); };
+  A.fpDel=()=>{ if(!ed.selId)return; ed.draft=FloorPlan.removeTable(ed.draft,ed.selId); ed.selId=null; redraw(); };
+  // Field edits via event delegation on the panel (panel re-renders each redraw).
+  ed.L.el.querySelector('#fpPanel').addEventListener('change',e=>{
+    if(!ed.selId)return; const id=e.target.id; const v=e.target.value;
+    const map={fpName:'name',fpSeats:'seats',fpShape:'shape',fpSize:'size',fpSection:'section',fpRot:'rotation'};
+    if(map[id]){ ed.draft=FloorPlan.updateTable(ed.draft,ed.selId,{[map[id]]: id==='fpSection'? (v||null):v}); redraw(); }
+  });
+
+  ed.L.el.querySelector('#fpSave').onclick=async()=>{
+    const btn=ed.L.el.querySelector('#fpSave'); btn.disabled=true; btn.textContent='Saving…';
+    try{
+      if(window.PlemmoTables){
+        // Persist authoritatively. New tables (not yet on the server) are created;
+        // existing ones are updated. saveAll updates; create the ones without a server id.
+        const existing=new Set(S.tables.map(t=>t.id));
+        const toCreate=ed.draft.filter(t=>!existing.has(t.id));
+        const toUpdate=ed.draft.filter(t=>existing.has(t.id));
+        for(const t of toCreate){ const created=await window.PlemmoTables.create(t); if(created&&created.id) t.id=created.id; }
+        if(toUpdate.length) await window.PlemmoTables.saveAll(toUpdate);
+      }
+      S.tables=ed.draft.map(t=>({...t})); save();
+      ed.L.close(); toast('Floor plan saved','ok'); if(typeof render==='function') render();
+    }catch(err){
+      btn.disabled=false; btn.textContent='Save floor plan';
+      toast('Could not save the floor plan — check the connection and try again','warn');
+    }
+  };
 };
 
 /* =====================================================================

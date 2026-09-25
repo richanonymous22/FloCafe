@@ -49,6 +49,28 @@ Supabase is just one managed-Postgres provider via the same connection string.
 | `PORT` | cloud service | HTTP listen port. |
 | `PLEMMO_SYNC_URL` | desktop client | The cloud base URL the POS talks to. |
 | `PLEMMO_SYNC_ENV` | desktop client | `development` \| `staging` \| `production` (guards; production requires https). |
+| `PLEMMO_LICENSE_SIGNING_KEY` | cloud service | Ed25519 **private** key (PKCS8 PEM) that signs `/sync/v1/license` payloads. Unset → payloads served unsigned (dev). |
+| `PLEMMO_LICENSE_PUBLIC_KEY` | desktop client | Ed25519 **public** key (SPKI PEM), pinned in the managed build. When set, the client rejects tampered/unsigned license payloads (B2). Unset → verification skipped (dev). |
+| `PLEMMO_EMAIL_TRANSPORT` | desktop client | `http` to enable digital-receipt email; unset/`none` records the request only (no send). |
+| `PLEMMO_EMAIL_WEBHOOK_URL` | desktop client | With `http`: endpoint receipts are POSTed to (your provider's API or a relay in front of SendGrid/Mailgun/SES/SMTP). |
+| `PLEMMO_EMAIL_WEBHOOK_TOKEN` | desktop client | Optional bearer token sent as `Authorization: Bearer …` to the webhook. |
+| `PLEMMO_EMAIL_FROM` | desktop client | Optional From address included in the webhook payload. |
+
+A single-line value using literal `\n` for newlines is accepted for both PEM
+keys, so they fit in a normal env var.
+
+Generate the license key pair (keep the private key on the cloud only):
+
+```sh
+openssl genpkey -algorithm ed25519 -out license_private.pem
+openssl pkey -in license_private.pem -pubout -out license_public.pem
+# cloud service:  PLEMMO_LICENSE_SIGNING_KEY = contents of license_private.pem
+# packaged build: PLEMMO_LICENSE_PUBLIC_KEY  = contents of license_public.pem
+```
+
+The email webhook receives `{ to, from, subject, text, html }` and should
+return 2xx (optionally `{ id }` / `{ messageId }`); the client retries once on a
+network error or 5xx and records `sent` / `failed` per receipt.
 
 No production URL or secret is hardcoded anywhere in source.
 

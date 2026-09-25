@@ -38,6 +38,44 @@ function run() {
     'the NSIS installer + latest.yml'
   );
 
+  // ── Meridian bundle packaging wiring ─────────────────────────────
+  // The merchant UI is the Meridian bundle (frontend-meridian/dist/
+  // meridian-pos.html). main/server.ts resolves it, when packaged, at
+  // <resourcesPath>/meridian/meridian-pos.html, so electron-builder must copy
+  // frontend-meridian/dist → meridian via extraResources, and every packaging
+  // script must run build:meridian first or the app ships without a merchant UI.
+  const extraResources: any[] = build?.extraResources || [];
+  const meridianResource = extraResources.find(
+    (r) => r && r.from === 'frontend-meridian/dist' && r.to === 'meridian'
+  );
+  assert.ok(
+    meridianResource,
+    'build.extraResources must copy "frontend-meridian/dist" → "meridian" so the packaged app ' +
+    'can serve the Meridian merchant UI at <resourcesPath>/meridian/meridian-pos.html'
+  );
+  assert.equal(
+    pkg.scripts?.['build:meridian'],
+    'bash frontend-meridian/build.sh',
+    'build:meridian must invoke the Meridian concatenation build'
+  );
+  // Every script that produces a distributable (electron-builder with a platform
+  // target) must build the Meridian bundle first, otherwise frontend-meridian/dist
+  // is stale/absent and extraResources copies nothing. Excludes `install-app-deps`
+  // (native rebuild) and `--dir`/`pack` (unpacked dev build).
+  for (const [name, cmd] of Object.entries(pkg.scripts as Record<string, string>)) {
+    const isDistributableBuild =
+      /\belectron-builder\b/.test(cmd) &&
+      !/install-app-deps/.test(cmd) &&
+      /--(win|mac|linux)\b|\bappx\b|\bmas\b/.test(cmd);
+    if (isDistributableBuild) {
+      assert.ok(
+        /\bbuild:meridian\b/.test(cmd),
+        `packaging script "${name}" produces a distributable but does not run build:meridian first — ` +
+        'the packaged app would ship without the Meridian merchant UI'
+      );
+    }
+  }
+
   // ── Linux snap: Path B (snapcraft, core24) shape ────────────────
   assert.ok(
     build?.snapcraft?.base === 'core24',

@@ -5271,6 +5271,20 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 95,
+    name: 'receipt_delivery_send_outcome',
+    up: () => {
+      // DIGITAL RECEIPTS — email transport (B2 productization). Record the
+      // outcome of an actual send attempt: the provider's message id on success
+      // and the error on failure. `status` remains free text (default
+      // 'recorded'); a configured transport sets 'sent' or 'failed'. Additive.
+      const cols = db.prepare(`PRAGMA table_info(receipt_deliveries)`).all() as { name: string }[];
+      const has = (c: string) => cols.some((x) => x.name === c);
+      if (!has('provider_message_id')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN provider_message_id TEXT`);
+      if (!has('error')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN error TEXT`);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

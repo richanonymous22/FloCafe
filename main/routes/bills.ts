@@ -29,6 +29,7 @@ import { recordAppliedPaymentLine } from '../core/payment';
 import { recordCashSaleForPayment } from '../core/cash';
 import { getCurrentLocationId } from '../core/location';
 import { buildDigitalReceipt, recordReceiptDelivery } from '../core/receipt-digital';
+import { createReceiptEmailTransport, isValidEmail, receiptEmailSubject } from '../core/receipt-email';
 import { ulid } from '../core/ids';
 
 const router = Router();
@@ -1040,14 +1041,35 @@ router.get('/:id/receipt', requireRole('owner', 'manager', 'cashier'), (req: Req
 // POST /:id/receipt/deliver — record a digital-receipt request (email/sms/link)
 // and return the receipt for the client to deliver. No mail transport in the
 // desktop build, so the request is recorded, not silently "sent".
-router.post('/:id/receipt/deliver', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.post('/:id/receipt/deliver', requireRole('owner', 'manager', 'cashier'), async (req: Request, res: Response) => {
   try {
     const { channel, destination } = req.body || {};
     if (!['email', 'sms', 'link'].includes(channel)) {
       return res.status(400).json({ error: 'channel must be email, sms or link' });
     }
     const receipt = buildDigitalReceipt(req.params.id as string);
-    const delivery = recordReceiptDelivery({ billId: req.params.id as string, channel, destination: destination ?? null, actorUserId: String((req as any).user.userId) });
+    const actorUserId = String((req as any).user.userId);
+
+    // Email: when a transport is configured, actually send and record the
+    // outcome; otherwise (and for sms/link) record the request as before.
+    const transport = channel === 'email' ? createReceiptEmailTransport() : null;
+    if (transport) {
+      const to = String(destination ?? '').trim();
+      if (!isValidEmail(to)) {
+        return res.status(400).json({ error: 'a valid destination email address is required' });
+      }
+      const subject = receiptEmailSubject(receipt.business.name, receipt.order_number || receipt.bill_number);
+      const result = await transport.send({ to, subject, text: receipt.text });
+      const delivery = recordReceiptDelivery({
+        billId: req.params.id as string, channel, destination: to, actorUserId,
+        status: result.ok ? 'sent' : 'failed',
+        providerMessageId: result.providerMessageId ?? null,
+        error: result.ok ? null : (result.error ?? 'send failed'),
+      });
+      return res.status(result.ok ? 201 : 502).json({ delivery, receipt });
+    }
+
+    const delivery = recordReceiptDelivery({ billId: req.params.id as string, channel, destination: destination ?? null, actorUserId });
     res.status(201).json({ delivery, receipt });
   } catch (error: any) {
     const status = error?.statusCode || 500;

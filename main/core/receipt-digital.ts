@@ -112,12 +112,21 @@ export function renderReceiptText(r: DigitalReceipt): string {
   return lines.join('\n');
 }
 
-export function recordReceiptDelivery(input: { billId: number | string; channel: 'email' | 'sms' | 'link'; destination?: string | null; actorUserId?: string | null }): { id: string; status: string } {
+export function recordReceiptDelivery(input: {
+  billId: number | string;
+  channel: 'email' | 'sms' | 'link';
+  destination?: string | null;
+  actorUserId?: string | null;
+  status?: string;
+  providerMessageId?: string | null;
+  error?: string | null;
+}): { id: string; status: string; providerMessageId?: string | null; error?: string | null } {
   const db = getDatabase();
   const id = ulid();
-  db.prepare(`INSERT INTO receipt_deliveries (id, bill_id, channel, destination, status, actor_user_id, created_at) VALUES (?, ?, ?, ?, 'recorded', ?, ?)`)
-    .run(id, input.billId, input.channel, input.destination ?? null, input.actorUserId ?? null, now());
+  const status = input.status ?? 'recorded';
+  db.prepare(`INSERT INTO receipt_deliveries (id, bill_id, channel, destination, status, actor_user_id, created_at, provider_message_id, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, input.billId, input.channel, input.destination ?? null, status, input.actorUserId ?? null, now(), input.providerMessageId ?? null, input.error ?? null);
   recordAuditEvent({ type: 'receipt.delivered', actor: { userId: input.actorUserId ?? null }, entity: { type: 'receipt_delivery', id },
-    summary: `Digital receipt ${input.channel} requested for bill ${input.billId}`, metadata: { bill_id: Number(input.billId), channel: input.channel } });
-  return { id, status: 'recorded' };
+    summary: `Digital receipt ${input.channel} ${status} for bill ${input.billId}`, metadata: { bill_id: Number(input.billId), channel: input.channel, status } });
+  return { id, status, providerMessageId: input.providerMessageId ?? null, error: input.error ?? null };
 }

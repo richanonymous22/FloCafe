@@ -29,6 +29,7 @@
 
 import { getDatabase, getSettingValue, now } from '../db';
 import { isEnabled } from './features';
+import { getLicensePublicKey, verifyLicenseSignature } from './licensing-signature';
 
 const LICENSE_KEY = 'plemmo_license';
 
@@ -146,6 +147,14 @@ export class LicenseError extends Error {
   constructor(message: string) { super(message); this.name = 'LicenseError'; }
 }
 
+/** Raised when a server-supplied license payload fails signature verification. */
+export class LicenseSignatureError extends Error {
+  constructor(message = 'License payload failed signature verification') {
+    super(message);
+    this.name = 'LicenseSignatureError';
+  }
+}
+
 /** Throws unless the feature is licensed — the enforcement entry point for gated paths. */
 export function requireFeatureLicensed(featureKey: string, organizationId?: string): void {
   if (!isFeatureLicensed(featureKey, organizationId)) {
@@ -200,7 +209,7 @@ export function createCloudLicenseVerifier(pullLicense: () => Promise<Record<str
     async verify(_organizationUid: string): Promise<License> {
       const raw = await pullLicense();
       if (!raw) return { ...UNLICENSED };
-      return {
+      const license: License = {
         ...UNLICENSED,
         status: (raw.status as License['status']) ?? 'unlicensed',
         plan: String(raw.plan ?? 'none'),
@@ -214,6 +223,16 @@ export function createCloudLicenseVerifier(pullLicense: () => Promise<Record<str
         features: Array.isArray(raw.features) ? (raw.features as string[]) : [],
         signature: (raw.signature as string) ?? null,
       };
+      // B2: when a public key is pinned (managed/commercial build), the payload
+      // must carry a valid signature over its authenticated fields. A tampered
+      // or unsigned payload is rejected by throwing, so `refreshLicense` keeps
+      // the cached entitlement (offline grace) instead of adopting it. With no
+      // key configured (dev/tests), verification is skipped.
+      const publicKey = getLicensePublicKey();
+      if (publicKey && !verifyLicenseSignature(publicKey, license, license.signature)) {
+        throw new LicenseSignatureError();
+      }
+      return license;
     },
   };
 }

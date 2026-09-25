@@ -22,6 +22,7 @@
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
+import { getLicenseSigningKey, signLicense } from './license-signing';
 import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
 
 /**
@@ -404,6 +405,16 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     const device = await authOrReject(req, res);
     if (!device) return;
     const license = await store.getLicense(device.organization_uid);
+    // B2: sign the payload's authenticated fields so the client can verify
+    // authenticity against its pinned public key. When no signing key is
+    // configured (dev), the payload is served unsigned.
+    if (license) {
+      const signingKey = getLicenseSigningKey();
+      if (signingKey) {
+        res.json({ license: { ...license, signature: signLicense(signingKey, license) } });
+        return;
+      }
+    }
     res.json({ license });
   });
 

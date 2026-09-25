@@ -19,6 +19,18 @@ const { orderRoutes } = require('../main/routes/orders');
 const { billRoutes } = require('../main/routes/bills');
 const { reportRoutes } = require('../main/routes/reports');
 const { seedSetupProfile } = require('../main/routes/auth');
+const { ulid } = require('../main/core/ids');
+
+// PAYMENT CUTOVER: reports now aggregate the authoritative `payments` table
+// directly (main/routes/reports.ts's paymentMethodBreakdown), not
+// bills.payment_details — so report-fixture payments are seeded here as real
+// `payments` rows, not raw legacy JSON.
+function seedPayment(db: any, billId: number, method: string, amountMajor: number, requestedAt: string, state = 'settled') {
+  db.prepare(`
+    INSERT INTO payments (id, bill_id, adapter, method, state, amount_minor, currency, refunded_minor, requested_at, settled_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'GBP', 0, ?, ?, ?, ?)
+  `).run(ulid(), billId, method === 'cash' ? 'cash' : 'manual_card', method, state, Math.round(amountMajor * 100), requestedAt, state === 'settled' ? requestedAt : null, requestedAt, requestedAt);
+}
 
 async function main() {
   console.log('Issue #214: payment integrity and reports');
@@ -306,37 +318,43 @@ async function main() {
     assertEqual(walletPay.status, 200, 'wallet accepts exact one-cent amount');
     assertEqual(debit.amount, 1, 'one-cent wallet payment debits exactly one point');
 
-    // Split timestamps, legacy object fallback, and invalid JSON are all safe.
+    // Split timestamps and half-open day-boundary filtering, now against the
+    // authoritative payments table (PAYMENT CUTOVER).
     const reportBill = await newBill();
     const reportBill2 = await newBill();
     const partialReportBill = await newBill();
     db.prepare(`UPDATE bills SET payment_status='paid', paid_amount=10, balance=0,
-      created_at='2026-01-10 09:00:00', paid_at='2026-01-11 09:00:00',
-      payment_details=? WHERE id=?`).run(JSON.stringify([
-      { method: 'cash', amount: 4, timestamp: '2026-01-10T23:59:59Z' },
-      { method: 'card', amount: 6, timestamp: '2026-01-11T00:00:00Z' },
-    ]), reportBill.id);
+      created_at='2026-01-10 09:00:00', paid_at='2026-01-11 09:00:00' WHERE id=?`).run(reportBill.id);
+    seedPayment(db, reportBill.id, 'cash', 4, '2026-01-10 23:59:59', 'settled');
+    seedPayment(db, reportBill.id, 'card', 6, '2026-01-11 00:00:00', 'captured');
     db.prepare(`UPDATE bills SET payment_status='paid', paid_amount=2, balance=0,
-      created_at='2026-01-10 12:00:00', paid_at='2026-01-10 12:01:00',
-      payment_details=? WHERE id=?`).run(JSON.stringify({ method: 'upi', amount: 2 }), reportBill2.id);
+      created_at='2026-01-10 12:00:00', paid_at='2026-01-10 12:01:00' WHERE id=?`).run(reportBill2.id);
+    seedPayment(db, reportBill2.id, 'upi', 2, '2026-01-10 12:01:00', 'captured');
     db.prepare(`UPDATE bills SET payment_status='partial', paid_amount=1, balance=99,
-      created_at='2026-01-01 12:00:00', paid_at=NULL,
-      payment_details=? WHERE id=?`).run(JSON.stringify([{ method: 'cash', amount: 1, timestamp: '2026-01-10 10:00:00' }]), partialReportBill.id);
+      created_at='2026-01-01 12:00:00', paid_at=NULL WHERE id=?`).run(partialReportBill.id);
+    seedPayment(db, partialReportBill.id, 'cash', 1, '2026-01-10 10:00:00', 'settled');
     const report = await api(baseUrl, '/api/reports/sales?start_date=2026-01-10&end_date=2026-01-11', { headers: authHeader });
     assertEqual(report.status, 200, 'split report handles date ranges');
     const methods = report.data.sales.byPaymentMethod;
     assertEqual(methods.find((m: any) => m.method === 'cash')?.count, 1, 'split method count is line count');
     assertEqual(methods.find((m: any) => m.method === 'card')?.total, 6, 'split card line uses its timestamp date');
-    assertEqual(methods.find((m: any) => m.method === 'upi')?.total, 2, 'legacy object falls back to bill paid/created timestamp');
+    assertEqual(methods.find((m: any) => m.method === 'upi')?.total, 2, 'a distinct legacy-style method label aggregates correctly from the authoritative payments table');
     const dayOne = await api(baseUrl, '/api/reports/sales?start_date=2026-01-10&end_date=2026-01-10', { headers: authHeader });
     const dayOneMethods = dayOne.data.sales.byPaymentMethod;
     assertEqual(dayOneMethods.find((m: any) => m.method === 'cash')?.total, 4, 'sales report includes only paid split lines');
     assertEqual(dayOneMethods.find((m: any) => m.method === 'card'), undefined, 'half-open day boundary excludes the next-day card line');
     const summary = await api(baseUrl, '/api/reports/summary?date=2026-01-10', { headers: authHeader });
     assertEqual(summary.data.summary.paymentMethods.find((m: any) => m.method === 'cash')?.total, 5, 'dashboard summary includes partial payment lines');
+    // PAYMENT CUTOVER: reports no longer read bills.payment_details at all —
+    // garbage in that column (a bill created before this cutover, or one the
+    // corruption auto-repair hasn't touched yet) has zero effect on the report.
     db.prepare("UPDATE bills SET payment_details = '{bad json' WHERE id = ?").run(reportBill2.id);
     const invalidReport = await api(baseUrl, '/api/reports/sales?start_date=2026-01-10&end_date=2026-01-11', { headers: authHeader });
-    assertEqual(invalidReport.status, 200, 'invalid payment JSON does not cause report 500');
+    assertEqual(invalidReport.status, 200, 'malformed payment_details does not affect the report at all — it is not consulted');
+    assertEqual(
+      invalidReport.data.sales.byPaymentMethod.find((m: any) => m.method === 'upi')?.total, 2,
+      'the upi total is unchanged by the malformed payment_details column, proving the report never read it',
+    );
   } finally {
     server.close();
     closeDatabase();

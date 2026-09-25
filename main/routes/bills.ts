@@ -9,6 +9,7 @@ import {
   now,
   parseItemJson,
   parseRowJson,
+  deriveBillPaymentDetails,
   utcTodayDate,
   verifyPin,
   withTxn,
@@ -23,6 +24,13 @@ import {
 } from '../services/tax';
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
+import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
+import { recordAppliedPaymentLine } from '../core/payment';
+import { recordCashSaleForPayment } from '../core/cash';
+import { getCurrentLocationId } from '../core/location';
+import { buildDigitalReceipt, recordReceiptDelivery } from '../core/receipt-digital';
+import { createReceiptEmailTransport, isValidEmail, receiptEmailSubject } from '../core/receipt-email';
+import { ulid } from '../core/ids';
 
 const router = Router();
 
@@ -152,22 +160,30 @@ router.get('/order/:orderId', requireRole('owner', 'manager', 'cashier'), (req: 
   }
 });
 
-router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
-  try {
-    const { order_id } = req.body;
+/**
+ * PLEMMO CORE — shared bill-generation engine (Milestone 3). Extracted
+ * verbatim from this route's handler so the new retail checkout path
+ * (main/modules/retail/checkout.ts) can generate a bill for an order
+ * without duplicating this logic or going through HTTP. Behavior-preserving:
+ * same queries, same re-sync-on-unpaid rule, same transaction shape — the
+ * only change is that the order lookup/404 now happens outside the
+ * transaction in both callers instead of inline in this one route.
+ *
+ * Throws a plain `Error` with `.statusCode` set (400/404) for the cases the
+ * route used to answer directly; the route below maps those the same way it
+ * always mapped its internal errors.
+ */
+export function generateBillForOrder(orderId: number | string): { bill: any; isNew: boolean } {
+  const db = getDatabase();
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+  if (!order) {
+    const error: any = new Error('Order not found');
+    error.statusCode = 404;
+    throw error;
+  }
 
-    if (!order_id) {
-      return res.status(400).json({ error: 'Order ID is required' });
-    }
-
-    const db = getDatabase();
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(order_id) as any;
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const result = withTxn(() => {
-      const existingBill = db.prepare('SELECT * FROM bills WHERE order_id = ?').get(order_id) as any;
+  return withTxn(() => {
+      const existingBill = db.prepare('SELECT * FROM bills WHERE order_id = ?').get(orderId) as any;
       if (existingBill) {
         if (existingBill.split_group_id) return { bill: parseRowJson(existingBill), isNew: false };
         // Re-sync bill totals from the order in case discount/adjustments were applied
@@ -235,23 +251,38 @@ router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Reque
       const { total, adjustment: roundOff } = applyPayableRounding(order.total || 0, pack);
 
       const runResult = db.prepare(`
-        INSERT INTO bills (bill_number, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot,
+        INSERT INTO bills (bill_number, uid, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot,
           discount_amount, discount_type, discount_value, discount_reason,
           delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unpaid', ?, ?)
       `).run(
-        billNumber, order_id, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
+        billNumber, ulid(), orderId, order.customer_id, subtotal, taxAmount, order.tax_breakdown, order.tax_snapshot,
         discountAmount, order.discount_type, order.discount_value, order.discount_reason,
         deliveryCharge, packagingCharge, roundOff, total, 0, total, now(), now()
       );
 
       const newBill = parseRowJson(db.prepare('SELECT * FROM bills WHERE id = ?').get(runResult.lastInsertRowid));
+      appendBillSnapshot(db, runResult.lastInsertRowid); // SYNC-E — bill create snapshot (atomic, best-effort)
       return { bill: newBill, isNew: true };
-    });
+  });
+}
+
+router.post('/generate', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const { order_id } = req.body;
+
+    if (!order_id) {
+      return res.status(400).json({ error: 'Order ID is required' });
+    }
+
+    const result = generateBillForOrder(order_id);
 
     notifyOrderUpdated();
     res.status(result.isNew ? 201 : 200).json({ bill: result.bill });
   } catch (error: any) {
+    if (error?.statusCode === 404) {
+      return res.status(404).json({ error: error.message });
+    }
     console.error("[API] Internal error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -327,8 +358,8 @@ router.post('/:id/split-check', requireRole('owner', 'manager', 'cashier'), (req
             .run(groupId, check.label, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), allocations.discount_amount[index], allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], now(), source.id);
           billId = Number(source.id);
         } else {
-          const inserted = db.prepare(`INSERT INTO bills (bill_number, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot, discount_amount, discount_type, discount_value, discount_reason, delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, split_group_id, split_label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'unpaid', ?, ?, ?, ?)`)
-            .run(generateBillNumber(), source.order_id, source.customer_id, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), source.tax_snapshot, allocations.discount_amount[index], source.discount_type, source.discount_value, source.discount_reason, allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], groupId, check.label, now(), now());
+          const inserted = db.prepare(`INSERT INTO bills (bill_number, uid, order_id, customer_id, subtotal, tax_amount, tax_breakdown, tax_snapshot, discount_amount, discount_type, discount_value, discount_reason, delivery_charge, packaging_charge, round_off, total, paid_amount, balance, payment_status, split_group_id, split_label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'unpaid', ?, ?, ?, ?)`)
+            .run(generateBillNumber(), ulid(), source.order_id, source.customer_id, allocations.subtotal[index], allocations.tax_amount[index], splitBreakdown(index), source.tax_snapshot, allocations.discount_amount[index], source.discount_type, source.discount_value, source.discount_reason, allocations.delivery_charge[index], allocations.packaging_charge[index], allocations.round_off[index], allocations.total[index], allocations.total[index], groupId, check.label, now(), now());
           billId = Number(inserted.lastInsertRowid);
         }
         billIds.push(billId);
@@ -349,6 +380,8 @@ interface PaymentInput {
   method: string;
   payment_method_id?: number;
   amount?: number | string | null;
+  /** Optional gratuity on this tender (decimal, same currency as the bill). */
+  tip?: number | string | null;
   transaction_id?: string;
   notes?: string;
 }
@@ -462,17 +495,16 @@ function preparePaymentBatch(
   if (!bill) throw Object.assign(new Error('Bill not found'), { statusCode: 404 });
   if (!Array.isArray(payments) || payments.length === 0) throw Object.assign(new Error('payments must be a non-empty array'), { statusCode: 400 });
   if (payments.length > MAX_PAYMENT_LINES) throw Object.assign(new Error(`A maximum of ${MAX_PAYMENT_LINES} payment lines is allowed`), { statusCode: 400 });
-  let existingPayments: any[] = [];
-  if (bill.payment_details) {
-    try {
-      const parsed = JSON.parse(bill.payment_details);
-      existingPayments = Array.isArray(parsed) ? parsed : [parsed];
-    } catch {
-      // Preserve settlement compatibility with legacy malformed JSON. The new
-      // line is still appended in a recoverable JSON array below.
-      existingPayments = [];
-    }
-  }
+  // PAYMENT CUTOVER: the duplicate-transaction-id guard below now reads its
+  // "what has already been applied to this bill" state from the
+  // authoritative payments table, not the legacy payment_details column —
+  // deriveBillPaymentDetails() returns the same line shape
+  // (method/amount/transaction_id/notes/...) this comparison already
+  // expected. `amount_omitted` is not tracked in payments, so it is simply
+  // absent on every derived line — transactionPaymentMatches() already
+  // treats an absent amount_omitted as "not enforced", the same fallback it
+  // has always used for any legacy line that predated that field.
+  const existingPayments: any[] = deriveBillPaymentDetails(billId) || [];
   payments.forEach(validatePaymentFields);
   const resolvedPayments = payments.map((payment, index) => {
     if (PAYMENT_METHODS.has(payment.method)) return payment;
@@ -560,6 +592,7 @@ function preparePaymentBatch(
     };
     if (payment.transaction_id !== undefined) normalizedPayment.transaction_id = payment.transaction_id;
     if (payment.notes !== undefined) normalizedPayment.notes = payment.notes;
+    if (payment.tip !== undefined && payment.tip !== null) normalizedPayment.tip = payment.tip;
     return {
       payment: normalizedPayment,
       method: normalizedPayment.method,
@@ -681,6 +714,47 @@ function applyPaymentBatch(
   }
   if (!bill.customer_id && effectiveCustomerId) db.prepare('UPDATE bills SET customer_id = ?, updated_at = ? WHERE id = ?').run(effectiveCustomerId, changedAt, billId);
   db.prepare(`UPDATE bills SET paid_amount = ?, balance = ?, payment_status = ?, payment_details = ?, paid_at = CASE WHEN ? = 'paid' THEN ? ELSE paid_at END, updated_at = ? WHERE id = ?`).run(newPaidCents / 100, newBalanceCents / 100, paymentStatus, JSON.stringify(allPayments), paymentStatus, paymentStatus === 'paid' ? changedAt : null, changedAt, billId);
+  appendBillSnapshot(db, billId); // SYNC-E — bill payment-status snapshot (atomic with the payment write, best-effort)
+
+  // PLEMMO CORE — additive dual-write into the new payments/payment_events
+  // model, alongside the bills.payment_details JSON write directly above.
+  // See main/core/payment.ts's module docstring for the full reasoning; in
+  // short, this never throws and can never affect the outcome above it.
+  for (const line of prepared) {
+    const tipCents = Math.max(0, Math.round(Number((line.payment as any).tip || 0) * 100));
+    recordAppliedPaymentLine({
+      billId, orderId: bill.order_id,
+      line: {
+        method: line.payment.method,
+        paymentMethodId: line.payment.payment_method_id ?? null,
+        amountCents: line.amountCents,
+        tenderedCents: line.tenderedCents ?? null,
+        changeCents: line.changeCents ?? null,
+        tipCents,
+        transactionId: line.payment.transaction_id ?? null,
+        notes: line.payment.notes ?? null,
+      },
+      actorUserId: idempotencyUserId ?? null,
+    });
+    // Keep the cash drawer authoritative: a cash tender (and any cash tip)
+    // moves the open drawer for this location. Best-effort — a drawer write
+    // must never roll back the payment itself.
+    if (line.payment.method === 'cash') {
+      try {
+        recordCashSaleForPayment({
+          locationId: getCurrentLocationId(),
+          adapter: 'cash',
+          amountMinor: line.amountCents,
+          tipMinor: tipCents,
+          actorUserId: idempotencyUserId ?? null,
+          reference: String(billId),
+        });
+      } catch (err) {
+        console.error('[Bills] Cash drawer movement failed (payment unaffected):', err);
+      }
+    }
+  }
+
   let loyaltyPointsEarned = 0;
   if (paymentStatus === 'paid') {
     const unpaidSibling = db.prepare(`SELECT 1 FROM bills WHERE order_id = ? AND id != ? AND payment_status != 'paid' LIMIT 1`).get(bill.order_id, bill.id);
@@ -689,6 +763,7 @@ function applyPaymentBatch(
       db.prepare("UPDATE orders SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").run(changedAt, changedAt, bill.order_id);
       const order = db.prepare('SELECT table_id FROM orders WHERE id = ?').get(bill.order_id) as any;
       if (order?.table_id) db.prepare("UPDATE tables SET status = 'available', updated_at = ? WHERE id = ?").run(changedAt, order.table_id);
+      appendOrderSnapshot(db, bill.order_id); // SYNC-E — order terminal (completed) snapshot
     }
     const cashback = calculateCashback(db, bill, effectiveCustomerId);
     const alreadyCredited = db.prepare(`SELECT id FROM loyalty_ledger WHERE bill_id = ? AND type = 'credit'`).get(bill.id);
@@ -949,6 +1024,57 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
     const statusCode = error.statusCode || 500;
     console.error('[API] Bill discount failed:', error);
     res.status(statusCode).json({ error: statusCode >= 500 ? 'Internal server error' : error.message });
+  }
+});
+
+// GET /:id/receipt — authoritative digital receipt payload (JSON + text).
+router.get('/:id/receipt', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    res.json({ receipt: buildDigitalReceipt(req.params.id as string) });
+  } catch (error: any) {
+    const status = error?.statusCode || 500;
+    if (status >= 500) console.error('[API] Digital receipt failed:', error);
+    res.status(status).json({ error: status >= 500 ? 'Internal server error' : error.message });
+  }
+});
+
+// POST /:id/receipt/deliver — record a digital-receipt request (email/sms/link)
+// and return the receipt for the client to deliver. No mail transport in the
+// desktop build, so the request is recorded, not silently "sent".
+router.post('/:id/receipt/deliver', requireRole('owner', 'manager', 'cashier'), async (req: Request, res: Response) => {
+  try {
+    const { channel, destination } = req.body || {};
+    if (!['email', 'sms', 'link'].includes(channel)) {
+      return res.status(400).json({ error: 'channel must be email, sms or link' });
+    }
+    const receipt = buildDigitalReceipt(req.params.id as string);
+    const actorUserId = String((req as any).user.userId);
+
+    // Email: when a transport is configured, actually send and record the
+    // outcome; otherwise (and for sms/link) record the request as before.
+    const transport = channel === 'email' ? createReceiptEmailTransport() : null;
+    if (transport) {
+      const to = String(destination ?? '').trim();
+      if (!isValidEmail(to)) {
+        return res.status(400).json({ error: 'a valid destination email address is required' });
+      }
+      const subject = receiptEmailSubject(receipt.business.name, receipt.order_number || receipt.bill_number);
+      const result = await transport.send({ to, subject, text: receipt.text });
+      const delivery = recordReceiptDelivery({
+        billId: req.params.id as string, channel, destination: to, actorUserId,
+        status: result.ok ? 'sent' : 'failed',
+        providerMessageId: result.providerMessageId ?? null,
+        error: result.ok ? null : (result.error ?? 'send failed'),
+      });
+      return res.status(result.ok ? 201 : 502).json({ delivery, receipt });
+    }
+
+    const delivery = recordReceiptDelivery({ billId: req.params.id as string, channel, destination: destination ?? null, actorUserId });
+    res.status(201).json({ delivery, receipt });
+  } catch (error: any) {
+    const status = error?.statusCode || 500;
+    if (status >= 500) console.error('[API] Receipt delivery failed:', error);
+    res.status(status).json({ error: status >= 500 ? 'Internal server error' : error.message });
   }
 });
 

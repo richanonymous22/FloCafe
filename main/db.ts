@@ -7,6 +7,8 @@ import * as fs from 'fs';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled';
+import { ulid } from './core/ids';
+import { fromMinor, minorUnitExponent } from './core/money';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -3562,6 +3564,1727 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       insert.run('bill_footer_message', '', now());
     },
   },
+  {
+    version: 67,
+    name: 'plemmo_disconnect_upstream_services',
+    up: () => {
+      // PLEMMO FORK — Phase 0.
+      //
+      // Upstream FloCafe ships with cloud coordination, anonymous telemetry
+      // and store diagnostics pointed at its own hosted services
+      // (blue.flopos.com / telemetry.flopos.com), all enabled by default, and
+      // migration v40 actively re-enabled cloud_sync_enabled on upgrade.
+      // Under the v2 zero-touch registration flow this means a booting install
+      // registers itself — business name, contact, address — with a third
+      // party with no human step.
+      //
+      // Plemmo is a separate commercial product with no relationship to that
+      // service, so every outbound channel to it is switched off here. This is
+      // non-destructive and fully reversible: no rows are deleted, no schema
+      // changes, and an operator can re-enable any of these from Settings.
+      // The endpoint constants are left in place on purpose (see
+      // docs/PLEMMO_ARCHITECTURE.md § Deferred) — flipping the switches is
+      // what makes them inert, and inventing placeholder URLs would only
+      // produce confusing connection failures.
+      //
+      // Consent recorded for a FloCafe endpoint is not consent for a Plemmo
+      // one, so previously-granted telemetry/diagnostics consent is cleared
+      // rather than carried over.
+      const changedAt = now();
+      const setFlag = db.prepare(`
+        UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND value != ?
+      `);
+      for (const [key, value] of [
+        ['cloud_sync_enabled', '0'],
+        ['cloud_orders_enabled', '0'],
+        ['cloud_reports_enabled', '0'],
+        ['cloud_command_polling_enabled', '0'],
+        ['anonymous_data_consent', 'false'],
+        ['telemetry_enabled', 'false'],
+        ['diagnostics_consent', 'false'],
+      ] as const) {
+        setFlag.run(value, changedAt, key, value);
+      }
+      // Ensure the keys exist even on an install that somehow lacks them, so
+      // the "off" state is explicit rather than relying on a read fallback.
+      const insertIfMissing = db.prepare(`
+        INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+      `);
+      for (const [key, value] of [
+        ['cloud_sync_enabled', '0'],
+        ['telemetry_enabled', 'false'],
+        ['diagnostics_consent', 'false'],
+      ] as const) {
+        insertIfMissing.run(key, value, changedAt);
+      }
+    },
+  },
+  {
+    version: 68,
+    name: 'plemmo_organization_hierarchy',
+    up: () => {
+      // PLEMMO CORE — Organization > Location > Register > Device.
+      //
+      // Purely additive: four new tables and a handful of settings pointers.
+      // No existing table, column or row is touched, so this cannot affect a
+      // single existing hospitality workflow.
+      //
+      // Scope decision (docs/PLEMMO_ARCHITECTURE.md § Multi-tenancy): a till's
+      // local database holds exactly ONE organization, ONE location and ONE
+      // register. It is single-tenant by construction — a shop-floor machine
+      // must be physically incapable of holding another merchant's data.
+      // These tables exist so that (a) the hierarchy is real and queryable
+      // rather than implied by loose `settings` keys, and (b) transactional
+      // rows can later be stamped with location/register/device so they
+      // self-identify once a sync engine uploads them.
+      //
+      // Multi-tenancy proper — many organizations in one database — is a CLOUD
+      // concern and is deliberately NOT modelled here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS organizations (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          country TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS locations (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          code TEXT,
+          address TEXT,
+          phone TEXT,
+          timezone TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS registers (
+          id TEXT PRIMARY KEY,
+          location_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          code TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS devices (
+          id TEXT PRIMARY KEY,
+          register_id TEXT,
+          name TEXT,
+          platform TEXT,
+          app_version TEXT,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'retired', 'revoked')),
+          last_seen_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (register_id) REFERENCES registers(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_locations_organization ON locations(organization_id);
+        CREATE INDEX IF NOT EXISTS idx_registers_location ON registers(location_id);
+        CREATE INDEX IF NOT EXISTS idx_devices_register ON devices(register_id);
+      `);
+
+      // Seed the single local hierarchy from whatever the install already
+      // knows about itself. Existing installs keep their business name; a
+      // brand-new install gets a placeholder that first-run setup overwrites.
+      const readSetting = (key: string): string => {
+        const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+        return row?.value ?? '';
+      };
+      const changedAt = now();
+      const businessName = readSetting('business_name') || 'My Business';
+      const country = readSetting('country') || '';
+
+      const organizationId = ulid();
+      const locationId = ulid();
+      const registerId = ulid();
+      const deviceId = ulid();
+
+      db.prepare(`INSERT INTO organizations (id, name, country, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(organizationId, businessName, country || null, changedAt, changedAt);
+      db.prepare(`
+        INSERT INTO locations (id, organization_id, name, code, address, phone, timezone, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 'MAIN', ?, ?, ?, 1, ?, ?)
+      `).run(
+        locationId, organizationId, businessName,
+        readSetting('business_address') || null,
+        readSetting('business_phone') || null,
+        readSetting('timezone') || null,
+        changedAt, changedAt,
+      );
+      db.prepare(`INSERT INTO registers (id, location_id, name, code, is_active, created_at, updated_at) VALUES (?, ?, 'Register 1', 'R1', 1, ?, ?)`)
+        .run(registerId, locationId, changedAt, changedAt);
+      // The device row is this installation's own identity. Pairing,
+      // authorization and licence binding will hang off it in a later phase;
+      // for now it exists so nothing has to invent one later.
+      db.prepare(`INSERT INTO devices (id, register_id, name, platform, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)`)
+        .run(deviceId, registerId, 'This device', process.platform, changedAt, changedAt);
+
+      // Pointers so "which register am I?" is one cheap settings read rather
+      // than a query that has to assume there is exactly one row.
+      const setPointer = db.prepare(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)`);
+      setPointer.run('plemmo_organization_id', organizationId, changedAt);
+      setPointer.run('plemmo_location_id', locationId, changedAt);
+      setPointer.run('plemmo_register_id', registerId, changedAt);
+      setPointer.run('plemmo_device_id', deviceId, changedAt);
+    },
+  },
+  {
+    version: 69,
+    name: 'plemmo_distributed_identifiers',
+    up: () => {
+      // PLEMMO CORE — collision-safe identity for the transactional tables.
+      //
+      // orders/order_items/bills use INTEGER AUTOINCREMENT keys, which two
+      // offline tills would both allocate from 1. Converting the primary keys
+      // outright would break every foreign key, join, report and the KDS
+      // WebSocket contract in one commit; instead each row gains a ULID `uid`
+      // beside its existing key. Existing code keeps using the integer key and
+      // is completely unaffected; new distributed code (sync, refunds against
+      // a sale created on another till, cloud upload) keys on `uid`.
+      //
+      // See docs/PLEMMO_ARCHITECTURE.md § Identifiers for why this is the
+      // chosen strategy and what the eventual promotion to primary key needs.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        if (!getColumns(db, table).includes('uid')) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN uid TEXT`);
+        }
+      }
+
+      // Backfill in creation order, seeding each ULID's timestamp from the
+      // row's own created_at. That makes the generated identifiers sort in
+      // true historical order rather than all clustering at migration time,
+      // so a lexicographic sort on uid matches a sort on created_at.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        const rows = db.prepare(`SELECT id, created_at FROM ${table} WHERE uid IS NULL ORDER BY created_at ASC, id ASC`)
+          .all() as { id: number; created_at: string | null }[];
+        const update = db.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`);
+        for (const row of rows) {
+          const parsed = row.created_at ? Date.parse(String(row.created_at).replace(' ', 'T') + 'Z') : NaN;
+          const seed = Number.isFinite(parsed) ? parsed : Date.now();
+          update.run(ulid(seed), row.id);
+        }
+      }
+
+      // Unique, not just indexed: a duplicate uid would silently merge two
+      // distinct sales during a future sync, which is the exact failure this
+      // column exists to prevent. Partial (WHERE uid IS NOT NULL) so the
+      // constraint cannot block an insert path that has not been taught to
+      // populate uid yet.
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_uid ON orders(uid) WHERE uid IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_uid ON order_items(uid) WHERE uid IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_uid ON bills(uid) WHERE uid IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 70,
+    name: 'plemmo_audit_events',
+    up: () => {
+      // PLEMMO CORE — minimum viable audit trail: who did what, when, where.
+      //
+      // Deliberately one narrow append-only table rather than an audit
+      // framework. A commercial EPOS has to be able to answer "who authorised
+      // this refund", "who changed this price", "who opened the drawer" — and
+      // the existing codebase only has fragments (tax_config_audit, print_logs,
+      // payment_transaction_ref_conflicts) with no common shape.
+      //
+      // Append-only by convention: nothing in Plemmo should ever UPDATE or
+      // DELETE a row here. Retention/rotation is a later decision and is called
+      // out in docs/PLEMMO_ARCHITECTURE.md § Deferred.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS audit_events (
+          id TEXT PRIMARY KEY,
+          occurred_at TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          actor_user_id TEXT,
+          actor_role TEXT,
+          entity_type TEXT,
+          entity_id TEXT,
+          organization_id TEXT,
+          location_id TEXT,
+          register_id TEXT,
+          device_id TEXT,
+          summary TEXT,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_events_occurred ON audit_events(occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_type_occurred ON audit_events(event_type, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_user_id, occurred_at DESC);
+      `);
+    },
+  },
+  {
+    version: 71,
+    name: 'plemmo_payment_persistence',
+    up: () => {
+      // PLEMMO CORE — payment persistence foundation (main/core/payment.ts).
+      //
+      // Today a tender is a JSON array inside bills.payment_details, written
+      // by applyPaymentBatch() in routes/bills.ts. That is not being replaced
+      // in this migration or this milestone — applyPaymentBatch's idempotency
+      // handling, transaction-ref uniqueness and cent allocation are exactly
+      // the kind of load-bearing logic this project's own development rules
+      // say not to touch without a very good reason. See
+      // docs/MILESTONE_2_CORE_ENGINE.md § Payment persistence for the full
+      // dual-write strategy this migration is the schema half of.
+      //
+      // Brand-new tables, so — unlike orders/order_items/bills, which keep
+      // their integer PK and only grew a bolted-on `uid` column in migration
+      // v69 — these use a ULID directly as the primary key. There is no
+      // legacy integer key to preserve here.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payments (
+          id TEXT PRIMARY KEY,
+          bill_id INTEGER NOT NULL,
+          order_id INTEGER,
+          adapter TEXT NOT NULL,
+          method TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'requested'
+            CHECK (state IN ('requested', 'authorized', 'captured', 'settled', 'declined', 'cancelled', 'voided', 'refunded', 'failed')),
+          amount_minor INTEGER NOT NULL,
+          currency TEXT NOT NULL,
+          refunded_minor INTEGER NOT NULL DEFAULT 0,
+          tendered_minor INTEGER,
+          change_minor INTEGER,
+          provider_reference TEXT,
+          actor_user_id TEXT,
+          notes TEXT,
+          metadata TEXT,
+          requested_at TEXT NOT NULL,
+          settled_at TEXT,
+          voided_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (bill_id) REFERENCES bills(id),
+          FOREIGN KEY (order_id) REFERENCES orders(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_payments_bill ON payments(bill_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_state ON payments(state);
+
+        -- Append-only. Nothing in Plemmo should ever UPDATE or DELETE a row here.
+        CREATE TABLE IF NOT EXISTS payment_events (
+          id TEXT PRIMARY KEY,
+          payment_id TEXT NOT NULL,
+          from_state TEXT,
+          to_state TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          actor_user_id TEXT,
+          reason TEXT,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (payment_id) REFERENCES payments(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_payment_events_payment ON payment_events(payment_id, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS refunds (
+          id TEXT PRIMARY KEY,
+          payment_id TEXT NOT NULL,
+          bill_id INTEGER NOT NULL,
+          amount_minor INTEGER NOT NULL,
+          currency TEXT NOT NULL,
+          reason TEXT,
+          state TEXT NOT NULL DEFAULT 'requested'
+            CHECK (state IN ('requested', 'settled', 'failed')),
+          actor_user_id TEXT,
+          provider_reference TEXT,
+          metadata TEXT,
+          requested_at TEXT NOT NULL,
+          settled_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (payment_id) REFERENCES payments(id),
+          FOREIGN KEY (bill_id) REFERENCES bills(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_refunds_payment ON refunds(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_refunds_bill ON refunds(bill_id);
+      `);
+    },
+  },
+  {
+    version: 72,
+    name: 'plemmo_product_variants',
+    up: () => {
+      // PLEMMO CORE — retail's Product → ProductVariant foundation
+      // (main/core/retail.ts). See docs/MILESTONE_3_VERTICALS_AND_RETAIL.md
+      // § Product/Variant schema for the full reasoning.
+      //
+      // A hospitality product (a menu item) never needs a row here — it is
+      // sold directly off `products`, exactly as before this migration. A
+      // retail product that needs distinct SKUs/barcodes/prices per option
+      // (size, colour, storage) gets one `product_variants` row per option.
+      // Nothing about `products` changes shape or meaning; this is purely
+      // additive, so every existing product keeps working unmodified.
+      //
+      // Brand-new table, same reasoning as payments/payment_events/refunds
+      // in v71: ULID directly as the primary key, no legacy integer key to
+      // preserve.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS product_variants (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          name TEXT,
+          sku TEXT,
+          barcode TEXT,
+          price REAL NOT NULL,
+          cost REAL DEFAULT 0,
+          tax_category_id TEXT,
+          is_default INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          sort_order INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
+
+        -- Safe to enforce as a hard, non-partial-only-for-blanks unique
+        -- constraint: this table starts empty, so there is no legacy data to
+        -- conflict with. Still partial on non-blank values, because a
+        -- variant with no SKU/barcode yet (drafted before the merchant has
+        -- printed labels) must not collide with every other blank one.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_sku
+          ON product_variants(sku) WHERE sku IS NOT NULL AND sku != '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_barcode
+          ON product_variants(barcode) WHERE barcode IS NOT NULL AND barcode != '';
+      `);
+
+      // order_items gains two nullable, additive columns:
+      //   product_variant_id — which variant (if any) this line sold, for
+      //     historical/reporting accuracy even if the variant is edited later.
+      //   unit_cost — a snapshot of the product's cost at sale time, so
+      //     gross-margin reporting does not silently drift if a merchant
+      //     edits `products.cost` after the fact (B8). Deliberately not
+      //     wired into any report in this milestone — see the doc's Known
+      //     limitations.
+      // Note: `products.sku`/`products.barcode` are deliberately NOT given a
+      // uniqueness constraint here. Unlike product_variants, that table has
+      // years of real merchant data that may already contain blanks or
+      // duplicates; a blind UNIQUE index would risk breaking the upgrade
+      // path for an install with dirty data (an explicit STOP CONDITION for
+      // this milestone). SKU/barcode uniqueness for bare products is
+      // enforced at the application layer instead — see
+      // main/core/retail.ts's validation.
+      for (const [column, ddl] of [
+        ['product_variant_id', 'ALTER TABLE order_items ADD COLUMN product_variant_id TEXT'],
+        ['unit_cost', 'ALTER TABLE order_items ADD COLUMN unit_cost REAL'],
+      ] as const) {
+        if (!getColumns(db, 'order_items').includes(column)) {
+          db.exec(ddl);
+        }
+      }
+    },
+  },
+  {
+    version: 73,
+    name: 'plemmo_inventory_ledger',
+    up: () => {
+      // PLEMMO CORE — inventory movement ledger (main/core/inventory.ts). See
+      // docs/MILESTONE_4_INVENTORY.md for the full design record.
+      //
+      // Two brand-new, empty tables — same reasoning as payments/refunds
+      // (v71) and product_variants (v72): ULID directly as the primary key,
+      // no legacy integer key to preserve. `products.stock_quantity` is NOT
+      // touched, dropped, or stopped being written by this migration — it
+      // remains the compatibility path for every product that has no
+      // variant (i.e. every hospitality product, forever, and any retail
+      // product that never grew variants). See § Migration strategy for
+      // exactly when the ledger becomes the source of truth instead.
+      //
+      // `location_id` exists on both tables so a future multi-location
+      // milestone can scope inventory without another migration — it is
+      // always NULL in this milestone (Part O: design for it, don't build
+      // it). The balance table's uniqueness is expressed with COALESCE so a
+      // NULL variant/location still participates in exactly one balance row
+      // per product, not one row per NULL (SQLite treats NULLs as distinct
+      // in a plain UNIQUE index).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_delta REAL NOT NULL,
+          movement_type TEXT NOT NULL
+            CHECK (movement_type IN ('sale', 'return', 'adjustment', 'receipt', 'opening')),
+          reason TEXT,
+          reference_type TEXT,
+          reference_id TEXT,
+          unit_cost REAL,
+          actor_user_id TEXT,
+          balance_after REAL NOT NULL,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_lookup
+          ON inventory_movements(product_id, product_variant_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_reference
+          ON inventory_movements(reference_type, reference_id);
+
+        -- The maintained balance half of "maintained balance + immutable
+        -- ledger" (Part D) — an O(1) read for the till, updated atomically
+        -- alongside every movement insert inside the same transaction.
+        CREATE TABLE IF NOT EXISTS inventory_balances (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          location_id TEXT,
+          quantity REAL NOT NULL DEFAULT 0,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_balances_unique
+          ON inventory_balances(product_id, COALESCE(product_variant_id, ''), COALESCE(location_id, ''));
+      `);
+
+      // Variant-level low-stock threshold, nullable — falls back to the
+      // parent product's threshold when unset. Additive; every existing
+      // variant (there are none yet on an upgraded install, since
+      // product_variants was only introduced in v72) is unaffected.
+      if (!getColumns(db, 'product_variants').includes('low_stock_threshold')) {
+        db.exec('ALTER TABLE product_variants ADD COLUMN low_stock_threshold REAL');
+      }
+
+      // Opening-balance backfill: every product that currently tracks
+      // inventory gets one 'opening' movement carrying its existing
+      // stock_quantity, plus a matching inventory_balances row. This is what
+      // makes the ledger auditable from day one instead of starting with an
+      // unexplained number — the exact question Part J's history view exists
+      // to answer ("where did this starting quantity come from?").
+      //
+      // Deterministic and idempotent: keyed by reference_type='opening_stock_migration'
+      // + reference_id=product.id, so re-running this migration logic (it
+      // never runs twice via the normal MIGRATIONS pipeline, but the
+      // create-ideal-schema path in tests rebuilds databases from scratch
+      // and this guard keeps that safe too) cannot double-insert.
+      const trackedProducts = db.prepare(
+        "SELECT id, stock_quantity FROM products WHERE track_inventory = 1 AND deleted_at IS NULL"
+      ).all() as { id: string; stock_quantity: number }[];
+
+      const existingOpening = db.prepare(
+        "SELECT reference_id FROM inventory_movements WHERE reference_type = 'opening_stock_migration'"
+      ).all() as { reference_id: string }[];
+      const alreadyMigrated = new Set(existingOpening.map((row) => row.reference_id));
+
+      const insertMovement = db.prepare(`
+        INSERT INTO inventory_movements
+          (id, product_id, product_variant_id, quantity_delta, movement_type, reason,
+           reference_type, reference_id, balance_after, created_at)
+        VALUES (?, ?, NULL, ?, 'opening', 'Opening balance migrated from products.stock_quantity', 'opening_stock_migration', ?, ?, ?)
+      `);
+      const insertBalance = db.prepare(`
+        INSERT INTO inventory_balances (id, product_id, product_variant_id, location_id, quantity, updated_at)
+        VALUES (?, ?, NULL, NULL, ?, ?)
+      `);
+
+      const migrationNow = now();
+      for (const product of trackedProducts) {
+        if (alreadyMigrated.has(product.id)) continue;
+        const quantity = product.stock_quantity || 0;
+        insertMovement.run(ulid(), product.id, quantity, product.id, quantity, migrationNow);
+        insertBalance.run(ulid(), product.id, quantity, migrationNow);
+      }
+    },
+  },
+  {
+    version: 74,
+    name: 'plemmo_location_aware_inventory',
+    up: () => {
+      // PLEMMO CORE — location-aware inventory (Milestone 5, Part B). See
+      // docs/MILESTONE_5_PURCHASING_LOCATIONS.md § Location model.
+      //
+      // inventory_balances/inventory_movements already have a `location_id`
+      // column (added in v73, always NULL until now — Part O of Milestone 4
+      // deliberately designed for this without populating it). This
+      // migration does not add a column; it backfills every existing NULL
+      // row to this install's one real location, seeded by v68
+      // (`plemmo_organization_hierarchy`) and pointed to by the
+      // `plemmo_location_id` setting. A fresh install has no inventory rows
+      // yet, so this is a no-op there — the first real write already
+      // resolves its location (see main/core/location.ts).
+      //
+      // This backfill is not cosmetic: InventoryService starts resolving a
+      // caller's unspecified location to this same real location id from
+      // this migration onward. Without backfilling the existing NULL rows
+      // first, the very next sale against an already-tracked product would
+      // create a *second*, disjoint balance row (real location_id) instead
+      // of updating the existing one (NULL location_id) — silently
+      // duplicating stock. Backfilling first is what keeps them the same
+      // row.
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      if (!locationId?.value) return; // no organization hierarchy yet — nothing to backfill against.
+
+      db.prepare('UPDATE inventory_balances SET location_id = ?, updated_at = ? WHERE location_id IS NULL')
+        .run(locationId.value, now());
+      db.prepare('UPDATE inventory_movements SET location_id = ? WHERE location_id IS NULL')
+        .run(locationId.value);
+    },
+  },
+  {
+    version: 75,
+    name: 'plemmo_purchasing',
+    up: () => {
+      // PLEMMO CORE — Supplier → PurchaseOrder → Goods Receiving foundation
+      // (Milestone 5). Three brand-new, empty tables — same reasoning as
+      // every other Plemmo Core table since v71: ULID directly as the
+      // primary key, no legacy integer key to preserve. Receiving itself
+      // has no separate table: a receipt is an `inventory_movements` row
+      // (movement_type = 'receipt', reference_type = 'purchase_order_item')
+      // plus an increment of the item's own `quantity_received` — the
+      // ledger already IS the receiving history (see
+      // docs/MILESTONE_5_PURCHASING_LOCATIONS.md § Receiving architecture).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS suppliers (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          name TEXT NOT NULL,
+          business_name TEXT,
+          contact_person TEXT,
+          phone TEXT,
+          email TEXT,
+          address TEXT,
+          notes TEXT,
+          tax_registration_number TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_suppliers_organization ON suppliers(organization_id);
+
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          supplier_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK (status IN ('draft', 'ordered', 'partially_received', 'received', 'cancelled')),
+          reference_number TEXT,
+          order_date TEXT,
+          expected_date TEXT,
+          notes TEXT,
+          subtotal REAL NOT NULL DEFAULT 0,
+          tax REAL NOT NULL DEFAULT 0,
+          total REAL NOT NULL DEFAULT 0,
+          created_by TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id),
+          FOREIGN KEY (organization_id) REFERENCES organizations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_location ON purchase_orders(location_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+
+        CREATE TABLE IF NOT EXISTS purchase_order_items (
+          id TEXT PRIMARY KEY,
+          purchase_order_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_ordered REAL NOT NULL,
+          unit_cost REAL NOT NULL,
+          tax REAL NOT NULL DEFAULT 0,
+          line_total REAL NOT NULL,
+          quantity_received REAL NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po ON purchase_order_items(purchase_order_id);
+        CREATE INDEX IF NOT EXISTS idx_purchase_order_items_variant ON purchase_order_items(product_id, product_variant_id);
+      `);
+    },
+  },
+  {
+    version: 76,
+    name: 'plemmo_location_aware_sales_and_payments',
+    up: () => {
+      // PLEMMO CORE — location/device stamping for sales and payments
+      // (Milestone 6, Part D/E). See docs/MILESTONE_6_MULTI_LOCATION.md.
+      //
+      // Additive columns only. `orders` gets the full chain
+      // (organization/location/register/device) because a sale is the
+      // transactional event a future sync/report genuinely needs to place
+      // physically. `payments` gets only organization_id/location_id —
+      // register_id/device_id add no information a payment doesn't already
+      // have via its order_id join, so they are deliberately not stamped
+      // here (Part E: "add only the minimum required fields").
+      for (const [column, ddl] of [
+        ['organization_id', 'ALTER TABLE orders ADD COLUMN organization_id TEXT'],
+        ['location_id', 'ALTER TABLE orders ADD COLUMN location_id TEXT'],
+        ['register_id', 'ALTER TABLE orders ADD COLUMN register_id TEXT'],
+        ['device_id', 'ALTER TABLE orders ADD COLUMN device_id TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'orders').includes(column)) db.exec(ddl);
+      }
+      for (const [column, ddl] of [
+        ['organization_id', 'ALTER TABLE payments ADD COLUMN organization_id TEXT'],
+        ['location_id', 'ALTER TABLE payments ADD COLUMN location_id TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'payments').includes(column)) db.exec(ddl);
+      }
+
+      // Backfill every existing row to this install's one real context —
+      // safe because, exactly as migration v74 established for inventory,
+      // every row that already exists happened at this one location. New
+      // rows are stamped going forward by SaleService/PaymentService
+      // themselves (main/core/context.ts), not by this migration.
+      const organizationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as { value: string } | undefined;
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      const registerId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_register_id'").get() as { value: string } | undefined;
+      const deviceId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as { value: string } | undefined;
+      if (!organizationId?.value) return; // no organization hierarchy yet — nothing to backfill against.
+
+      db.prepare('UPDATE orders SET organization_id = ?, location_id = ?, register_id = ?, device_id = ? WHERE organization_id IS NULL')
+        .run(organizationId.value, locationId?.value ?? null, registerId?.value ?? null, deviceId?.value ?? null);
+      db.prepare('UPDATE payments SET organization_id = ?, location_id = ? WHERE organization_id IS NULL')
+        .run(organizationId.value, locationId?.value ?? null);
+    },
+  },
+  {
+    version: 77,
+    name: 'plemmo_stock_transfers',
+    up: () => {
+      // PLEMMO CORE — stock transfers between locations (Milestone 6, Part
+      // G). Two brand-new, empty tables, ULID PK per the established
+      // pattern. Deliberately simple states — draft → completed/cancelled,
+      // no in_transit — since no existing transfer workflow needs one
+      // (Part G: "if the existing business model does not require an
+      // in_transit workflow... do not overengineer").
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS stock_transfers (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          from_location_id TEXT NOT NULL,
+          to_location_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'completed', 'cancelled')),
+          reference_number TEXT,
+          notes TEXT,
+          created_by TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT,
+          FOREIGN KEY (from_location_id) REFERENCES locations(id),
+          FOREIGN KEY (to_location_id) REFERENCES locations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_from ON stock_transfers(from_location_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_to ON stock_transfers(to_location_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_status ON stock_transfers(status);
+
+        CREATE TABLE IF NOT EXISTS stock_transfer_items (
+          id TEXT PRIMARY KEY,
+          stock_transfer_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity REAL NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (stock_transfer_id) REFERENCES stock_transfers(id),
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer ON stock_transfer_items(stock_transfer_id);
+      `);
+
+      // inventory_movements.movement_type's CHECK constraint (v73) only
+      // covered what Milestone 4 needed (sale/return/adjustment/receipt/
+      // opening) — that migration's own comment flagged this exact
+      // rebuild as the accepted future cost of adding a movement type
+      // later, since SQLite cannot ALTER a CHECK constraint in place.
+      // Table-rebuild, same dance already used by migration v53
+      // (payment_idempotency/order_idempotency scoping): build the new
+      // shape, copy every row across unchanged, drop the old table,
+      // rename the new one into place, recreate its indexes.
+      db.exec(`
+        CREATE TABLE inventory_movements_v2 (
+          id TEXT PRIMARY KEY,
+          organization_id TEXT,
+          location_id TEXT,
+          product_id TEXT NOT NULL,
+          product_variant_id TEXT,
+          quantity_delta REAL NOT NULL,
+          movement_type TEXT NOT NULL
+            CHECK (movement_type IN ('sale', 'return', 'adjustment', 'receipt', 'opening', 'transfer_out', 'transfer_in')),
+          reason TEXT,
+          reference_type TEXT,
+          reference_id TEXT,
+          unit_cost REAL,
+          actor_user_id TEXT,
+          balance_after REAL NOT NULL,
+          metadata TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (product_variant_id) REFERENCES product_variants(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+        INSERT INTO inventory_movements_v2 SELECT * FROM inventory_movements;
+        DROP TABLE inventory_movements;
+        ALTER TABLE inventory_movements_v2 RENAME TO inventory_movements;
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_lookup ON inventory_movements(product_id, product_variant_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_inventory_movements_reference ON inventory_movements(reference_type, reference_id);
+      `);
+    },
+  },
+  {
+    version: 78,
+    name: 'plemmo_employee_location_scope',
+    up: () => {
+      // PLEMMO CORE — the minimum structural foundation for location-aware
+      // employee access (Milestone 6, Part L). A join table, not a role or
+      // permission system: which locations a user may operate at, nothing
+      // about what they can do once there (that's still `users.role` +
+      // `requireRole()`, unchanged). Not enforced by any route in this
+      // milestone — see docs/MILESTONE_6_MULTI_LOCATION.md § Employee
+      // location scoping for why ("do not build an entire advanced RBAC
+      // system" — this is deliberately the structural piece only, so a
+      // future milestone can add the enforcement check without another
+      // migration).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_locations (
+          user_id TEXT NOT NULL,
+          location_id TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, location_id),
+          FOREIGN KEY (user_id) REFERENCES users(id),
+          FOREIGN KEY (location_id) REFERENCES locations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_locations_location ON user_locations(location_id);
+      `);
+
+      // Every existing user is granted access to this install's one real
+      // location, so the foundation is populated from day one rather than
+      // starting empty (which would read as "nobody has access anywhere").
+      const locationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value: string } | undefined;
+      if (!locationId?.value) return;
+      const users = db.prepare('SELECT id FROM users').all() as { id: string }[];
+      const insert = db.prepare('INSERT OR IGNORE INTO user_locations (user_id, location_id, created_at) VALUES (?, ?, ?)');
+      const timestamp = now();
+      for (const user of users) insert.run(user.id, locationId.value, timestamp);
+    },
+  },
+  {
+    version: 79,
+    name: 'plemmo_feature_entitlements',
+    up: () => {
+      // PLEMMO CORE — feature entitlement foundation (Milestone 7, Part D-G).
+      // See docs/MILESTONE_7_ACCESS_AND_ENTITLEMENTS.md.
+      //
+      // `features` is a static catalog — only keys for capabilities that
+      // actually exist in the codebase today (Part D: "do not implement
+      // every feature listed if it does not yet exist"). `feature_presets`/
+      // `feature_preset_items` are predefined collections a merchant can
+      // apply as a starting point; `organization_features` is the actual,
+      // authoritative per-organization entitlement set the backend checks
+      // against — presets and business type are conveniences that write
+      // into it, never a permanent restriction (Part E).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS features (
+          key TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          category TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS feature_presets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS feature_preset_items (
+          preset_id TEXT NOT NULL,
+          feature_key TEXT NOT NULL,
+          PRIMARY KEY (preset_id, feature_key),
+          FOREIGN KEY (preset_id) REFERENCES feature_presets(id),
+          FOREIGN KEY (feature_key) REFERENCES features(key)
+        );
+
+        -- organization_id is not a hard foreign key against organizations(id)
+        -- to keep this table usable the same way ahead of any future
+        -- multi-organization (cloud) scenario, matching how migration v75
+        -- already treats purchase_orders.organization_id as informational.
+        CREATE TABLE IF NOT EXISTS organization_features (
+          organization_id TEXT NOT NULL,
+          feature_key TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          source TEXT NOT NULL DEFAULT 'custom' CHECK (source IN ('preset', 'custom')),
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (organization_id, feature_key),
+          FOREIGN KEY (feature_key) REFERENCES features(key)
+        );
+      `);
+
+      const insertFeature = db.prepare('INSERT OR IGNORE INTO features (key, label, category, created_at) VALUES (?, ?, ?, ?)');
+      const featureTimestamp = now();
+      const FEATURES: [string, string, string][] = [
+        ['core.pos', 'Point of sale', 'core'],
+        ['core.customers', 'Customers', 'core'],
+        ['core.staff', 'Staff management', 'core'],
+        ['hospitality.tables', 'Tables', 'hospitality'],
+        ['hospitality.kds', 'Kitchen display', 'hospitality'],
+        ['hospitality.kot', 'Kitchen order tickets', 'hospitality'],
+        ['hospitality.modifiers', 'Modifiers / add-ons', 'hospitality'],
+        ['retail.catalog', 'Product catalogue', 'retail'],
+        ['retail.variants', 'Product variants', 'retail'],
+        ['retail.barcode', 'Barcode scanning', 'retail'],
+        ['retail.inventory', 'Inventory tracking', 'retail'],
+        ['retail.purchasing', 'Suppliers & purchase orders', 'retail'],
+        ['retail.transfers', 'Stock transfers', 'retail'],
+        ['advanced.multi_location', 'Multi-location', 'advanced'],
+      ];
+      for (const [key, label, category] of FEATURES) insertFeature.run(key, label, category, featureTimestamp);
+
+      const insertPreset = db.prepare('INSERT OR IGNORE INTO feature_presets (id, name, description, created_at) VALUES (?, ?, ?, ?)');
+      const insertPresetItem = db.prepare('INSERT OR IGNORE INTO feature_preset_items (preset_id, feature_key) VALUES (?, ?)');
+      const PRESETS: { id: string; name: string; description: string; features: string[] }[] = [
+        {
+          id: 'preset-hospitality', name: 'Hospitality', description: 'Restaurants and cafes',
+          features: ['core.pos', 'core.customers', 'core.staff', 'hospitality.tables', 'hospitality.kds', 'hospitality.kot', 'hospitality.modifiers'],
+        },
+        {
+          id: 'preset-retail', name: 'Retail', description: 'Shops and general retail',
+          features: ['core.pos', 'core.customers', 'core.staff', 'retail.catalog', 'retail.variants', 'retail.barcode', 'retail.inventory', 'retail.purchasing'],
+        },
+      ];
+      for (const preset of PRESETS) {
+        insertPreset.run(preset.id, preset.name, preset.description, featureTimestamp);
+        for (const featureKey of preset.features) insertPresetItem.run(preset.id, featureKey);
+      }
+
+      // Every existing organization gets every existing feature enabled —
+      // the safe default that changes nothing about current behavior for
+      // an already-running install (Part H: "do not break current default
+      // behavior... unless explicitly needed"). A merchant onboarded after
+      // this milestone would go through a real preset-selection flow this
+      // milestone does not build (Part K: backend/domain foundation only).
+      const organizations = db.prepare('SELECT id FROM organizations').all() as { id: string }[];
+      const insertOrgFeature = db.prepare(`
+        INSERT OR IGNORE INTO organization_features (organization_id, feature_key, enabled, source, updated_at)
+        VALUES (?, ?, 1, 'custom', ?)
+      `);
+      for (const organization of organizations) {
+        for (const [key] of FEATURES) insertOrgFeature.run(organization.id, key, featureTimestamp);
+      }
+    },
+  },
+  {
+    version: 80,
+    name: 'sync_0_payment_foundation',
+    up: () => {
+      // SYNC-0 Part A — make payments/payment_events the authoritative,
+      // COMPLETE payment model. Additive only. See
+      // docs/SYNC_0_PAYMENT_MIGRATION.md for the full before/after.
+      //
+      // (1) Global identity columns (Part A6/B2): a payment/refund can be
+      // linked to its bill/order by a collision-safe uid, not just the
+      // local integer FK that two devices would both allocate from 1.
+      for (const [column, ddl] of [
+        ['bill_uid', 'ALTER TABLE payments ADD COLUMN bill_uid TEXT'],
+        ['order_uid', 'ALTER TABLE payments ADD COLUMN order_uid TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'payments').includes(column)) db.exec(ddl);
+      }
+      for (const [column, ddl] of [
+        ['bill_uid', 'ALTER TABLE refunds ADD COLUMN bill_uid TEXT'],
+        ['order_uid', 'ALTER TABLE refunds ADD COLUMN order_uid TEXT'],
+      ] as const) {
+        if (!getColumns(db, 'refunds').includes(column)) db.exec(ddl);
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_payments_bill_uid ON payments(bill_uid);
+        CREATE INDEX IF NOT EXISTS idx_payments_order_uid ON payments(order_uid);
+        CREATE INDEX IF NOT EXISTS idx_refunds_bill_uid ON refunds(bill_uid);
+      `);
+
+      // (2) Backfill uids on existing payment/refund rows from the local FKs.
+      db.exec(`
+        UPDATE payments SET bill_uid = (SELECT uid FROM bills WHERE bills.id = payments.bill_id)
+          WHERE bill_uid IS NULL AND bill_id IS NOT NULL;
+        UPDATE payments SET order_uid = (SELECT uid FROM orders WHERE orders.id = payments.order_id)
+          WHERE order_uid IS NULL AND order_id IS NOT NULL;
+        UPDATE refunds SET bill_uid = (SELECT uid FROM bills WHERE bills.id = refunds.bill_id)
+          WHERE bill_uid IS NULL AND bill_id IS NOT NULL;
+        UPDATE refunds SET order_uid = (SELECT p.order_uid FROM payments p WHERE p.id = refunds.payment_id)
+          WHERE order_uid IS NULL;
+      `);
+
+      // (3) Backfill legacy bills.payment_details → payments/payment_events.
+      // Only bills with ZERO existing payment rows are touched: a bill that
+      // already has payments (retail via tender(), or a hospitality bill whose
+      // dual-write already ran) is assumed mirrored and left as-is. That makes
+      // this idempotent and duplicate-safe (a second run sees the rows it
+      // created and skips). Malformed/ambiguous legacy lines are skipped, never
+      // guessed (Part A4/K). Two documented fidelity assumptions, both matching
+      // how the legacy data was originally created:
+      //   - amounts are 2-decimal (Math.round(amount*100)) — the same
+      //     unconditional *100 applyPaymentBatch used to produce them;
+      //   - currency is this install's current 'currency' setting — bills never
+      //     stored a per-row currency, so no truer value is recoverable.
+      const currency = ((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value || 'INR').toUpperCase();
+      const billsWithDetails = db.prepare(`
+        SELECT b.id AS bill_id, b.uid AS bill_uid, b.order_id AS order_id, b.payment_details AS payment_details,
+               b.updated_at AS updated_at, b.created_at AS created_at,
+               o.uid AS order_uid, o.organization_id AS organization_id, o.location_id AS location_id
+        FROM bills b LEFT JOIN orders o ON o.id = b.order_id
+        WHERE b.payment_details IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.bill_id = b.id)
+      `).all() as Array<{
+        bill_id: number; bill_uid: string | null; order_id: number | null; payment_details: string;
+        updated_at: string | null; created_at: string | null;
+        order_uid: string | null; organization_id: string | null; location_id: string | null;
+      }>;
+
+      const insertPayment = db.prepare(`
+        INSERT INTO payments (
+          id, bill_id, order_id, bill_uid, order_uid, adapter, method, state,
+          amount_minor, currency, refunded_minor, tendered_minor, change_minor,
+          provider_reference, actor_user_id, notes, metadata,
+          requested_at, settled_at, created_at, updated_at, organization_id, location_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertEvent = db.prepare(`
+        INSERT INTO payment_events (id, payment_id, from_state, to_state, occurred_at, actor_user_id, metadata, created_at)
+        VALUES (?, ?, NULL, ?, ?, NULL, NULL, ?)
+      `);
+
+      let backfilledBills = 0;
+      let backfilledLines = 0;
+      let skippedLines = 0;
+      for (const bill of billsWithDetails) {
+        let parsed: unknown;
+        try { parsed = JSON.parse(bill.payment_details); } catch { continue; }
+        const lines = Array.isArray(parsed) ? parsed : [parsed];
+        let anyLine = false;
+        for (const raw of lines) {
+          const line = raw as Record<string, unknown>;
+          const method = typeof line.method === 'string' && line.method.trim() ? line.method.trim() : null;
+          const amount = Number(line.amount);
+          // Skip anything we cannot faithfully represent: a line with no
+          // method, or no positive amount (a zero/negative line is not a
+          // captured payment and legacy refunds are not reconstructed here).
+          if (!method || !Number.isFinite(amount) || amount <= 0) { skippedLines += 1; continue; }
+          const adapter = method === 'cash' ? 'cash' : method === 'wallet' ? 'wallet' : 'manual_card';
+          const state = adapter === 'manual_card' ? 'captured' : 'settled';
+          const amountMinor = Math.round(amount * 100);
+          const tendered = Number(line.tendered_amount);
+          const change = Number(line.change_amount);
+          const tenderedMinor = adapter === 'cash' && Number.isFinite(tendered) ? Math.round(tendered * 100) : null;
+          const changeMinor = adapter === 'cash' && Number.isFinite(change) ? Math.round(change * 100) : null;
+          const providerRef = typeof line.transaction_id === 'string' ? line.transaction_id : null;
+          const noteText = typeof line.notes === 'string' ? line.notes : null;
+          const tsRaw = typeof line.timestamp === 'string' ? line.timestamp : (bill.updated_at || bill.created_at || now());
+          const parsedMs = Date.parse(String(tsRaw).replace(' ', 'T') + (String(tsRaw).includes('T') || String(tsRaw).endsWith('Z') ? '' : 'Z'));
+          const seedMs = Number.isFinite(parsedMs) ? parsedMs : Date.now();
+          const paymentId = ulid(seedMs);
+          const at = String(tsRaw);
+          const settledAt = state === 'settled' ? at : null;
+          insertPayment.run(
+            paymentId, bill.bill_id, bill.order_id, bill.bill_uid, bill.order_uid, adapter, method, state,
+            amountMinor, currency, tenderedMinor, changeMinor, providerRef, noteText,
+            at, settledAt, at, at, bill.organization_id, bill.location_id,
+          );
+          insertEvent.run(ulid(seedMs), paymentId, state, at, at);
+          backfilledLines += 1;
+          anyLine = true;
+        }
+        if (anyLine) backfilledBills += 1;
+      }
+      if (backfilledBills > 0 || skippedLines > 0) {
+        console.log(`[DB] v80 payment backfill: ${backfilledBills} bill(s), ${backfilledLines} line(s) reconstructed, ${skippedLines} line(s) skipped as unrepresentable`);
+      }
+    },
+  },
+  {
+    version: 81,
+    name: 'sync_0_load_bearing_uids',
+    up: () => {
+      // SYNC-0 Part B — make orders/order_items/bills `uid` truly
+      // load-bearing. Migration v69 added the column and backfilled the rows
+      // that existed then, but three insert paths were later found creating
+      // rows with a NULL uid (a bill via POST /bills/generate, a split-check
+      // bill, and a void-adjustment order_item). Those code paths are fixed
+      // going forward (SYNC-0 Part B); this migration backfills any NULL uid
+      // those paths already produced on an existing install, seeding each
+      // ULID from the row's own created_at so it still sorts historically —
+      // the same approach v69 used.
+      for (const table of ['orders', 'order_items', 'bills'] as const) {
+        const rows = db.prepare(`SELECT id, created_at FROM ${table} WHERE uid IS NULL ORDER BY created_at ASC, id ASC`)
+          .all() as Array<{ id: number; created_at: string | null }>;
+        if (rows.length === 0) continue;
+        const update = db.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`);
+        for (const row of rows) {
+          const parsed = row.created_at ? Date.parse(String(row.created_at).replace(' ', 'T') + 'Z') : NaN;
+          update.run(ulid(Number.isFinite(parsed) ? parsed : Date.now()), row.id);
+        }
+        console.log(`[DB] v81 uid backfill: ${rows.length} ${table} row(s)`);
+      }
+      // The partial unique indexes from v69 (idx_*_uid WHERE uid IS NOT NULL)
+      // still guard against duplicate uids; nothing to recreate here.
+    },
+  },
+  {
+    version: 82,
+    name: 'sync_0_child_row_tombstones',
+    up: () => {
+      // SYNC-0 Part C — replace the two hard DELETEs on sync-relevant child
+      // rows (draft PO line removal, draft transfer line removal) with a
+      // `deleted_at` tombstone. A hard delete of a row another device may
+      // reference cannot be represented as a sync fact; a tombstone can.
+      // Additive column only; all active queries are updated in the same
+      // change to treat `deleted_at IS NOT NULL` rows as absent, so current
+      // draft-editing behavior is unchanged.
+      for (const table of ['purchase_order_items', 'stock_transfer_items'] as const) {
+        if (!getColumns(db, table).includes('deleted_at')) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN deleted_at TEXT`);
+        }
+      }
+    },
+  },
+  {
+    version: 83,
+    name: 'sync_0_sync_identity_backfill',
+    up: () => {
+      // SYNC-0 Part D — every record that will eventually cross the sync
+      // boundary must be unambiguously attributable to an organization and,
+      // where meaningful, a location.
+      //
+      // inventory_movements.organization_id was never populated by
+      // recordMovement (only location_id was). It is now stamped going
+      // forward (main/core/inventory.ts) and backfilled here from each
+      // movement's own location — a location belongs to exactly one
+      // organization, so this is a real derivation, not a guess. Movements
+      // with no location fall back to the install's single organization
+      // pointer. inventory_balances is deliberately NOT given an
+      // organization column: it is a DERIVED projection keyed by
+      // (product, variant, location) and is never itself a sync fact — its
+      // organization is always resolvable via the location, and adding a
+      // column would risk a second, divergent balance key (Part D1).
+      db.exec(`
+        UPDATE inventory_movements
+        SET organization_id = (SELECT l.organization_id FROM locations l WHERE l.id = inventory_movements.location_id)
+        WHERE organization_id IS NULL AND location_id IS NOT NULL
+      `);
+      const orgPointer = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as { value?: string } | undefined)?.value;
+      if (orgPointer) {
+        db.exec(`UPDATE inventory_movements SET organization_id = '${orgPointer.replace(/'/g, "''")}' WHERE organization_id IS NULL`);
+        // Defensively backfill any purchase order whose organization/location
+        // was left unstamped (e.g. created before the org pointer was seeded).
+        const locPointer = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as { value?: string } | undefined)?.value ?? null;
+        db.prepare('UPDATE purchase_orders SET organization_id = ? WHERE organization_id IS NULL').run(orgPointer);
+        if (locPointer) db.prepare('UPDATE purchase_orders SET location_id = ? WHERE location_id IS NULL').run(locPointer);
+        db.prepare('UPDATE stock_transfers SET organization_id = ? WHERE organization_id IS NULL').run(orgPointer);
+      }
+    },
+  },
+  {
+    version: 84,
+    name: 'sync_0_device_credentials',
+    up: () => {
+      // SYNC-0 Part E — domain foundation for device-authenticated sync.
+      //
+      // Stores only the PUBLIC half of a device's credential plus its
+      // lifecycle metadata. The private key is generated on the device and
+      // held in OS-protected storage (Windows DPAPI / macOS Keychain) — it is
+      // NEVER written to this or any application table. This table does not
+      // enroll or authenticate anything yet; it is the schema a future
+      // enrollment flow and sync transport will populate. No cloud, no
+      // network, no middleware is created here (Part E, Part J).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS device_credentials (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          credential_type TEXT NOT NULL DEFAULT 'device_keypair'
+            CHECK (credential_type IN ('device_keypair', 'rotatable_bearer')),
+          public_key TEXT,
+          credential_identifier TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'active', 'rotated', 'revoked')),
+          issued_at TEXT,
+          expires_at TEXT,
+          rotated_at TEXT,
+          revoked_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (device_id) REFERENCES devices(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_credentials_device ON device_credentials(device_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_device_credentials_identifier
+          ON device_credentials(credential_identifier) WHERE credential_identifier IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 85,
+    name: 'payment_cutover_reconciliation',
+    up: () => {
+      // PAYMENT CUTOVER, Part C — migration v80 only backfilled bills with
+      // ZERO existing payments rows. Before SYNC-0 fixed the hospitality
+      // dual-write to be atomic, it swallowed errors PER LINE, so a bill
+      // with a multi-line split payment could have had some lines mirrored
+      // and others silently dropped — leaving a bill with >=1 payment row
+      // that v80's guard skips, but that is still missing some lines. This
+      // migration reconciles every bill that still has legacy
+      // payment_details against its authoritative payments, reconstructing
+      // any missing-but-deterministic line and leaving anything genuinely
+      // ambiguous unreconstructed and reported (never inventing data).
+      //
+      // Lazily required (not a top-level import) to avoid a circular import
+      // with main/db.ts — see main/core/payment-reconciliation.ts's own
+      // docstring. Same pattern already used for './lib/phone' above.
+      const { reconcileAllPaymentDetails } = require('./core/payment-reconciliation') as typeof import('./core/payment-reconciliation');
+      const report = reconcileAllPaymentDetails();
+      if (report.billsWithDiscrepancy > 0) {
+        console.log(
+          `[DB] v85 payment reconciliation: ${report.billsExamined} bill(s) examined, ` +
+          `${report.billsWithDiscrepancy} with a discrepancy — ` +
+          `${report.totalReconstructed} line(s) reconstructed, ${report.totalUnrepresentable} line(s) unrepresentable (left as-is)`,
+        );
+      }
+    },
+  },
+  {
+    version: 86,
+    name: 'sync_a_local_foundation',
+    up: () => {
+      // SYNC-A — the local synchronization foundation. Three durable local
+      // tables; NO cloud, NO network, NO transport is created here. See
+      // docs/SYNC_A_LOCAL_FOUNDATION.md.
+      //
+      // sync_outbox: one append-only sync EVENT per business fact. `uid` is
+      // the event's own identity (a ULID), distinct from `entity_uid` (the
+      // business fact's identity, e.g. inventory_movements.id — see Part H).
+      // `sequence` is a per-device monotonic counter for deterministic upload
+      // ordering and gap detection (Part G). The (entity_type, entity_uid)
+      // unique index is the local idempotency guard: a given business fact
+      // can produce at most one outbox event. The (device_id, status,
+      // sequence) index answers the future worker's core query — "the next N
+      // pending events for this device, in order" (Part N).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          uid             TEXT PRIMARY KEY,
+          device_id       TEXT NOT NULL,
+          sequence        INTEGER NOT NULL,
+          entity_type     TEXT NOT NULL,
+          entity_uid      TEXT NOT NULL,
+          operation       TEXT NOT NULL DEFAULT 'create'
+            CHECK (operation IN ('create', 'update', 'append')),
+          payload         TEXT NOT NULL,
+          organization_id TEXT,
+          location_id     TEXT,
+          status          TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'uploading', 'acked', 'failed')),
+          attempt_count   INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at TEXT,
+          last_error      TEXT,
+          created_at      TEXT NOT NULL,
+          acked_at        TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_device_sequence ON sync_outbox(device_id, sequence);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity ON sync_outbox(entity_type, entity_uid);
+        CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending ON sync_outbox(device_id, status, sequence);
+
+        -- sync_inbox: the durable local shape for future cloud-to-local
+        -- events. Storage foundation only in SYNC-A; download is not
+        -- functional yet (Part D/K). uid is the cloud-assigned event id (the
+        -- download-side idempotency key). cursor records which download
+        -- cursor an event arrived under, so the future apply loop can advance
+        -- the cursor atomically with inserting the batch (the boundary
+        -- documented in the SYNC-A doc, enforced when download is built).
+        CREATE TABLE IF NOT EXISTS sync_inbox (
+          uid          TEXT PRIMARY KEY,
+          entity_type  TEXT NOT NULL,
+          entity_uid   TEXT NOT NULL,
+          operation    TEXT NOT NULL DEFAULT 'create',
+          payload      TEXT NOT NULL,
+          cursor       TEXT,
+          status       TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'applied', 'skipped', 'failed')),
+          received_at  TEXT NOT NULL,
+          applied_at   TEXT,
+          last_error   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_inbox_status ON sync_inbox(status, received_at);
+
+        -- sync_state: this device's sync bookkeeping. Keyed by device_id so a
+        -- restart knows exactly where it was, and so the per-device sequence
+        -- counter (device_sequence) is naturally independent per device. A
+        -- normal single-install install has exactly one row.
+        CREATE TABLE IF NOT EXISTS sync_state (
+          device_id              TEXT PRIMARY KEY,
+          device_sequence        INTEGER NOT NULL DEFAULT 0,
+          last_uploaded_sequence INTEGER NOT NULL DEFAULT 0,
+          last_upload_at         TEXT,
+          last_download_cursor   TEXT,
+          last_download_at       TEXT,
+          failure_count          INTEGER NOT NULL DEFAULT 0,
+          last_error             TEXT,
+          last_error_at          TEXT,
+          protocol_version       TEXT NOT NULL DEFAULT '1',
+          created_at             TEXT NOT NULL,
+          updated_at             TEXT NOT NULL
+        );
+      `);
+
+      // Seed this device's sync_state row so a restart immediately sees its
+      // bookkeeping. Best-effort from the device pointer; if it is absent the
+      // row is created lazily on the first outbox append instead.
+      const deviceId = (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as { value?: string } | undefined)?.value;
+      if (deviceId) {
+        db.prepare(`
+          INSERT OR IGNORE INTO sync_state (device_id, created_at, updated_at)
+          VALUES (?, ?, ?)
+        `).run(deviceId, now(), now());
+      }
+    },
+  },
+  {
+    version: 87,
+    name: 'sync_d_remote_payment_events',
+    up: () => {
+      // SYNC-D Part L — a local, FK-FREE mirror for payment_events pulled from
+      // OTHER devices. The authoritative `payment_events` table has a foreign
+      // key to the local `payments` row; a remote payment event references a
+      // payment that lives on another device and is not synced in this
+      // milestone, so it cannot be inserted there. This mirror records the
+      // remote payment-event fact (with its payment_uid linkage) idempotently
+      // by its own id, for a future Admin/consolidated view. Append-only;
+      // never re-emitted to the outbox (loop prevention). Additive table only.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_payment_events (
+          id               TEXT PRIMARY KEY,
+          payment_uid      TEXT NOT NULL,
+          from_state       TEXT,
+          to_state         TEXT NOT NULL,
+          occurred_at      TEXT NOT NULL,
+          order_uid        TEXT,
+          bill_uid         TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          actor_user_id    TEXT,
+          reason           TEXT,
+          metadata         TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_payment_events_payment ON remote_payment_events(payment_uid);
+        CREATE INDEX IF NOT EXISTS idx_remote_payment_events_org ON remote_payment_events(organization_id);
+      `);
+    },
+  },
+  {
+    version: 88,
+    name: 'sync_e_sales_mirrors',
+    up: () => {
+      // SYNC-E — sales synchronization. Two additive concerns, no existing data
+      // touched.
+      //
+      // 1) orders/order_items/bills are MUTABLE (a completed sale is edited
+      //    through its lifecycle), so the same business uid must be able to
+      //    emit MULTIPLE snapshot events over time. The SYNC-A outbox unique
+      //    index idx_sync_outbox_entity (entity_type, entity_uid) enforces
+      //    exactly ONE event per fact — correct for append-only entities
+      //    (inventory_movement, audit_event, payment_event) but wrong for
+      //    mutable snapshots. Relax it to apply ONLY to the append-only types,
+      //    so a mutable entity can carry several snapshot events, each with its
+      //    own event uid. Append-only idempotency is unchanged.
+      db.exec(`DROP INDEX IF EXISTS idx_sync_outbox_entity;`);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_entity
+          ON sync_outbox(entity_type, entity_uid)
+          WHERE entity_type IN ('inventory_movement', 'audit_event', 'payment_event');
+      `);
+
+      // 2) Remote sales pulled from OTHER devices are materialized into FK-free
+      //    MIRROR tables — never the authoritative orders/order_items/bills,
+      //    which are integer-PK, foreign-key-bound, lifecycle-guarded, and
+      //    locally authoritative. A locally completed sale can therefore NEVER
+      //    be mutated or undone by sync (9A rule). The mirrors are keyed by the
+      //    business uid and also serve as durable staging: a child that arrives
+      //    before its parent is still stored and queryable, and reconciles when
+      //    the parent arrives. Append/upsert-latest by uid; never re-emitted to
+      //    the outbox (loop prevention).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_orders (
+          uid              TEXT PRIMARY KEY,
+          order_number     TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          device_id        TEXT,
+          actor_user_id    TEXT,
+          channel          TEXT,
+          status           TEXT,
+          customer_id      TEXT,
+          table_id         TEXT,
+          subtotal         REAL,
+          tax_amount       REAL,
+          discount_amount  REAL,
+          total            REAL,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          order_created_at TEXT,
+          order_updated_at TEXT,
+          payload          TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_orders_org ON remote_orders(organization_id);
+        CREATE TABLE IF NOT EXISTS remote_order_items (
+          uid                TEXT PRIMARY KEY,
+          order_uid          TEXT NOT NULL,
+          organization_id    TEXT,
+          location_id        TEXT,
+          product_id         TEXT,
+          product_variant_id TEXT,
+          product_name       TEXT,
+          product_sku        TEXT,
+          quantity           INTEGER,
+          unit_price         REAL,
+          unit_cost          REAL,
+          discount_amount    REAL,
+          tax_amount         REAL,
+          total              REAL,
+          status             TEXT,
+          snapshot_version   INTEGER NOT NULL DEFAULT 0,
+          payload            TEXT,
+          sync_origin        TEXT NOT NULL DEFAULT 'remote',
+          applied_at         TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_order_items_order ON remote_order_items(order_uid);
+        CREATE TABLE IF NOT EXISTS remote_bills (
+          uid              TEXT PRIMARY KEY,
+          bill_number      TEXT,
+          order_uid        TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          customer_id      TEXT,
+          subtotal         REAL,
+          tax_amount       REAL,
+          discount_amount  REAL,
+          total            REAL,
+          paid_amount      REAL,
+          balance          REAL,
+          payment_status   TEXT,
+          split_group_id   TEXT,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          bill_created_at  TEXT,
+          bill_updated_at  TEXT,
+          payload          TEXT,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          applied_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_bills_order ON remote_bills(order_uid);
+        CREATE INDEX IF NOT EXISTS idx_remote_bills_org ON remote_bills(organization_id);
+      `);
+    },
+  },
+  {
+    version: 89,
+    name: 'sync_f_conflict_reconciliation',
+    up: () => {
+      // SYNC-F — sales conflict resolution + reconciliation. Three additive
+      // local tables, no existing data touched, no authoritative sales table
+      // altered (a locally completed sale is never mutated by this milestone).
+      //
+      // 1) sales_conflicts — the DEVICE's working copy of sales conflicts. Two
+      //    sources feed it: conflicts DETECTED in the cloud (cross-device
+      //    concurrent_update) and pulled down here, and conflicts DETECTED
+      //    locally on remote-apply (a remote snapshot arriving for an entity
+      //    this device holds as authoritative-and-completed → completion
+      //    conflict). `conflict_uid` is the SHARED identity with the cloud's
+      //    cloud_conflicts row (ONE logical conflict, not two systems). The
+      //    local row carries the full state machine + resolution outcome; the
+      //    original conflicting events are preserved (never deleted).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sales_conflicts (
+          conflict_uid            TEXT PRIMARY KEY,
+          organization_id         TEXT,
+          location_id             TEXT,
+          entity_type             TEXT NOT NULL,
+          entity_uid              TEXT NOT NULL,
+          conflict_type           TEXT NOT NULL,
+          source                  TEXT NOT NULL DEFAULT 'cloud',
+          local_event_uid         TEXT,
+          remote_event_uid        TEXT,
+          local_device_uid        TEXT,
+          remote_device_uid       TEXT,
+          local_snapshot_version  INTEGER,
+          remote_snapshot_version INTEGER,
+          status                  TEXT NOT NULL DEFAULT 'open'
+            CHECK (status IN ('open','acknowledged','resolving','resolved','dismissed')),
+          detected_at             TEXT NOT NULL,
+          acknowledged_at         TEXT,
+          acknowledged_by         TEXT,
+          resolution_strategy     TEXT,
+          resolution_actor        TEXT,
+          resolved_at             TEXT,
+          resolution_notes        TEXT,
+          compensation_reference  TEXT,
+          resulting_state         TEXT,
+          updated_at              TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sales_conflicts_entity ON sales_conflicts(entity_type, entity_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_conflicts_status ON sales_conflicts(status, detected_at);
+
+        -- 2) sales_reconciliation_actions — the durable, append-only audit
+        --    trail of every conflict-lifecycle and reconciliation action
+        --    (acknowledge / resolve / dismiss / compensation / note). It is
+        --    never pruned; a resolved conflict retains its full action history.
+        --    A 'compensation' row is the durable reconciliation artifact — it
+        --    records a decision for an operator/Admin, it does NOT itself
+        --    create a refund/void/payment/inventory transaction (SYNC-F Part F).
+        CREATE TABLE IF NOT EXISTS sales_reconciliation_actions (
+          id               TEXT PRIMARY KEY,
+          conflict_uid     TEXT,
+          organization_id  TEXT,
+          location_id      TEXT,
+          entity_type      TEXT,
+          entity_uid       TEXT,
+          action_type      TEXT NOT NULL,
+          strategy         TEXT,
+          actor_user_id    TEXT,
+          actor_role       TEXT,
+          notes            TEXT,
+          reference        TEXT,
+          created_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sales_recon_actions_conflict ON sales_reconciliation_actions(conflict_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_recon_actions_entity ON sales_reconciliation_actions(entity_type, entity_uid);
+
+        -- 3) sales_pending_relationships — durable tracking of a child event
+        --    (order_item / bill / payment) that arrived before its parent
+        --    order. Never discarded (no data loss); the child is already staged
+        --    in its mirror. Status is event-driven, NOT polled: 'pending' until
+        --    the parent arrives (→ 'resolved'), or 'permanently_invalid' when a
+        --    reconciliation sweep confirms the parent never arrived within the
+        --    retention window (clear, bounded reason — no infinite polling).
+        CREATE TABLE IF NOT EXISTS sales_pending_relationships (
+          id               TEXT PRIMARY KEY,
+          child_type       TEXT NOT NULL,
+          child_uid        TEXT NOT NULL,
+          parent_type      TEXT NOT NULL,
+          parent_uid       TEXT NOT NULL,
+          organization_id  TEXT,
+          location_id      TEXT,
+          status           TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','resolved','permanently_invalid')),
+          reason           TEXT,
+          attempts         INTEGER NOT NULL DEFAULT 0,
+          detected_at      TEXT NOT NULL,
+          resolved_at      TEXT,
+          updated_at       TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_pending_child ON sales_pending_relationships(child_type, child_uid);
+        CREATE INDEX IF NOT EXISTS idx_sales_pending_parent ON sales_pending_relationships(parent_type, parent_uid, status);
+      `);
+    },
+  },
+  {
+    version: 90,
+    name: 'commercialization_reference_mirror',
+    up: () => {
+      // COMMERCIALIZATION — catalog / customer / supplier / operations sync.
+      // One additive, generic MIRROR for every ULID-keyed reference entity
+      // synchronized as a versioned snapshot (product / category /
+      // product_variant / addon_group / addon / customer / supplier /
+      // purchase_order / purchase_order_item / stock_transfer /
+      // stock_transfer_item). A remote reference record lands here — NEVER the
+      // authoritative catalog/customer/supplier tables — so sync can never
+      // overwrite or duplicate the local authoritative model (identity is the
+      // ULID; promotion into the live catalog is a controlled Admin step). No
+      // existing data touched.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS remote_reference_entities (
+          entity_type      TEXT NOT NULL,
+          uid              TEXT NOT NULL,
+          organization_id  TEXT,
+          location_id      TEXT,
+          snapshot_version INTEGER NOT NULL DEFAULT 0,
+          payload          TEXT NOT NULL,
+          sync_origin      TEXT NOT NULL DEFAULT 'remote',
+          updated_at       TEXT,
+          applied_at       TEXT NOT NULL,
+          PRIMARY KEY (entity_type, uid)
+        );
+        CREATE INDEX IF NOT EXISTS idx_remote_reference_org ON remote_reference_entities(organization_id, entity_type);
+      `);
+    },
+  },
+  {
+    version: 91,
+    name: 'payments_tips_and_cash_sessions',
+    up: () => {
+      // PAYMENTS + CASH (Meridian integration). Additive only — no existing
+      // data touched, safe on both fresh and upgraded databases.
+      //
+      // 1) Tips/gratuity captured on a payment (minor units, like every other
+      //    money column on `payments`). Defaults to 0 so existing rows are
+      //    unaffected and older code paths that never set it stay correct.
+      const paymentCols = db.prepare(`PRAGMA table_info(payments)`).all() as { name: string }[];
+      if (!paymentCols.some((c) => c.name === 'tip_minor')) {
+        db.exec(`ALTER TABLE payments ADD COLUMN tip_minor INTEGER NOT NULL DEFAULT 0`);
+      }
+
+      // 2) Cash drawer sessions: float, denomination counts (JSON), expected vs
+      //    counted at close, and the variance. One open session per location.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cash_sessions (
+          id                  TEXT PRIMARY KEY,
+          location_id         TEXT,
+          currency            TEXT NOT NULL,
+          status              TEXT NOT NULL DEFAULT 'open'
+            CHECK (status IN ('open', 'closed')),
+          opening_float_minor INTEGER NOT NULL DEFAULT 0,
+          opening_counts      TEXT,
+          opened_by           TEXT,
+          opened_at           TEXT NOT NULL,
+          closing_counts      TEXT,
+          counted_minor       INTEGER,
+          expected_minor      INTEGER,
+          variance_minor      INTEGER,
+          closed_by           TEXT,
+          closed_at           TEXT,
+          notes               TEXT,
+          created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        -- At most one open session per location (NULL location_id allowed once).
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_open_per_location
+          ON cash_sessions(location_id) WHERE status = 'open';
+
+        -- 3) Every drawer movement. amount_minor is SIGNED: positive adds cash
+        --    to the drawer (sale, pay_in, tip kept in drawer), negative removes
+        --    it (pay_out, drop, cash refund). no_sale is a 0 movement (drawer
+        --    opened for change / inspection), recorded for the audit trail.
+        CREATE TABLE IF NOT EXISTS cash_movements (
+          id            TEXT PRIMARY KEY,
+          session_id    TEXT NOT NULL,
+          type          TEXT NOT NULL
+            CHECK (type IN ('sale', 'refund', 'tip', 'pay_in', 'pay_out', 'drop', 'no_sale', 'float_adjust')),
+          amount_minor  INTEGER NOT NULL DEFAULT 0,
+          currency      TEXT NOT NULL,
+          reason        TEXT,
+          reference     TEXT,
+          actor_user_id TEXT,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES cash_sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(session_id);
+      `);
+    },
+  },
+  {
+    version: 92,
+    name: 'tables_floor_plan_geometry',
+    up: () => {
+      // FLOOR PLAN (Meridian integration). Persist the geometry a real
+      // floor-plan editor needs so table layout is authoritative backend data,
+      // not frontend/localStorage. Additive only — position_x/position_y and
+      // capacity already exist; these add shape, size and free-form geometry.
+      const cols = db.prepare(`PRAGMA table_info(tables)`).all() as { name: string }[];
+      const has = (c: string) => cols.some((x) => x.name === c);
+      if (!has('shape')) db.exec(`ALTER TABLE tables ADD COLUMN shape TEXT`);       // 'round' | 'square' | 'rect'
+      if (!has('size')) db.exec(`ALTER TABLE tables ADD COLUMN size TEXT`);         // 's' | 'm' | 'l' (Meridian sizing hint)
+      if (!has('width')) db.exec(`ALTER TABLE tables ADD COLUMN width REAL`);       // optional explicit geometry
+      if (!has('height')) db.exec(`ALTER TABLE tables ADD COLUMN height REAL`);
+      if (!has('rotation')) db.exec(`ALTER TABLE tables ADD COLUMN rotation REAL DEFAULT 0`);
+    },
+  },
+  {
+    version: 93,
+    name: 'staff_shifts_and_loyalty_tiers',
+    up: () => {
+      // STAFF SHIFTS / TIMECLOCK (Meridian integration). Authoritative clock
+      // in/out records so timesheets and "who's on shift" are backend data.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS staff_shifts (
+          id           TEXT PRIMARY KEY,
+          user_id      TEXT NOT NULL,
+          location_id  TEXT,
+          clock_in     TEXT NOT NULL,
+          clock_out    TEXT,
+          note         TEXT,
+          created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_staff_shifts_user ON staff_shifts(user_id, clock_in);
+        -- At most one open shift per user.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_shifts_open_per_user
+          ON staff_shifts(user_id) WHERE clock_out IS NULL;
+      `);
+
+      // LOYALTY TIERS. Derived from authoritative lifetime spend against
+      // configurable thresholds (server-computed, never client-asserted).
+      insertSettingIfMissing('loyalty_tier_silver_spend', '120');
+      insertSettingIfMissing('loyalty_tier_gold_spend', '300');
+    },
+  },
+  {
+    version: 94,
+    name: 'digital_receipt_deliveries',
+    up: () => {
+      // DIGITAL RECEIPTS (Meridian integration). Auditable log of digital
+      // receipt requests (email/SMS/share-link). The desktop build has no mail
+      // transport, so a request is RECORDED with the authoritative receipt
+      // payload for the client to deliver via its own channel — never a
+      // silent claim that mail was sent.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS receipt_deliveries (
+          id            TEXT PRIMARY KEY,
+          bill_id       INTEGER NOT NULL,
+          channel       TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'link')),
+          destination   TEXT,
+          status        TEXT NOT NULL DEFAULT 'recorded',
+          actor_user_id TEXT,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (bill_id) REFERENCES bills(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_receipt_deliveries_bill ON receipt_deliveries(bill_id);
+      `);
+    },
+  },
+  {
+    version: 95,
+    name: 'receipt_delivery_send_outcome',
+    up: () => {
+      // DIGITAL RECEIPTS — email transport (B2 productization). Record the
+      // outcome of an actual send attempt: the provider's message id on success
+      // and the error on failure. `status` remains free text (default
+      // 'recorded'); a configured transport sets 'sent' or 'failed'. Additive.
+      const cols = db.prepare(`PRAGMA table_info(receipt_deliveries)`).all() as { name: string }[];
+      const has = (c: string) => cols.some((x) => x.name === c);
+      if (!has('provider_message_id')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN provider_message_id TEXT`);
+      if (!has('error')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN error TEXT`);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {
@@ -4238,11 +5961,17 @@ function seedCloudSyncDefaults(): void {
   const serverUrl = getSettingValue('cloud_server_url');
   if (!serverUrl) upsertSetting('cloud_server_url', DEFAULT_CLOUD_SERVER_URL);
 
-  // Mirrors FloAdmin's own `stores` table defaults (sync + reports on, orders off —
-  // see specs/floadmin.md § api surface). Harmless pre-claim: every send path in
-  // cloud-sync.ts is gated on api_key being present, which only exists after a
-  // human claims the store on FloAdmin, so nothing transmits before then.
-  insertSettingIfMissing('cloud_sync_enabled', '1');
+  // PLEMMO FORK: upstream defaulted this on, and the v2 zero-touch flow means
+  // cloudSync.start() -> attemptAutoRegister() fires on every boot whenever
+  // cloud_sync_enabled === '1' — i.e. a fresh install POSTs its business name,
+  // contact details and address to blue.flopos.com before any human opts in.
+  // (The old comment here claimed nothing transmits pre-claim; that stopped
+  // being true when v2 removed the claim step.) Plemmo must not register
+  // merchants with a third party's service, so this now defaults OFF. The
+  // cloud_server_url constant is deliberately left pointing at the upstream
+  // value rather than replaced with an invented Plemmo URL — the switch above
+  // is what makes it inert. See docs/PLEMMO_ARCHITECTURE.md § Deferred.
+  insertSettingIfMissing('cloud_sync_enabled', '0');
   insertSettingIfMissing('cloud_orders_enabled', '0');
   insertSettingIfMissing('cloud_reports_enabled', '1');
   insertSettingIfMissing('cloud_command_polling_enabled', '1');
@@ -4291,15 +6020,17 @@ function seedInstallDefaults(): void {
   insert('setup_profile', '');
   insert('cloud_server_url', DEFAULT_CLOUD_SERVER_URL);
   insert('cloud_connected', 'false');
-  insert('cloud_sync_enabled', '1');
+  // PLEMMO FORK: all third-party coordination defaults off (see
+  // seedCloudSyncDefaults above for the reasoning).
+  insert('cloud_sync_enabled', '0');
   insert('cloud_orders_enabled', '0');
-  insert('cloud_reports_enabled', '1');
-  insert('cloud_command_polling_enabled', '1');
+  insert('cloud_reports_enabled', '0');
+  insert('cloud_command_polling_enabled', '0');
   insert('cloud_registration_status', 'unregistered');
-  insert('anonymous_data_consent', 'true');
-  insert('telemetry_enabled', 'true');
+  insert('anonymous_data_consent', 'false');
+  insert('telemetry_enabled', 'false');
   insert('telemetry_scope', 'usage_stats,country,app_version,platform,session_duration,feature_usage,error_diagnostics');
-  insert('diagnostics_consent', 'true');
+  insert('diagnostics_consent', 'false');
   insert('kds_enabled', 'true');
   insert('server_app_enabled', 'true');
   insert('kot_printing_enabled', 'true');
@@ -4606,6 +6337,58 @@ export function attachEffectiveAddons<T extends { id: number }>(
 }
 
 /** Parse JSON text columns on bill/order rows returned from SQLite. */
+/**
+ * PAYMENT CUTOVER — the historical `payment_details` line shape, derived
+ * from the authoritative `payments` table instead of the stored JSON
+ * column. Every merchant-facing reader of a bill's payment breakdown
+ * (thermal receipts, the frontend's web-print receipt encoders, bill
+ * rendering) consumes this exact shape, so replacing what feeds it here is
+ * enough to migrate all of them without touching their own code — see
+ * docs/PAYMENT_CUTOVER.md § Reader migration.
+ *
+ * Returns null (matching the legacy `payment_details IS NULL` semantics)
+ * when the bill has no payments yet.
+ */
+export function deriveBillPaymentDetails(billId: number | string): Array<Record<string, unknown>> | null {
+  // Defensive: this feeds bill *display* (rendering, receipts) — a read-side
+  // failure here must never take down basic bill viewing (Principle 8, "the
+  // local POS must never become unusable"). Contrast with the payment
+  // *write* path (persistPayment/recordAppliedPaymentLine), which correctly
+  // fails loudly if the authoritative model cannot record a payment — that
+  // is a different, intentionally stricter guarantee (SYNC-0 Part A3).
+  let rows: any[];
+  try {
+    rows = db.prepare('SELECT * FROM payments WHERE bill_id = ? ORDER BY requested_at ASC, created_at ASC').all(billId) as any[];
+  } catch (err) {
+    console.error('[DB] deriveBillPaymentDetails failed:', (err as Error).message);
+    return null;
+  }
+  if (rows.length === 0) return null;
+  return rows.map((p) => {
+    const exponent = minorUnitExponent(p.currency);
+    let paymentMethodId: number | undefined;
+    if (p.metadata) {
+      try {
+        const meta = JSON.parse(p.metadata);
+        if (meta && meta.payment_method_id != null) paymentMethodId = Number(meta.payment_method_id);
+      } catch { /* malformed metadata is not fatal to displaying the payment */ }
+    }
+    const line: Record<string, unknown> = {
+      method: p.method,
+      amount: fromMinor(p.amount_minor, exponent),
+      requested_amount: p.tendered_minor != null ? fromMinor(p.tendered_minor, exponent) : fromMinor(p.amount_minor, exponent),
+      amount_omitted: false,
+      timestamp: p.requested_at,
+    };
+    if (paymentMethodId !== undefined) line.payment_method_id = paymentMethodId;
+    if (p.tendered_minor != null) line.tendered_amount = fromMinor(p.tendered_minor, exponent);
+    if (p.change_minor != null) line.change_amount = fromMinor(p.change_minor, exponent);
+    if (p.provider_reference) line.transaction_id = p.provider_reference;
+    if (p.notes) line.notes = p.notes;
+    return line;
+  });
+}
+
 export function parseRowJson(row: any): any {
   if (!row) return row;
   const tryParse = (val: any) => {
@@ -4634,10 +6417,19 @@ export function parseRowJson(row: any): any {
     }));
   }
 
+  // PAYMENT CUTOVER: a bill's payment_details is now derived from the
+  // authoritative payments table, not the stored JSON column — see
+  // deriveBillPaymentDetails() above. `bill_number` only exists on bills
+  // (never orders), so this only fires for bill-shaped rows; an order row
+  // simply has `payment_details: undefined` as it always has.
+  const paymentDetails = row.bill_number !== undefined
+    ? deriveBillPaymentDetails(row.id)
+    : tryParse(row.payment_details);
+
   return {
     ...row,
     tax_breakdown: taxBreakdown,
     tax_snapshot: tryParse(row.tax_snapshot),
-    payment_details: tryParse(row.payment_details),
+    payment_details: paymentDetails,
   };
 }

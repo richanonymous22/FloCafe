@@ -130,17 +130,28 @@ async function main() {
   // ── Seed orders for hour/day-of-week bucketing ───────────────────────
   // Expected (precomputed): busiest hour=14 (3 orders), idlest hour=8 (1),
   // busiest day=Monday (3), idlest day=Tuesday (0 — no fixture lands there).
-  // Timestamps use the DB's canonical space form (UTC wall, what now() and
-  // migration v45 produce) so day-range filters compare like-for-like.
+  // Anchored relative to "now" (the most recent given UTC weekday, at least a
+  // day ago) so they always sit inside the 90-day insights window — the earlier
+  // hardcoded 2026-06-01 dates silently expired out of the window. UTC hours are
+  // chosen so their Asia/Kolkata (UTC+5:30) local hour is the value in the
+  // comment; the canonical space form matches what now()/migration v45 produce.
+  const recentWeekdayAt = (weekday: number, utcHour: number, utcMin: number) => {
+    const d = new Date();
+    d.setUTCHours(utcHour, utcMin, 0, 0);
+    let diff = (d.getUTCDay() - weekday + 7) % 7;
+    if (diff === 0) diff = 7; // never today (avoid partial-day / window-edge)
+    d.setUTCDate(d.getUTCDate() - diff);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  };
   const hourDayFixtures: { id: string; createdAt: string }[] = [
-    { id: 'ORD-INS-1', createdAt: '2026-06-01 08:30:00' }, // Mon 14:00
-    { id: 'ORD-INS-2', createdAt: '2026-06-01 09:00:00' }, // Mon 14:30
-    { id: 'ORD-INS-3', createdAt: '2026-06-01 09:15:00' }, // Mon 14:45
-    { id: 'ORD-INS-4', createdAt: '2026-06-03 04:00:00' }, // Wed 09:30
-    { id: 'ORD-INS-5', createdAt: '2026-06-04 03:00:00' }, // Thu 08:30
-    { id: 'ORD-INS-6', createdAt: '2026-06-05 05:00:00' }, // Fri 10:30
-    { id: 'ORD-INS-7', createdAt: '2026-06-06 06:00:00' }, // Sat 11:30
-    { id: 'ORD-INS-8', createdAt: '2026-06-07 07:00:00' }, // Sun 12:30
+    { id: 'ORD-INS-1', createdAt: recentWeekdayAt(1, 8, 30) }, // Mon 14:00 IST
+    { id: 'ORD-INS-2', createdAt: recentWeekdayAt(1, 9, 0) },  // Mon 14:30 IST
+    { id: 'ORD-INS-3', createdAt: recentWeekdayAt(1, 9, 15) }, // Mon 14:45 IST
+    { id: 'ORD-INS-4', createdAt: recentWeekdayAt(3, 4, 0) },  // Wed 09:30 IST
+    { id: 'ORD-INS-5', createdAt: recentWeekdayAt(4, 3, 0) },  // Thu 08:30 IST
+    { id: 'ORD-INS-6', createdAt: recentWeekdayAt(5, 5, 0) },  // Fri 10:30 IST
+    { id: 'ORD-INS-7', createdAt: recentWeekdayAt(6, 6, 0) },  // Sat 11:30 IST
+    { id: 'ORD-INS-8', createdAt: recentWeekdayAt(0, 7, 0) },  // Sun 12:30 IST
   ];
   // Zero-value on purpose — only created_at matters for bucketing, and this
   // keeps these 8 orders from perturbing the top-staff revenue ranking below.
@@ -289,10 +300,13 @@ async function main() {
 
     console.log('\n9. GET /api/reports/recentOrders?date=X scopes to that day (dashboard date picker)');
     {
-      const dated = await request(app).get('/api/reports/recentOrders?date=2026-06-01&limit=10').set('Authorization', `Bearer ${ownerToken}`);
+      // The 3 busiest-hour orders share the computed Monday (UTC date of their
+      // created_at); scope the date picker to that day.
+      const mondayDate = hourDayFixtures[0].createdAt.slice(0, 10);
+      const dated = await request(app).get(`/api/reports/recentOrders?date=${mondayDate}&limit=10`).set('Authorization', `Bearer ${ownerToken}`);
       assertEqual(dated.status, 200, `owner gets 200 (got ${dated.status})`);
       const numbers = (dated.body.recentOrders ?? []).map((o: any) => o.order_number).sort();
-      assertEqual(JSON.stringify(numbers), JSON.stringify(['ORD-INS-1', 'ORD-INS-2', 'ORD-INS-3']), 'only the 3 orders created on 2026-06-01 are returned');
+      assertEqual(JSON.stringify(numbers), JSON.stringify(['ORD-INS-1', 'ORD-INS-2', 'ORD-INS-3']), `only the 3 orders created on ${mondayDate} are returned`);
 
       const undated = await request(app).get('/api/reports/recentOrders?limit=1').set('Authorization', `Bearer ${ownerToken}`);
       assertEqual(undated.status, 200, `omitting date still works — most-recent-overall behavior preserved (got ${undated.status})`);

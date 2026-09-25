@@ -27,9 +27,15 @@ import { databaseToolsRoutes } from './database-tools';
 import { menuCsvRoutes } from './menu-csv';
 import { taxPackRoutes } from './tax-packs';
 import { heldOrderRoutes } from './held-orders';
-import { whatsappRoutes } from './whatsapp';
+import { cashRoutes } from './cash';
+import { shiftRoutes } from './shifts';
+import { aiRoutes } from './ai';
+import { syncStatusRoutes } from './sync-status';
 import { supportTicketRoutes } from './support-ticket';
+import salesReconciliationRoutes from './sales-reconciliation';
+import adminReconciliationRoutes from './admin-reconciliation';
 import { getDatabase, now, parseItemJson, attachEffectiveAddons, withTxn, getSettingValue, getCachedPairingCode, setCachedPairingCode, verifyPin } from '../db';
+import { ulid } from '../core/ids';
 import { checkPinRateLimit } from './orders';
 import {
   calculateConfiguredChargeTaxes,
@@ -42,6 +48,14 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { cloudSync } from '../services/cloud-sync';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
 import QRCode from 'qrcode';
+import { registerHospitalityHooks } from '../modules/hospitality/hooks';
+import { retailRoutes } from './retail';
+import { inventoryRoutes } from './inventory';
+import { supplierRoutes } from './suppliers';
+import { purchaseOrderRoutes } from './purchase-orders';
+import { transferRoutes } from './transfers';
+import { locationRoutes } from './locations';
+import { featureRoutes } from './features';
 
 // "Cloud POS is not registered" (thrown synchronously by cloud-sync.ts's
 // signedFetch, no network call even attempted) means this store was never
@@ -65,8 +79,20 @@ function mobilePairingErrorMessage(error: any): string {
 }
 
 export function registerRoutes(app: Express): void {
+  // Composition root: this is where a vertical module's lifecycle hooks get
+  // wired into Core (main/core/hooks.ts). Idempotent — safe to call every
+  // time an app is built, including once per test file.
+  registerHospitalityHooks();
+
   // Auth routes
   app.use('/api/auth', authRoutes);
+  app.use('/api/retail', retailRoutes);
+  app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/suppliers', supplierRoutes);
+  app.use('/api/purchase-orders', purchaseOrderRoutes);
+  app.use('/api/transfers', transferRoutes);
+  app.use('/api/locations', locationRoutes);
+  app.use('/api/features', featureRoutes);
 
   // Resource routes
   app.use('/api/categories', categoryRoutes);
@@ -95,8 +121,13 @@ export function registerRoutes(app: Express): void {
   app.use('/api/menu-csv', menuCsvRoutes);
   app.use('/api/tax-packs', taxPackRoutes);
   app.use('/api/held-orders', heldOrderRoutes);
-  app.use('/api/whatsapp', whatsappRoutes);
+  app.use('/api/cash', cashRoutes);
+  app.use('/api/shifts', shiftRoutes);
+  app.use('/api/ai', aiRoutes);
+  app.use('/api/sync', syncStatusRoutes);
   app.use('/api/support-ticket', supportTicketRoutes);
+  app.use('/api/sales', salesReconciliationRoutes);   // SYNC-F conflict + reconciliation APIs
+  app.use('/api/admin', adminReconciliationRoutes);   // SYNC-G admin sales console + reconciliation
 
   // Tax preview
   app.post('/api/tax/preview', async (req, res) => {
@@ -328,12 +359,12 @@ export function registerRoutes(app: Express): void {
           // but both lines stay on the bill permanently.
           db.prepare(`
             INSERT INTO order_items (
-              order_id, product_id, product_name, product_sku, unit_price, quantity,
+              order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
               subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total,
               variant_selection, modifier_selection, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void_adjustment', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'void_adjustment', ?, ?)
           `).run(
-            orderId, item.product_id, `Void: ${item.product_name}`, item.product_sku,
+            orderId, ulid(), item.product_id, `Void: ${item.product_name}`, item.product_sku,
             -item.unit_price, item.quantity, -item.subtotal, -(item.tax_amount || 0),
             invertTaxBreakdown(item.tax_breakdown), invertTaxSnapshot(item.tax_snapshot), item.tax_type,
             -(item.discount_amount || 0), -item.total,

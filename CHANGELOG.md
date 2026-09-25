@@ -2,6 +2,19 @@
 
 All notable changes to Flo Cafe are documented here. Dates are release dates, not commit dates. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.1.0] - 2026-09-25
+
+### Added
+- Meridian is now the merchant frontend, served by the embedded server and shipped in packaged builds; the legacy Next.js merchant UI has been retired (the KDS and server-display station apps are unchanged).
+- Tips/gratuity on payments, cash-drawer sessions with denomination counting and close variance, self-service shifts/timeclock, server-derived loyalty tiers, floor-plan table geometry, digital-receipt records, and an advisory (non-mutating, permission-gated, audited) AI assistant — all on the authoritative Plemmo backend (migrations v91–v94, additive).
+- Read-only sync/licence status endpoint powering the Meridian connection status pill.
+
+### Changed
+- The merchant UI now runs entirely on authoritative Plemmo data (orders, bills, payments, stock, customers, loyalty, reports) rather than local browser state.
+
+### CI / tooling
+- PostgreSQL cloud-sync + reconciliation + licensing suites now run against a real Postgres service in CI; a release-config guard verifies the Meridian bundle is packaged.
+
 ## [3.0.5] - 2026-08-12
 
 ### Added

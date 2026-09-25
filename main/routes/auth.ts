@@ -744,6 +744,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
       terms_accepted,
       master_pin,
       cloud_server_url,
+      cloud_sync_enabled: requestedCloudSyncEnabled,
       email_product_updates,
       email_marketing,
     } = req.body;
@@ -789,16 +790,22 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid service model' });
     }
 
-    // Cloud v2 registers the POS automatically on first boot. There is no
-    // pending/claim step, so new installs start with cloud coordination on.
-    const cloudSyncEnabled = true;
+    // PLEMMO FORK: upstream FloCafe registered every new install with its own
+    // hosted service (blue.flopos.com) automatically on first boot, with no
+    // claim step. Plemmo has no cloud of its own yet, and must never register
+    // a merchant with a third party's infrastructure, so cloud coordination
+    // now starts OFF and is opt-in. Re-enable this (pointed at Plemmo Cloud)
+    // when the Plemmo sync/cloud phase lands — see docs/PLEMMO_ARCHITECTURE.md.
+    const cloudSyncEnabled = requestedCloudSyncEnabled === true;
+    // Normalize unconditionally. The stored cloud_server_url should be
+    // canonical whether or not coordination is switched on, and a
+    // client-supplied URL must still be validated — otherwise turning cloud
+    // sync on later would silently inherit an unvalidated/denormalized value.
     let normalizedCloudServerUrl: string | undefined;
-    if (cloudSyncEnabled) {
-      try {
-        normalizedCloudServerUrl = normalizeCloudServerUrl(cloud_server_url || DEFAULT_CLOUD_SERVER_URL);
-      } catch {
-        return res.status(400).json({ error: 'Cloud server URL must be a valid HTTPS URL' });
-      }
+    try {
+      normalizedCloudServerUrl = normalizeCloudServerUrl(cloud_server_url || DEFAULT_CLOUD_SERVER_URL);
+    } catch {
+      return res.status(400).json({ error: 'Cloud server URL must be a valid HTTPS URL' });
     }
 
     const db = getDatabase();
@@ -855,8 +862,11 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
         service_model: normalizedServiceModel,
         setup_profile: normalizedSetupProfile,
         onboarding_completed: 'true',
-        anonymous_data_consent: 'true',
-        telemetry_enabled: 'true',
+        // PLEMMO FORK: consent for FloCafe's telemetry endpoint does not
+        // transfer to Plemmo, and there is no Plemmo telemetry endpoint yet.
+        // Off until there is something of ours to consent to.
+        anonymous_data_consent: 'false',
+        telemetry_enabled: 'false',
         telemetry_scope: 'usage_stats,country,app_version,platform,session_duration,feature_usage,error_diagnostics',
         split_checks_enabled: 'false',
         // '1'/'0', not 'true'/'false' — mirrors FloAdmin's own `stores` table and

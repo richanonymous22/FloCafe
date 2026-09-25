@@ -12,7 +12,6 @@ import { startKdsServer, stopKdsServer, getKdsPort, isKdsServerRunning } from '.
 import { startServerApp, stopServerApp, getServerAppPort, isServerAppRunning } from './server-app';
 import { initPrinter, printReceipt, printKOT } from './printers/thermal';
 import { registerIpcHandlers } from './ipc';
-import { initFromDb as initWhatsAppFromDb, shutdown as shutdownWhatsApp } from './services/whatsapp';
 import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
 import { isAllowedLocalWindowUrl, isSafeExternalUrl } from './security/url-allowlist';
@@ -588,9 +587,6 @@ async function initialize(): Promise<void> {
     console.log('[Flo] Starting Server App on port 3003...');
     await startServerApp();
 
-    console.log('[Flo] Initializing WhatsApp service...');
-    initWhatsAppFromDb();
-
     console.log('[Flo] Starting mDNS advertisement...');
     startMdns();
 
@@ -707,7 +703,6 @@ function runCleanup(): void {
   try { cloudSync.stop(); } catch (e) { console.error('[Flo] cloudSync.stop error:', e); }
   try { telemetry.stop(); } catch (e) { console.error('[Flo] telemetry.stop error:', e); }
   try { googleDrive.stop(); } catch (e) { console.error('[Flo] googleDrive.stop error:', e); }
-  try { shutdownWhatsApp(); } catch (e) { console.error('[Flo] shutdownWhatsApp error:', e); }
   try { stopMdns(); } catch (e) { console.error('[Flo] stopMdns error:', e); }
   try { stopServerApp(); } catch (e) { console.error('[Flo] stopServerApp error:', e); }
   try { stopKdsServer(); } catch (e) { console.error('[Flo] stopKdsServer error:', e); }

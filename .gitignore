@@ -44,3 +44,7 @@ code-review/
 
 # Private shared docs repo — cloned in by hand, never tracked here (see AGENTS.md)
 specs/
+
+# Plemmo sync device key material and cloud dev database — never track
+plemmo-sync-device-key.pem*
+plemmo-cloud-dev*.sqlite*

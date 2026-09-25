@@ -5,13 +5,13 @@
  * character limits loaded from the settings table.
  *
  * Uses node:sqlite (built-in) to avoid better-sqlite3 native module issues.
- * The validation functions are imported from main/routes/orders-validation.ts
+ * The validation functions are imported from main/core/notes-validation.ts
  * which has no Electron or heavy dependencies.
  *
  * Usage: ts-node --transpile-only -P tests/tsconfig.json tests/order-notes-validation.test.ts
  */
 
-import { validateOrderNotes, validateItemNotes } from '../main/routes/orders-validation';
+import { validateOrderNotes, validateItemNotes } from '../main/core/notes-validation';
 import { DatabaseSync } from 'node:sqlite';
 import * as path from 'path';
 import * as os from 'os';

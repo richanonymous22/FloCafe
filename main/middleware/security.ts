@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { createHash } from 'node:crypto';
 import { getDatabase, isKdsEnabled, now, parseDbTimestamp } from '../db';
+import { Role } from '../core/authorization';
 
 interface RateLimitRecord {
   count: number;
@@ -273,7 +274,16 @@ export function clearRevokedTokens(): void {
  * Role-based authorization middleware.
  * Must be used after requireAuth.
  */
-export function requireRole(...roles: string[]) {
+/**
+ * The route-level role gate most routes use. Its arguments are typed
+ * against `AuthorizationService`'s own `Role` union (Milestone 8, Part B)
+ * so the two systems' notion of "what roles exist" cannot silently drift
+ * apart — a role added to one and not the other is now a compile error,
+ * not a runtime gap. This is a type-level change only: the runtime check
+ * (is the authenticated user's role in the given list) is unchanged, so no
+ * existing route's behavior changes.
+ */
+export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: () => void) => {
     const user = (req as any).user;
     if (!user) {

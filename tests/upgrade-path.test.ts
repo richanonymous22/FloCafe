@@ -74,6 +74,14 @@ fixtureDb.prepare(`
   INSERT INTO bills (bill_number, order_id, subtotal, tax_amount, total, paid_at, created_at, updated_at)
   VALUES ('INV-ISO-TS', ?, 10, 0, 10, '2026-07-01T11:30:00.000Z', '2026-07-01T11:00:00.000Z', '2026-07-01T11:30:00.000Z')
 `).run(isoOrder.lastInsertRowid);
+// A real, pre-v73 tracked-stock product — none of the fixture's stock
+// products happen to have track_inventory=1, so the inventory ledger
+// migration (v73)'s opening-balance backfill needs one injected here to be
+// exercised meaningfully. See the "opening balance" assertions below.
+fixtureDb.prepare(`
+  INSERT INTO products (id, category_id, name, price, track_inventory, stock_quantity, is_active, sort_order, created_at, updated_at)
+  VALUES ('prod-legacy-stock', NULL, 'Legacy Tracked Widget', 9.99, 1, 42, 1, 0, '2026-07-01T10:00:00.000Z', '2026-07-01T10:00:00.000Z')
+`).run();
 fixtureDb.close();
 
 const mockApp = {
@@ -114,14 +122,54 @@ function main() {
   console.log('   ✓ an old (pre-migration-array) install migrates through to the latest schema without crashing');
 
   const db = getDatabase();
-  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_sync_enabled'").get().value, '1',
-    'seed-written cloud sync defaults are flipped on during upgrade');
+  // PLEMMO FORK: migration v40 (upstream) flipped this on during upgrade;
+  // migration v67 (Plemmo) turns it back off so an upgraded database never
+  // starts talking to the upstream vendor's service.
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_sync_enabled'").get().value, '0',
+    'PLEMMO v67 leaves cloud sync disabled after upgrading an existing install');
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key = 'cloud_pending_store_id'").get().count, 0,
     'pending registration state is removed during upgrade');
   assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'cloud_orders_enabled'").get().value, '0',
     'explicitly edited settings remain unchanged during upgrade');
   assert.equal(db.prepare("SELECT value FROM settings WHERE key = 'taxes_enabled'").get().value, 'false',
     'taxes remain off until the merchant enables them');
+
+  // PLEMMO v73: the inventory ledger's opening-balance backfill against a
+  // real legacy tracked-stock product (injected above, since none of the
+  // fixture's own products happen to track inventory).
+  const openingMovement = db.prepare(`
+    SELECT * FROM inventory_movements
+    WHERE reference_type = 'opening_stock_migration' AND reference_id = 'prod-legacy-stock'
+  `).get() as any;
+  assert.ok(!!openingMovement, 'v73 creates an opening movement for a pre-existing tracked-stock product');
+  assert.equal(openingMovement.movement_type, 'opening', 'the migration-created movement is typed opening');
+  assert.equal(openingMovement.quantity_delta, 42, 'the opening movement carries the exact legacy stock_quantity');
+  const openingBalance = db.prepare(`
+    SELECT quantity FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
+  `).get() as any;
+  assert.equal(openingBalance.quantity, 42, 'the balance table starts at the same legacy quantity');
+
+  // PLEMMO v74: the location-aware inventory backfill stamps this
+  // v73-created (location_id-less) balance/movement with the install's one
+  // real location, seeded by v68, rather than leaving them permanently
+  // orphaned from every location-aware write this milestone's
+  // InventoryService now makes.
+  const seededLocationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_location_id'").get() as any;
+  assert.ok(!!seededLocationId?.value, 'v68 seeded a real location for this install');
+  assert.equal(openingMovement.location_id, seededLocationId.value, 'the v73 opening movement is backfilled to the real location by v74');
+  const openingBalanceLocation = db.prepare(`
+    SELECT location_id FROM inventory_balances WHERE product_id = 'prod-legacy-stock' AND product_variant_id IS NULL
+  `).get() as any;
+  assert.equal(openingBalanceLocation.location_id, seededLocationId.value, 'the v73 opening balance is backfilled to the real location by v74');
+
+  // PLEMMO v76: every pre-existing order/payment (this fixture's own
+  // legacy order predates any location concept entirely) is backfilled to
+  // this install's one real organization/location, exactly like v74 did
+  // for inventory.
+  const seededOrganizationId = db.prepare("SELECT value FROM settings WHERE key = 'plemmo_organization_id'").get() as any;
+  const legacyOrderLocation = db.prepare("SELECT organization_id, location_id FROM orders WHERE order_number = 'ORD-LEGACY-TAX'").get() as any;
+  assert.equal(legacyOrderLocation.organization_id, seededOrganizationId.value, 'a pre-existing order is backfilled to the real organization by v76');
+  assert.equal(legacyOrderLocation.location_id, seededLocationId.value, 'a pre-existing order is backfilled to the real location by v76');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'support_ticket_outbox'").get(),
     'support ticket outbox exists after upgrade');
   console.log('   ✓ v40/v41 preserves deliberate settings, flips untouched cloud sync, and creates the support outbox');
@@ -157,6 +205,29 @@ function main() {
   assert.equal(migratedUpi.name, 'UPI', 'historical UPI is preserved as a custom method on upgrade');
   assert.equal(JSON.parse(migratedUpi.payment_details).method, 'UPI', 'historical UPI payment is linked to the preserved method');
   console.log('   ✓ legacy UPI payments are preserved without seeding UPI on fresh installs');
+
+  // ── SYNC-0 (v80): the legacy bills.payment_details on this real fixture bill
+  //    (a single {method:'upi', amount:105} object, no payments rows) must be
+  //    reconstructed into the authoritative payments/payment_events model ─────
+  const legacyBillRow = db.prepare("SELECT id, uid FROM bills WHERE bill_number = 'INV-LEGACY-TAX'").get() as { id: number; uid: string | null };
+  const backfilledPayments = db.prepare('SELECT * FROM payments WHERE bill_id = ?').all(legacyBillRow.id) as any[];
+  assert.equal(backfilledPayments.length, 1, 'v80 reconstructs exactly one payment row from the legacy payment_details');
+  const bp = backfilledPayments[0];
+  // An earlier migration normalizes the legacy 'upi' method label to 'UPI'
+  // in payment_details, so that is what v80 (running after it) reconstructs.
+  assert.equal(bp.method, 'UPI', 'the reconstructed payment keeps the (normalized) original method');
+  assert.equal(bp.adapter, 'manual_card', 'a non-cash/wallet legacy method maps to the manual_card adapter');
+  assert.equal(bp.state, 'captured', 'a manual_card payment is captured, not settled');
+  assert.equal(bp.amount_minor, 10500, 'the amount is reconstructed at the legacy 2-decimal scale (105.00 -> 10500)');
+  assert.equal(bp.bill_uid, legacyBillRow.uid, 'the reconstructed payment carries the global bill uid');
+  assert.ok(!!bp.order_uid, 'the reconstructed payment carries the global order uid');
+  const backfilledEvents = db.prepare('SELECT * FROM payment_events WHERE payment_id = ?').all(bp.id) as any[];
+  assert.equal(backfilledEvents.length, 1, 'a matching payment_event is created for the reconstructed payment');
+  assert.equal(backfilledEvents[0].to_state, 'captured', 'the event records the captured state');
+  // Idempotency/duplicate-safety: re-running the migration logic would find a
+  // payment row already present and skip — proven by the guard, and by the row
+  // count staying at 1 after the single real migration run above.
+  console.log('   ✓ v80 backfills legacy payment_details into the authoritative payment model (duplicate-safe)');
 
   // ── Migration v45: legacy ISO timestamps are normalized to the space form ─
   const isoOrderRow = db.prepare(
@@ -231,7 +302,8 @@ function main() {
   );
   console.log('   ✓ old installs receive generic tax behavior without replacing legacy tax data');
 
-  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM products').get() as any).count, 10);
+  // 10 from the fixture + 1 injected above (prod-legacy-stock, for the v73 opening-balance assertions).
+  assert.equal((db.prepare('SELECT COUNT(*) AS count FROM products').get() as any).count, 11);
   // A product originating in this pre-tax-engine fixture can still carry the
   // old tax_type/tax_rate columns after Phase 1, but those columns are not
   // authoritative for new calculations — tax is opt-in through an explicitly
@@ -271,6 +343,46 @@ function main() {
   assert.equal(preservedOrder.tax_snapshot, null);
   assert.equal(preservedBill.tax_snapshot, null);
   console.log('   ✓ existing products, orders, bills, and legacy tax breakdowns are preserved');
+
+  // PLEMMO v69 — every pre-existing transactional row must come out of the
+  // upgrade carrying a collision-safe uid. This is the assertion that proves
+  // the backfill works against a REAL legacy database rather than only on a
+  // fresh one, which is where a backfill normally breaks.
+  const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+  for (const table of ['orders', 'order_items', 'bills'] as const) {
+    const total = (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+    const missing = (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE uid IS NULL`).get() as { c: number }).c;
+    assert.equal(missing, 0, `every legacy ${table} row was backfilled with a uid (${total} rows)`);
+    const distinct = (db.prepare(`SELECT COUNT(DISTINCT uid) AS c FROM ${table}`).get() as { c: number }).c;
+    assert.equal(distinct, total, `every legacy ${table} uid is distinct`);
+    const rows = db.prepare(`SELECT uid FROM ${table}`).all() as { uid: string }[];
+    for (const row of rows) {
+      assert.ok(ULID_RE.test(row.uid), `${table}.uid ${row.uid} is a well-formed ULID`);
+    }
+  }
+  // Backfill seeds each ULID's timestamp from the row's own created_at, so a
+  // lexicographic sort on uid must reproduce creation order rather than
+  // clustering every legacy row at migration time.
+  const ordered = db.prepare(`SELECT uid, created_at FROM orders ORDER BY created_at ASC, id ASC`).all() as { uid: string }[];
+  const byUid = ordered.map((r) => r.uid).slice().sort();
+  assert.deepEqual(ordered.map((r) => r.uid), byUid,
+    'backfilled uids sort in the same order as created_at');
+  console.log('   ✓ legacy orders/order_items/bills are backfilled with unique, time-ordered ULIDs (v69)');
+
+  // PLEMMO v68 — an upgraded install gets the same single-tenant hierarchy a
+  // fresh one does, seeded from its existing business name.
+  const upgradedOrg = db.prepare('SELECT * FROM organizations').all() as any[];
+  assert.equal(upgradedOrg.length, 1, 'an upgraded install has exactly one organization');
+  const upgradedDevice = db.prepare('SELECT * FROM devices').all() as any[];
+  assert.equal(upgradedDevice.length, 1, 'an upgraded install has exactly one device');
+  assert.equal(
+    (db.prepare("SELECT value FROM settings WHERE key = 'plemmo_device_id'").get() as any)?.value,
+    upgradedDevice[0].id,
+    'the device pointer matches the seeded device row after upgrade',
+  );
+  assert.equal((db.prepare('PRAGMA foreign_key_check').all() as any[]).length, 0,
+    'the seeded hierarchy introduces no FK violations into a real legacy database');
+  console.log('   ✓ upgraded installs receive the Plemmo org/location/register/device hierarchy (v68)');
 
   // ── The migrated old install must match the ideal (fresh) schema exactly ─
   const report = runHealthCheck();

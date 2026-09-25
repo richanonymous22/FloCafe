@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.plemmo.epos</id>
+  <name>Plemmo EPOS</name>
+  <summary>Offline-first EPOS for hospitality and retail</summary>
+  <developer id="com.plemmo">
+    <name>Plemmo</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      Plemmo EPOS is an offline-first Point of Sale platform for both
+      hospitality businesses (restaurants, cafes, takeaways) and retail
+      businesses (shops, electronics, grocery). It runs entirely on your own
+      machine with no internet required. Derived from the FloCafe project
+      under the MIT licence.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Fast order entry with multiple order types (dine-in, takeaway, delivery)</li>
+      <li>Kitchen Display System (KDS) with real-time updates</li>
+      <li>Thermal receipt printing via ESC/POS (USB and network)</li>
+      <li>Table management and staff roles</li>
+      <li>Tax-compliant invoicing and sales reports</li>
+      <li>Works offline — no subscriptions or cloud dependency</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">plemmo-epos.desktop</launchable>
+
+  <url type="homepage">https://github.com/richanonymous22/FloCafe</url>
+  <url type="bugtracker">https://github.com/richanonymous22/FloCafe/issues</url>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="2.0.5" date="2026-07-23">
+      <description>
+        <p>Multi-arch Linux distribution publishing: snap-store + AppImageHub auto-discovery + arm64 AppImage, deb, rpm, snap. Migrated snap config to core24 + GNOME extension. Fixed strict-confinement plug list (network-bind, screen-inhibit-control). Release history after this point is appended automatically by `scripts/update-metainfo.js` at release time.</p>
+      </description>
+    </release>
+    <release version="2.0.4" date="2026-07-23">
+      <description>
+        <p>Fixed: Paying a prepaid order in full marks it completed immediately. Standalone KDS item status changes broadcast live over WebSockets. Removed unused customer deletion endpoint. Added keep-me-logged-in option, payment method breakdown in dashboard, and cart editing improvements.</p>
+      </description>
+    </release>
+    <release version="1.7.1" date="2025-01-01">
+      <description>
+        <p>Latest release with Linux improvements and bug fixes.</p>
+      </description>
+    </release>
+  </releases>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <keywords>
+    <keyword>pos</keyword>
+    <keyword>point of sale</keyword>
+    <keyword>epos</keyword>
+    <keyword>retail</keyword>
+    <keyword>shop</keyword>
+    <keyword>restaurant</keyword>
+    <keyword>cafe</keyword>
+    <keyword>billing</keyword>
+    <keyword>invoice</keyword>
+    <keyword>thermal printer</keyword>
+    <keyword>kitchen display</keyword>
+  </keywords>
+</component>

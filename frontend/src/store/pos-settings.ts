@@ -25,7 +25,6 @@ export interface PosSettingsState {
   printerPrintMode: PrinterPrintMode;
   autoPrintKot: boolean;
   autoPrintBill: boolean;
-  whatsappShareEnabled: boolean;
   // Web print settings
   defaultPrintMode: 'thermal' | 'web';
   // Bill template settings
@@ -50,10 +49,6 @@ export interface PosSettingsState {
   // from the backend (default true, matching pre-toggle always-on behavior).
   kdsEnabled: boolean;
   kotPrintingEnabled: boolean;
-  // Whether the WhatsApp integration is enabled on this tenant. Synced from
-  // the backend on auth load so the sidebar can hide the nav entry when the
-  // feature is off, and updated by the WhatsApp page after the user toggles.
-  whatsappEnabled: boolean;
   // Actions
   setShowProductImages: (show: boolean) => void;
   setCustomerMandatory: (mandatory: boolean) => void;
@@ -64,7 +59,6 @@ export interface PosSettingsState {
   setPrinterPrintMode: (mode: PrinterPrintMode) => void;
   setAutoPrintKot: (enabled: boolean) => void;
   setAutoPrintBill: (enabled: boolean) => void;
-  setWhatsappShareEnabled: (enabled: boolean) => void;
   setDefaultPrintMode: (mode: 'thermal' | 'web') => void;
   setBillTemplate: (t: BillTemplate) => void;
   setBillFooterMessage: (m: string) => void;
@@ -85,7 +79,6 @@ export interface PosSettingsState {
   setPrinterTrimDecimals: (v: boolean) => void;
   setKdsEnabled: (v: boolean) => void;
   setKotPrintingEnabled: (v: boolean) => void;
-  setWhatsappEnabled: (v: boolean) => void;
 }
 
 export const usePosSettingsStore = create<PosSettingsState>()(
@@ -103,7 +96,6 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       printerPrintMode: 'escpos',
       autoPrintKot: false,
       autoPrintBill: false,
-      whatsappShareEnabled: true,
       // Web print defaults
       defaultPrintMode: 'thermal',
       // Bill template defaults
@@ -124,11 +116,6 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       printerTrimDecimals: false,
       kdsEnabled: true,
       kotPrintingEnabled: true,
-      // Default false so the sidebar hides the WhatsApp nav entry until the
-      // tenant actually enables the integration. Synced from /api/whatsapp/status
-      // on auth load (see Sidebar.tsx) and updated by the WhatsApp page after
-      // a successful enable/disable toggle.
-      whatsappEnabled: false,
       // Actions
       setShowProductImages: (show) => set({ showProductImages: show }),
       setCustomerMandatory: (mandatory) => set({ customerMandatory: mandatory }),
@@ -139,7 +126,6 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       setPrinterPrintMode: (mode) => set({ printerPrintMode: mode }),
       setAutoPrintKot: (enabled) => set({ autoPrintKot: enabled }),
       setAutoPrintBill: (enabled) => set({ autoPrintBill: enabled }),
-      setWhatsappShareEnabled: (enabled) => set({ whatsappShareEnabled: enabled }),
       setDefaultPrintMode: (mode) => set({ defaultPrintMode: mode }),
       setBillTemplate: (t) => set({ billTemplate: t }),
       setBillFooterMessage: (m) => set({ billFooterMessage: m }),
@@ -160,17 +146,9 @@ export const usePosSettingsStore = create<PosSettingsState>()(
       setPrinterTrimDecimals: (v) => set({ printerTrimDecimals: v }),
       setKdsEnabled: (v) => set({ kdsEnabled: v }),
       setKotPrintingEnabled: (v) => set({ kotPrintingEnabled: v }),
-      setWhatsappEnabled: (v: boolean) => set({ whatsappEnabled: v }),
     }),
     {
       name: 'pos-settings',
-      // Don't persist whatsappEnabled — it's always synced from the
-      // backend (Sidebar fetches /whatsapp/status on mount, WhatsApp page
-      // updates on toggle). Stale persisted values would mask the real
-      // state for tenants who enable/disable across devices.
-      partialize: (s) => Object.fromEntries(
-        Object.entries(s).filter(([k]) => k !== 'whatsappEnabled'),
-      ) as PosSettingsState,
       // v1: billGstin/billShowGstn (India-specific names) renamed to the
       // generic billTaxRegistrationNumber/billShowTaxId. Carry existing
       // browsers' saved values forward under the new keys instead of

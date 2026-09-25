@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { getDatabase, now, getSettingValue } from '../db';
 import { requireRole } from '../middleware/security';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
+import { snapshotCustomer } from '../core/sync/reference-entities';
+import { getTierConfig, tierForSpend } from '../core/loyalty';
 
 export function parseCustomer(c: any): any {
   if (!c) return c;
@@ -147,7 +149,10 @@ router.get('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Requ
       query += ` LIMIT 200`;
     }
 
-    const customers = db.prepare(query).all(...params);
+    const customers = db.prepare(query).all(...params) as any[];
+    // Loyalty tier derived from authoritative lifetime spend (Meridian).
+    const tierConfig = getTierConfig();
+    for (const c of customers) c.tier = tierForSpend(Number(c.total_spent) || 0, tierConfig);
     res.json({ data: customers });
   } catch (error: any) {
     console.error("[API] Internal error:", error);
@@ -271,6 +276,7 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
       timestamp
     );
 
+    snapshotCustomer(db, id); // COMMERCIALIZATION — best-effort customer sync snapshot
     const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
     res.status(201).json({ customer });
   } catch (error: any) {
@@ -324,6 +330,7 @@ router.put('/:id', requireRole('owner', 'manager', 'cashier'), (req: Request, re
       finalPhone, name, email, finalCountryCode, address, notes, now(), req.params.id
     );
 
+    snapshotCustomer(db, String(req.params.id)); // COMMERCIALIZATION — best-effort customer sync snapshot
     const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
     res.json({ customer: updated });
   } catch (error: any) {

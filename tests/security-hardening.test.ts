@@ -38,6 +38,8 @@ const { kitchenRoutes } = require('../main/routes/kitchen');
 const { databaseRoutes } = require('../main/routes/database');
 const { authRoutes, getJWTSecret } = require('../main/routes/auth');
 const { orderRoutes } = require('../main/routes/orders');
+const { grantLocationAccess } = require('../main/core/employee-access');
+const { getCurrentLocationId } = require('../main/core/location');
 
 function seedUser(db: any, id: string, role: string, email: string, categoryIds?: string[]) {
   db.prepare(`
@@ -81,6 +83,17 @@ async function main() {
   const cashierAuth = seedUser(db, 'security-cashier', 'cashier', 'security-cashier@test.local');
   const waiterAuth  = seedUser(db, 'security-waiter',  'waiter',  'security-waiter@test.local');
   const chefAuth    = seedUser(db, 'security-chef',    'chef',    'security-chef@test.local', ['cat-security']);
+
+  // Milestone 8: sales.create now also checks the authenticated user's
+  // access to the device's own current location (main/routes/orders.ts).
+  // These users are seeded after initTestDb(), so — same as migration
+  // v78's own documented backfill limitation (docs/MILESTONE_6_MULTI_LOCATION.md) —
+  // they need an explicit grant to place orders in this file's tests below.
+  const currentLocationId = getCurrentLocationId();
+  if (currentLocationId) {
+    grantLocationAccess('security-cashier', currentLocationId);
+    grantLocationAccess('security-waiter', currentLocationId);
+  }
 
   db.prepare(`
     INSERT OR IGNORE INTO categories (id, name, is_active, created_at, updated_at)

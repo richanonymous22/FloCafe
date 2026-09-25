@@ -23,13 +23,21 @@ const isWindows = os.platform() === 'win32';
 const isMac = os.platform() === 'darwin';
 const isLinux = os.platform() === 'linux';
 
-// ── Identity: how to recognize a Flo Desktop process ────────────────────────
+// ── Identity: how to recognize a Plemmo EPOS process ────────────────────────
 // These patterns match the process command line on all platforms.
-// In dev: `electron .` with app.name = 'flo-desktop'
+// In dev: `electron .` with app.name = 'plemmo-epos'
 // Packaged:
-//   - Linux: executableName "flocafe" (snap/AppImage/deb binary path)
-//   - Mac/Windows: productName "Flo Cafe"
+//   - Linux: executableName "plemmo-epos" (snap/AppImage/deb binary path)
+//   - Mac/Windows: productName "Plemmo EPOS"
+// The legacy Flo/FloCafe patterns are retained deliberately: a developer
+// machine can still have pre-fork builds running on these same ports, and
+// `npm run clean` must be able to clear them.
 const FLO_PATTERNS = [
+  /(?:^|[\s\\/])plemmo[_\-]?epos(?:\.exe)?(?:$|\s)/i,
+  /(?:^|[\s\\/])Plemmo[\s_\-]*EPOS(?:\.exe)?(?:$|\s)/i,
+  /(?:^|[\s\\/])Plemmo EPOS\.app(?:[\\/]Contents[\\/]MacOS[\\/]Plemmo EPOS)?(?:$|\s)/i,
+  /(?:^|\s)com\.plemmo\.epos(?:\.\S*)?(?:$|\s)/i,
+  /(?:^|\s)electron(?:\s+\S+)*\s+--appName=plemmo[_\-]?epos(?:$|\s)/i,
   /(?:^|[\s\\/])flocafe(?:\.exe)?(?:$|\s)/i,
   /(?:^|[\s\\/])Flo[\s_\-]*Cafe(?:\.exe)?(?:$|\s)/i,
   /(?:^|[\s\\/])Flo Cafe\.app(?:[\\/]Contents[\\/]MacOS[\\/]Flo Cafe)?(?:$|\s)/i,

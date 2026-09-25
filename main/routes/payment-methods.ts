@@ -15,13 +15,14 @@ function normalizeName(value: unknown): string {
   return name;
 }
 
+// PAYMENT CUTOVER: usage is now counted against the authoritative payments
+// table (payment_method_id lives in a payment's metadata JSON — the same
+// place persistPayment/recordAppliedPaymentLine already store it), not the
+// legacy bills.payment_details column.
 function countUsage(id: number): number {
   const row = getDatabase().prepare(`
-    SELECT COUNT(*) AS count FROM bills b, json_each(CASE
-      WHEN json_valid(b.payment_details) AND json_type(b.payment_details) = 'array' THEN b.payment_details
-      WHEN json_valid(b.payment_details) THEN json_array(b.payment_details)
-      ELSE '[]' END) je
-    WHERE CAST(json_extract(je.value, '$.payment_method_id') AS INTEGER) = ?
+    SELECT COUNT(*) AS count FROM payments
+    WHERE CAST(json_extract(metadata, '$.payment_method_id') AS INTEGER) = ?
   `).get(id) as { count: number };
   return Number(row.count || 0);
 }
@@ -99,9 +100,32 @@ router.post('/:id/merge', requireRole('owner', 'manager'), (req: Request, res: R
       const target = targetType === 'card' ? null : db.prepare('SELECT * FROM payment_methods WHERE id = ?').get(targetId) as any;
       if (!source || (targetType === 'custom' && !target)) throw Object.assign(new Error('Payment method not found'), { statusCode: 404 });
       const targetName = targetType === 'card' ? 'Card' : target.name;
+
+      // PAYMENT CUTOVER: rename the merged method on the authoritative
+      // payments table too, not only the legacy compatibility JSON — reads
+      // (reports, usage counts, receipts) now source from payments/
+      // payment_events, so a merge that only touched payment_details would
+      // silently stop having any visible effect.
+      const paymentRows = db.prepare(`
+        SELECT id, metadata FROM payments
+        WHERE CAST(json_extract(metadata, '$.payment_method_id') AS INTEGER) = ?
+      `).all(sourceId) as Array<{ id: string; metadata: string | null }>;
+      const updatePayment = db.prepare('UPDATE payments SET method = ?, metadata = ?, updated_at = ? WHERE id = ?');
+      let affected = 0;
+      for (const row of paymentRows) {
+        let meta: Record<string, unknown> = {};
+        try { meta = row.metadata ? JSON.parse(row.metadata) : {}; } catch { meta = {}; }
+        if (targetType === 'card') delete meta.payment_method_id;
+        else meta.payment_method_id = targetId;
+        updatePayment.run(targetName, Object.keys(meta).length > 0 ? JSON.stringify(meta) : null, now(), row.id);
+        affected++;
+      }
+
+      // Legacy compatibility bridge: also rename the same lines inside
+      // bills.payment_details, so a bill printed/rendered before this reader
+      // migration lands (or an old export) still shows the merged label.
       const rows = db.prepare('SELECT id, payment_details FROM bills WHERE payment_details IS NOT NULL').all() as any[];
       const update = db.prepare('UPDATE bills SET payment_details = ?, updated_at = ? WHERE id = ?');
-      let affected = 0;
       for (const row of rows) {
         let parsed: any;
         try { parsed = JSON.parse(row.payment_details); } catch { continue; }
@@ -112,7 +136,6 @@ router.post('/:id/merge', requireRole('owner', 'manager'), (req: Request, res: R
           line.method = targetName;
           if (targetType === 'card') delete line.payment_method_id;
           else line.payment_method_id = targetId;
-          affected++;
           changed = true;
         }
         if (changed) update.run(JSON.stringify(Array.isArray(parsed) ? lines : lines[0]), now(), row.id);

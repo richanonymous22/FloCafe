@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-cloud
+out
+.next
+frontend
+tests
+*.db
+*.db-*
+.git
+.env
+.env.*

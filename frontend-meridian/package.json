@@ -1,0 +1,10 @@
+{
+  "name": "meridian-pos",
+  "version": "0.1.0",
+  "description": "Single-page point-of-sale app — register, kitchen display, kiosk, reports, AI assistant. No backend, no dependencies.",
+  "private": true,
+  "scripts": {
+    "build": "bash build.sh",
+    "serve": "cd dist && python3 -m http.server 8080"
+  }
+}

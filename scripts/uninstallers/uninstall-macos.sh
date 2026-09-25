@@ -19,8 +19,8 @@
 
 set -euo pipefail
 
-APP_NAME="Flo Cafe"
-BUNDLE_ID="com.flo.desktop"
+APP_NAME="Plemmo EPOS"
+BUNDLE_ID="com.plemmo.epos"
 PURGE_DATA=0
 DRY_RUN=0
 

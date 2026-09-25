@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDatabase, now, withTxn } from '../db';
 import { requireRole } from '../middleware/security';
 import { randomUUID } from 'crypto';
-import { validateItemNotes, validateOrderNotes } from './orders-validation';
+import { validateItemNotes, validateOrderNotes } from '../core/notes-validation';
 
 const router = Router();
 

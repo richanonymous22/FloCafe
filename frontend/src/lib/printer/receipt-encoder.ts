@@ -68,15 +68,13 @@ function printReprintBanner(enc: ReceiptPrinterEncoder): void {
 }
 
 function printPoweredByFooter(enc: ReceiptPrinterEncoder): void {
-  enc
-    .align('center')
-    .size('small')
-    .text(RECEIPT_BRANDING_NAME)
-    .newline()
-    .text(RECEIPT_BRANDING_URL)
-    .newline()
-    .size('normal')
-    .align('left');
+  // Empty branding values are skipped rather than printed as blank lines —
+  // see branding.ts. Both empty means no footer at all.
+  if (!RECEIPT_BRANDING_NAME && !RECEIPT_BRANDING_URL) return;
+  enc.align('center').size('small');
+  if (RECEIPT_BRANDING_NAME) enc.text(RECEIPT_BRANDING_NAME).newline();
+  if (RECEIPT_BRANDING_URL) enc.text(RECEIPT_BRANDING_URL).newline();
+  enc.size('normal').align('left');
 }
 
 // Must match main/printers/profiles.ts generic-escpos-58/80 fontAColumns.

@@ -59,7 +59,20 @@ const PlemmoSession = {
 async function plemmoStart(next) {
   PlemmoSession._next = next;
   startPlemmoStatus();
-  if (!PlemmoSession.isAuthed()) { renderPlemmoAuth(); return; }
+  if (!PlemmoSession.isAuthed()) {
+    // First-run: a fresh install has no Plemmo users yet, so there is nothing to
+    // sign in to — the operator must create the first owner here. Ask the
+    // authoritative backend; if it reports needsSetup, show the setup form
+    // instead of the login form. If the status check can't be reached (offline,
+    // or an older backend without the endpoint), fall back to the login gate so
+    // an existing operator can still sign in.
+    try {
+      const st = await PlemmoAPI.setupStatus();
+      if (st && st.needsSetup) { renderPlemmoSetup(st); return; }
+    } catch (e) { /* offline / no setup endpoint → show login */ }
+    renderPlemmoAuth();
+    return;
+  }
   try {
     await PlemmoSession.load();
     hidePlemmoAuth();
@@ -190,6 +203,106 @@ async function onPlemmoLoginSubmit(ev) {
     const m = (e && e.status === 401) ? (e.message || 'Invalid email or password.')
       : (e && e.message) ? e.message
       : 'Could not sign in. Check your connection and try again.';
+    if (err) err.textContent = m;
+  }
+}
+
+/* ---------- First-run setup (create the first owner) ---------- */
+
+// Client-side mirror of the backend password rule (validatePassword): at least
+// 8 characters with one uppercase, one lowercase and one digit. The server
+// re-validates authoritatively; this only gives immediate feedback.
+function plemmoValidPassword(p) {
+  return typeof p === 'string' && p.length >= 8 && /[a-z]/.test(p) && /[A-Z]/.test(p) && /[0-9]/.test(p);
+}
+
+// Render the first-run setup form into the same gate container the login uses.
+// `status` is the /auth/setup/status payload; masterPinAvailable decides whether
+// a Master PIN is required (the backend requires one only when the OS keyring is
+// available to store it).
+function renderPlemmoSetup(status) {
+  const el = $('#plemmo-auth');
+  if (!el) return;
+  $('#app').hidden = true; $('#lock').hidden = true; $('#onboard').hidden = true; $('#kiosk').hidden = true;
+  el.hidden = false;
+  const needPin = !!(status && status.masterPinAvailable);
+  el.innerHTML = `<form class="pl-card pl-setup" id="plSetupForm" autocomplete="on">
+    <div class="pl-brand"><div class="mark">P</div><b>Plemmo</b></div>
+    <h2>Set up your business</h2>
+    <p class="pl-sub">Welcome. Create the owner account for this POS. You can add your team and menu next.</p>
+    <label class="pl-field"><span>Business name</span>
+      <input class="input" type="text" name="business_name" id="plBiz" required autocomplete="organization" autofocus></label>
+    <label class="pl-field"><span>Your name</span>
+      <input class="input" type="text" name="name" id="plName" required autocomplete="name"></label>
+    <label class="pl-field"><span>Email</span>
+      <input class="input" type="email" name="email" id="plSetupEmail" required autocomplete="username"></label>
+    <label class="pl-field"><span>Password</span>
+      <input class="input" type="password" name="password" id="plSetupPass" required autocomplete="new-password">
+      <small class="pl-hint">At least 8 characters, with an uppercase letter, a lowercase letter and a number.</small></label>
+    <label class="pl-field"><span>Service style</span>
+      <select class="input" name="service_model" id="plService">
+        <option value="qsr" selected>Counter / quick service</option>
+        <option value="finedine">Table service (dine-in)</option>
+      </select></label>
+    ${needPin ? `<label class="pl-field"><span>Manager Master PIN (4 digits)</span>
+      <input class="input" type="password" name="master_pin" id="plPin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off">
+      <small class="pl-hint">Used to approve refunds, voids and other manager actions.</small></label>` : ''}
+    <label class="pl-check"><input type="checkbox" id="plTerms">
+      <span>I accept the Terms &amp; Conditions, Privacy Policy and No-Warranty Disclaimer.</span></label>
+    <p class="pl-err" id="plSetupErr"></p>
+    <button class="pl-btn" type="submit" id="plSetupBtn">Create business</button>
+    <p class="pl-foot">Meridian POS · powered by Plemmo</p>
+  </form>`;
+  const form = $('#plSetupForm');
+  if (form) form.addEventListener('submit', onPlemmoSetupSubmit);
+  const f = el.querySelector('[autofocus]'); if (f) f.focus();
+}
+
+async function onPlemmoSetupSubmit(ev) {
+  if (ev) ev.preventDefault();
+  const val = (id) => (($('#' + id) || {}).value || '').trim();
+  const businessName = val('plBiz');
+  const name = val('plName');
+  const email = val('plSetupEmail');
+  const password = ($('#plSetupPass') || {}).value || '';
+  const serviceModel = val('plService') || 'qsr';
+  const pinEl = $('#plPin');
+  const masterPin = pinEl ? (pinEl.value || '').trim() : '';
+  const terms = !!($('#plTerms') || {}).checked;
+  const btn = $('#plSetupBtn'); const err = $('#plSetupErr');
+  if (err) err.textContent = '';
+
+  if (!businessName || !name || !email) { if (err) err.textContent = 'Please fill in your business name, your name and email.'; return; }
+  if (!plemmoValidPassword(password)) { if (err) err.textContent = 'Password must be at least 8 characters and include an uppercase letter, a lowercase letter and a number.'; return; }
+  if (pinEl && !/^\d{4}$/.test(masterPin)) { if (err) err.textContent = 'Enter a 4-digit Master PIN.'; return; }
+  if (!terms) { if (err) err.textContent = 'Please accept the terms to continue.'; return; }
+
+  const payload = {
+    name: name,
+    email: email,
+    password: password,
+    business_name: businessName,
+    business_type: 'restaurant',
+    setup_profile: 'express',
+    service_model: serviceModel,
+    terms_accepted: true,
+    cloud_sync_enabled: false,
+  };
+  if (pinEl) payload.master_pin = masterPin;
+
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="pl-spin"></span> Creating…'; }
+  try {
+    await PlemmoAPI.initializeSetup(payload);
+    await PlemmoSession.load();
+    updatePlemmoStatus();
+    hidePlemmoAuth();
+    if (typeof PlemmoSession._next === 'function') PlemmoSession._next();
+    if (typeof toast === 'function') toast(`Welcome to ${businessName}`, 'ok');
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Create business'; }
+    const m = (e && e.data && e.data.error) ? e.data.error
+      : (e && e.message) ? e.message
+      : 'Could not complete setup. Check your connection and try again.';
     if (err) err.textContent = m;
   }
 }

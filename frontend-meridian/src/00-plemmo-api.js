@@ -174,6 +174,33 @@
       });
   }
 
+  // First-run onboarding. On a fresh install Plemmo has no users yet, so there
+  // is nothing to sign in to — the operator must create the first owner. These
+  // mirror the real backend endpoints (GET /auth/setup/status,
+  // POST /auth/setup/initialize) and are what the boot gate calls to decide
+  // whether to show the setup form instead of the login form.
+  function setupStatus() { return get('/auth/setup/status'); }
+
+  // Create the initial owner. On success the response carries the same session
+  // shape as login (access_token + user + tenant[s]); store it identically so
+  // the app enters signed in, with a tenant-scoped token when there is exactly
+  // one tenant (the local desktop case).
+  function initializeSetup(payload) {
+    return post('/auth/setup/initialize', payload || {}, { idempotent: false })
+      .then(function (res) {
+        if (res && res.access_token) {
+          setToken(res.access_token);
+          setJSON(USER_KEY, res.user || null);
+          var tenants = res.tenants || [];
+          if (tenants.length === 1) {
+            return selectTenant(tenants[0].id).then(function () { return res; });
+          }
+          setJSON(TENANT_KEY, tenants[0] || null);
+        }
+        return res;
+      });
+  }
+
   function me() { return get('/auth/me'); }
 
   function logout() {
@@ -221,6 +248,7 @@
     isOnline: isOnline, onConnectivity: onConnectivity,
     // auth/session
     login: login, selectTenant: selectTenant, me: me, logout: logout,
+    setupStatus: setupStatus, initializeSetup: initializeSetup,
     isAuthenticated: isAuthenticated, currentUser: currentUser, currentTenant: currentTenant,
     verifyManagerPin: verifyManagerPin, getToken: getToken, setToken: setToken,
     // resources

@@ -23,7 +23,8 @@ import express, { Express, NextFunction, Request, Response } from 'express';
 import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { getLicenseSigningKey, signLicense } from './license-signing';
-import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
+import { enrollWithToken, issueEnrollmentToken, EnrollStore, EnrollmentError } from './enrollment';
+import { isAdminApiEnabled, bearerToken, operatorTokenMatches } from './admin-auth';
 
 /**
  * The store surface the sync server uses. Every method may be sync or async,
@@ -46,6 +47,7 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   organizationHealth(organizationUid: string): OrganizationHealth | Promise<OrganizationHealth>;
   listDeficits(organizationUid: string): CloudInventoryDeficit[] | Promise<CloudInventoryDeficit[]>;
   getLicense(organizationUid: string): CloudLicense | null | Promise<CloudLicense | null>;
+  upsertLicense(license: CloudLicense, at: string): void | Promise<void>;
 }
 
 /**
@@ -416,6 +418,124 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
       }
     }
     res.json({ license });
+  });
+
+  // ── Operator (admin) API — the backend contract FloAdmin calls ───────────
+  // Provisioning, license issuance/lifecycle and operational read models for
+  // the SEPARATE FloAdmin console. There is NO admin UI here. Every route is
+  // gated by the shared operator bearer token (PLEMMO_CLOUD_ADMIN_TOKEN); when
+  // it is unset the whole surface is closed (503), never open by default.
+  const LICENSE_STATUSES = new Set<CloudLicense['status']>(['active', 'expired', 'suspended', 'revoked', 'unlicensed']);
+
+  /** Rate-limits + authenticates an operator request. Returns true when the
+   *  caller may proceed, or false after having written the error response. */
+  async function requireOperator(req: Request, res: Response): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const rlKey = `admin:${req.ip ?? 'anon'}`;
+    if (!rateLimited(rlKey, Date.now())) {
+      res.status(429).json({ error: 'rate limited' });
+      return false;
+    }
+    if (!isAdminApiEnabled()) {
+      // Not configured → the admin API does not exist for this deployment.
+      res.status(503).json({ error: 'admin_api_disabled' });
+      return false;
+    }
+    if (!operatorTokenMatches(bearerToken(req.header('authorization')))) {
+      await store.logSync('admin_auth_failure', { message: req.path }, nowIso);
+      res.status(401).json({ error: 'unauthenticated' });
+      return false;
+    }
+    return true;
+  }
+
+  // Issue or replace an organization's license (idempotent upsert by org).
+  // The stored payload is UNSIGNED; GET /sync/v1/license signs it per-request
+  // against the pinned key, so there is exactly one signing seam.
+  app.post('/admin/v1/licenses', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!b.organization_uid || typeof b.organization_uid !== 'string') {
+      return res.status(400).json({ error: 'organization_uid is required' });
+    }
+    const status = (b.status as CloudLicense['status']) ?? 'active';
+    if (!LICENSE_STATUSES.has(status)) return res.status(400).json({ error: 'invalid status' });
+    const nowIso = new Date().toISOString();
+    const license: CloudLicense = {
+      organization_uid: b.organization_uid,
+      status,
+      plan: typeof b.plan === 'string' ? b.plan : 'none',
+      issued_at: typeof b.issued_at === 'string' ? b.issued_at : nowIso,
+      activated_at: typeof b.activated_at === 'string' ? b.activated_at : (status === 'active' ? nowIso : null),
+      expires_at: typeof b.expires_at === 'string' ? b.expires_at : null,
+      grace_days: Number.isFinite(Number(b.grace_days)) ? Number(b.grace_days) : 0,
+      device_limit: b.device_limit == null ? null : Number(b.device_limit),
+      location_limit: b.location_limit == null ? null : Number(b.location_limit),
+      features: Array.isArray(b.features) ? (b.features as unknown[]).map(String) : [],
+      signature: null,
+    };
+    await store.upsertLicense(license, nowIso);
+    await store.logSync('license_issued', { organizationUid: license.organization_uid, message: status }, nowIso);
+    res.status(200).json({ license });
+  });
+
+  // Read an organization's current (stored, unsigned) license.
+  app.get('/admin/v1/licenses/:org', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const license = await store.getLicense(req.params.org);
+    if (!license) return res.status(404).json({ error: 'not_found' });
+    res.json({ license });
+  });
+
+  // Transition an organization's license status
+  // (activate/suspend/revoke/expire/reactivate). Reactivating stamps
+  // activated_at if it was never set. Requires an existing license.
+  app.post('/admin/v1/licenses/:org/status', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const status = (req.body ?? {}).status as CloudLicense['status'];
+    if (!LICENSE_STATUSES.has(status)) return res.status(400).json({ error: 'invalid status' });
+    const existing = await store.getLicense(req.params.org);
+    if (!existing) return res.status(404).json({ error: 'not_found' });
+    const nowIso = new Date().toISOString();
+    const updated: CloudLicense = {
+      ...existing,
+      status,
+      activated_at: status === 'active' ? (existing.activated_at ?? nowIso) : existing.activated_at,
+      signature: null,
+    };
+    await store.upsertLicense(updated, nowIso);
+    await store.logSync('license_status_changed', { organizationUid: req.params.org, message: status }, nowIso);
+    res.json({ license: updated });
+  });
+
+  // Issue a one-time device activation token scoped to an org/location/register.
+  // The PLAINTEXT token is returned ONCE; only its hash is stored. A device
+  // redeems it at POST /sync/v1/enroll — org/location/register bind from the
+  // token, never from anything the device claims.
+  app.post('/admin/v1/enrollment-tokens', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!b.organization_uid || typeof b.organization_uid !== 'string') {
+      return res.status(400).json({ error: 'organization_uid is required' });
+    }
+    const ttlMs = Number.isFinite(Number(b.ttl_seconds)) && Number(b.ttl_seconds) > 0
+      ? Number(b.ttl_seconds) * 1000 : undefined;
+    const { token } = await issueEnrollmentToken(store, {
+      organizationUid: b.organization_uid,
+      locationUid: typeof b.location_uid === 'string' ? b.location_uid : null,
+      registerUid: typeof b.register_uid === 'string' ? b.register_uid : null,
+      ttlMs,
+    });
+    await store.logSync('activation_token_issued', { organizationUid: b.organization_uid }, new Date().toISOString());
+    res.status(201).json({ token, organization_uid: b.organization_uid });
+  });
+
+  // Operational health for an organization (device counts, last sync, deficits)
+  // — the read model behind FloAdmin's business/terminal status views.
+  app.get('/admin/v1/organizations/:org/health', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const health = await store.organizationHealth(req.params.org);
+    res.json(health);
   });
 
   return app;

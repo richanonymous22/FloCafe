@@ -12,7 +12,14 @@ import log from 'electron-log';
 import { WebSocket, type RawData } from 'ws';
 import { getDatabase, now, parseItemJson, attachEffectiveAddons, ensureCloudIdentity, isDiagnosticsConsentEnabled, isDatabaseMaintenanceActive, registerDatabaseMaintenanceEndListener, registerDatabaseMaintenanceStartListener, utcDayBounds, utcTodayDate, withDatabaseRequest } from '../db';
 
-export const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
+// PLEMMO FORK: the upstream FloCafe default pointed at FloPOS's hosted service
+// (blue.flopos.com). A Plemmo production build must never talk to FloPOS
+// infrastructure, so there is NO hard-coded default here. The cloud server URL
+// is supplied by the operator: either baked into a build via the
+// PLEMMO_CLOUD_SERVER_URL env var, or entered per-merchant in Settings. When
+// neither is set the value is empty ("" = no cloud configured), which is safe
+// because cloud coordination is opt-in and off by default on Plemmo installs.
+export const DEFAULT_CLOUD_SERVER_URL = (process.env.PLEMMO_CLOUD_SERVER_URL || '').trim();
 
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 const OUTBOX_INTERVAL_MS = 15_000;
@@ -137,7 +144,13 @@ function isLocalDevUrl(url: URL): boolean {
 }
 
 export function normalizeCloudServerUrl(raw?: string | null): string {
-  const url = new URL(raw && raw.trim() ? raw.trim() : DEFAULT_CLOUD_SERVER_URL);
+  // An unset URL (no per-merchant value and no PLEMMO_CLOUD_SERVER_URL build
+  // default) means "no cloud configured" — return "" rather than throwing on
+  // `new URL("")`. Callers gate real network use on cloud being enabled AND a
+  // non-empty URL, so an empty value simply keeps the client offline-only.
+  const candidate = raw && raw.trim() ? raw.trim() : DEFAULT_CLOUD_SERVER_URL;
+  if (!candidate) return '';
+  const url = new URL(candidate);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocalDevUrl(url))) {
     throw new Error('Cloud server URL must use HTTPS');
   }

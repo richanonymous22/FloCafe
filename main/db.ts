@@ -137,7 +137,12 @@ export function withDatabaseMaintenanceLock<T>(operation: () => T | Promise<T>):
   }).finally(release);
 }
 
-const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
+// PLEMMO FORK: no hard-coded FloPOS default (was blue.flopos.com). Sourced from
+// the build-time PLEMMO_CLOUD_SERVER_URL env var, else empty ("" = no cloud
+// configured). Mirrors services/cloud-sync.ts. Cloud coordination is opt-in and
+// off by default, so an empty value keeps a fresh install fully offline-only and
+// guarantees no production build contacts FloPOS infrastructure.
+const DEFAULT_CLOUD_SERVER_URL = (process.env.PLEMMO_CLOUD_SERVER_URL || '').trim();
 
 function randomSecret(): string {
   return crypto.randomBytes(32).toString('base64')

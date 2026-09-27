@@ -18,6 +18,7 @@ import * as assert from 'node:assert/strict';
 const request = require('supertest');
 const { SqliteCloudStore } = require('../cloud/store');
 const { createCloudServer } = require('../cloud/server');
+const { bearerToken } = require('../cloud/admin-auth');
 
 const TOKEN = 'test-operator-token-abc123';
 const auth = (t: string = TOKEN) => ({ Authorization: `Bearer ${t}` });
@@ -29,6 +30,16 @@ async function run() {
 
   const priorToken = process.env.PLEMMO_CLOUD_ADMIN_TOKEN;
   try {
+    // ── bearer parsing (ReDoS-safe, case-insensitive prefix) ──────────────────
+    assert.equal(bearerToken('Bearer abc'), 'abc', 'parses a bearer token');
+    assert.equal(bearerToken('bearer   abc  '), 'abc', 'case-insensitive prefix, trims surrounding spaces');
+    assert.equal(bearerToken('Basic abc'), null, 'non-bearer scheme is rejected');
+    assert.equal(bearerToken('Bearer'), null, 'bare scheme with no token is rejected');
+    assert.equal(bearerToken(''), null, 'empty header is rejected');
+    assert.equal(bearerToken(null), null, 'null header is rejected');
+    // Pathological input that would backtrack on a `\s+.+` regex resolves fast.
+    assert.equal(bearerToken('bearer ' + ' '.repeat(50000)), null, 'all-whitespace token resolves to null without hanging');
+
     // ── disabled by default (no token configured) ─────────────────────────────
     delete process.env.PLEMMO_CLOUD_ADMIN_TOKEN;
     let res = await request(app).post('/admin/v1/licenses').send({ organization_uid: 'org-1' });

@@ -27,11 +27,22 @@ export function isAdminApiEnabled(): boolean {
   return getCloudAdminToken() !== null;
 }
 
-/** Extracts the bearer token from an Authorization header value. */
+/**
+ * Extracts the bearer token from an Authorization header value.
+ *
+ * Parsed with plain string ops rather than a regex: a pattern like
+ * `^Bearer\s+(.+)$` has overlapping `\s+`/`.+` quantifiers over attacker-
+ * controlled input and can backtrack polynomially (ReDoS). String slicing is
+ * linear and cannot.
+ */
 export function bearerToken(authorizationHeader: string | undefined | null): string | null {
   if (!authorizationHeader) return null;
-  const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader.trim());
-  return match ? match[1].trim() : null;
+  const header = authorizationHeader.trim();
+  const prefix = 'bearer ';
+  if (header.length <= prefix.length) return null;
+  if (header.slice(0, prefix.length).toLowerCase() !== prefix) return null;
+  const token = header.slice(prefix.length).trim();
+  return token ? token : null;
 }
 
 /**

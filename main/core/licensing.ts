@@ -21,10 +21,13 @@
  * `needs_verification` (still not an instant lockout — the merchant is warned,
  * not stranded mid-service). A `revoked` license is never granted grace.
  *
- * Cryptographic signature verification of the license payload is stubbed
- * behind `LicenseVerifier` — the real server-issued signature check is an
- * external dependency (the cloud license service, not yet deployed); the local
- * cache + effective-status logic here are complete and testable.
+ * Cryptographic signature verification of the license payload IS implemented
+ * (see `createCloudLicenseVerifier` + `licensing-signature.ts`, B2): when a
+ * public key is pinned into the build, a tampered or unsigned payload is
+ * rejected. What remains an external dependency is the cloud license *service*
+ * that issues and signs those payloads (not yet deployed). The local cache,
+ * effective-status logic and signature check here are complete and tested
+ * (plemmo-license-signature.test.ts + plemmo-license-lifecycle.test.ts).
  */
 
 import { getDatabase, getSettingValue, now } from '../db';

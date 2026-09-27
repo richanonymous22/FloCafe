@@ -1,0 +1,57 @@
+# ---------------------------------------------------------------
+# Plemmo EPOS — CodeQL security analysis (Gate 5)
+# ---------------------------------------------------------------
+# Static security analysis for the JavaScript/TypeScript sources (Electron main
+# process, cloud service, Meridian bundle, Next.js stations). Build mode "none"
+# analyses the source directly — no compilation or native rebuild needed — so
+# this stays fast and independent of the functional CI in ci.yml.
+#
+# Results appear under the repository's Security > Code scanning tab. This is the
+# code-side half of Gate 5; enabling GitHub secret scanning and push protection
+# is a repository Settings action (Settings > Advanced Security) and cannot be
+# configured from a workflow file.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan (Mondays 05:17 UTC) so advisories that land between pushes
+    # are still caught on a quiet branch.
+    - cron: '17 5 * * 1'
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@87ef0dc97def48aa960fbf026a2563ee9dbdb470 # v3
+        with:
+          category: "/language:${{ matrix.language }}"

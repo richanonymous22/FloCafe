@@ -281,7 +281,7 @@ A.lineEdit=d=>{const l=U.cart.items.find(x=>x.uid===d.id);const p=l&&prod(l.pid)
 A.orderNote=async()=>{const v=await promptBox({title:'Order note',label:'Shown on the receipt and kitchen ticket',value:U.cart.note,placeholder:'For example, birthday, bring candles',ok:'Save note'});if(v===null)return;U.cart.note=v.trim();refreshPos({grid:false});};
 A.mobCart=()=>{U.mobCart=!U.mobCart;$('#pos').classList.toggle('cart-open',U.mobCart);};
 A.hideDrawerHint=()=>{U.hideDrawerHint=true;refreshPos({grid:false});};
-A.rmDisc=()=>{U.cart.discount=null;refreshPos({grid:false});};
+A.rmDisc=()=>{discPin=null;U.cart.discount=null;refreshPos({grid:false});};
 A.rmCust=()=>{U.cart.custId=null;if(U.cart.discount&&U.cart.discount.pts)U.cart.discount=null;refreshPos({grid:false});};
 A.redeem=()=>{const L=S.settings.loyalty;U.cart.discount={kind:'amt',value:L.redeemVal,reason:'Loyalty reward',pts:L.redeemPts};refreshPos({grid:false});toast(`${money(L.redeemVal)} reward applied`);};
 A.clearCart=async()=>{
@@ -443,7 +443,7 @@ function renderDisc(){
    <div class="change-line mt" id="dscPrev"><span>New total</span><span class="num">${money(t.total)} (saves ${money(t.disc)})</span></div>
    ${needsDiscApproval()?`<p class="hint mt">${ic('lock',14)} A manager will need to approve this discount.</p>`:''}`;
 }
-function needsDiscApproval(){if(!can('discounts'))return true;const e=me();return e.role==='staff'&&DSC.kind==='pct'&&DSC.value>20;}
+function needsDiscApproval(){if(live())return me().role!=='owner'&&me().role!=='manager';if(!can('discounts'))return true;const e=me();return e.role==='staff'&&DSC.kind==='pct'&&DSC.value>20;}
 A.dscPick=d=>{DSC.kind='pct';DSC.value=+d.v;DSC.reason=d.r;renderDisc();};
 A.dscKind=d=>{DSC.kind=d.k;DSC.value=d.k==='pct'?10:2;renderDisc();};
 A.dscReason=d=>{DSC.reason=d.r;renderDisc();};
@@ -451,7 +451,12 @@ IN.dscVal=v=>{DSC.value=Math.max(0,+v||0);if(DSC.kind==='pct')DSC.value=Math.min
 A.applyDisc=async()=>{
   if(!DSC.value){toast('Enter a discount above zero','warn');return;}
   let by=me();
-  if(needsDiscApproval()){by=await approve(me().role==='staff'&&can('discounts')?'refunds':'discounts',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!by)return;}
+  if(live()){
+    // The backend decides who may discount and records the real approver; here we only
+    // collect a PIN up front when the signed-in user is not a manager/owner.
+    discPin=null;
+    if(me().role!=='owner'&&me().role!=='manager'){const got=await approveServer('priceOverride',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!got)return;discPin=got.pin||null;}
+  }else if(needsDiscApproval()){by=await approve(me().role==='staff'&&can('discounts')?'refunds':'discounts',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!by)return;}
   U.cart.discount={kind:DSC.kind,value:DSC.value,reason:DSC.reason,by:by.id};
   DSC.L.close();refreshPos({grid:false});toast('Discount applied');
 };
@@ -518,16 +523,84 @@ function loadOrderToCart(o){
 
 /* ---------- Payment ---------- */
 let PAY=null;
+// A sale the backend is authoritative for: a fresh counter sale, or a dine-in order that
+// already exists there. (A device-only order from an offline moment pays locally.)
+function plemmoSaleMode(){
+  const c=U.cart,existing=c.orderId?orderOf(c.orderId):null;
+  return !!(window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId)));
+}
 A.charge=()=>{
   if(!U.cart.items.length){toast('Add an item first','warn');return;}
   const t=cartTotals();
   PAY={due:t.total,tip:0,tipPct:0,method:'card',tendered:'',splitAmt:'',payments:[],stage:'idle'};
-  PAY.L=modal({title:'Take payment',cls:'xl',body:`<div id="payBody"></div>`,dismiss:false,onClose:()=>{if(PAY&&PAY.payments.length&&!PAY.done)toast('Payment cancelled. Money already taken is shown on the order when you charge again.','warn');}});
-  renderPay();
+  const remote=plemmoSaleMode();
+  PAY.L=modal({title:'Take payment',cls:'xl',body:`<div id="payBody"></div>`,dismiss:false,onClose:()=>{
+    if(PAY&&PAY.payments.length&&!PAY.done)toast('Payment cancelled. Money already taken is shown on the order when you charge again.','warn');
+    if(PAY&&!PAY.done)releasePreparedSale(PAY);
+  }});
+  if(remote){PAY.remote=true;PAY.stage='prep';renderPay();preparePlemmoSale(PAY);}
+  else renderPay();
 };
+// Before any money is taken the backend creates the order, applies the discount (asking for a
+// manager PIN when it says so) and generates the bill; the pay screen then charges the BACKEND's
+// total, never a locally computed one. Everything here is safe to repeat: PAY.saved remembers
+// what already exists so a retry never creates a second order.
+let discPin=null;
+async function ensurePlemmoBill(p){
+  const c=U.cart,existing=c.orderId?orderOf(c.orderId):null,sv=p.saved||(p.saved={});
+  if(!sv.orderId){
+    if(existing&&existing.plemmoOrderId){sv.orderId=existing.plemmoOrderId;sv.created=false;}
+    else{const r=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);sv.orderId=r.id;sv.orderResp=r;sv.created=true;}
+  }
+  if(c.discount&&!sv.discounted){
+    let pin=discPin;
+    for(let tries=0;;tries++){
+      try{await PlemmoTill.applyDiscount(sv.orderId,{kind:c.discount.kind,value:c.discount.value,reason:c.discount.reason,pin});sv.discounted=true;break;}
+      catch(e){
+        if(!(e&&e.data&&e.data.requiresApproval)||tries>=2)throw e;
+        const got=await pinCollect({title:'Manager approval',text:`${esc(c.discount.kind==='pct'?c.discount.value+'%':money(c.discount.value))} discount needs a manager. Hand over the till and ask them to enter their PIN.`});
+        if(!got||!got.pin)throw Object.assign(new Error('Discount approval cancelled'),{cancelled:true});
+        pin=got.pin;
+      }
+    }
+    discPin=null;
+  }
+  if(!sv.bill){
+    let bill;
+    try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:sv.orderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+    if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(sv.orderId));bill=b&&b.bill;}
+    if(!bill)throw new Error('No bill for order');
+    sv.bill=bill;
+  }
+  return sv;
+}
+async function preparePlemmoSale(p){
+  try{
+    await ensurePlemmoBill(p);
+    if(PAY!==p||(p.L&&p.L.closed)){releasePreparedSale(p);return;}
+    p.due=Number(p.saved.bill.total);p.stage='idle';renderPay();
+  }catch(e){
+    await releasePreparedSale(p,true);
+    const msg=e&&e.cancelled?'Discount not approved. Nothing was charged.'
+      :(e&&e.status===403&&!(e.data&&e.data.requiresApproval))?'You don’t have permission to take payment'
+      :`The sale could not be prepared: ${tillError(e,'the till server did not respond')}. Nothing was charged.`;
+    toast(msg,'warn');
+    if(PAY===p&&p.L&&!p.L.closed){p.done=true;p.L.close();PAY=null;}
+  }
+}
+// Abandoned checkout with nothing paid: put the stock back by voiding the order WE created.
+async function releasePreparedSale(p,force){
+  const sv=p&&p.saved;if(!sv||!sv.orderId||!sv.created||sv.released)return;
+  if(p.payments&&p.payments.length)return;
+  if(!force&&sv.orderId==null)return;
+  sv.released=true;
+  try{await PlemmoTill.cancelOrder(sv.orderId,{reason:'Checkout cancelled'});refreshCatalogueSoon();}
+  catch(e){toast('Checkout cancelled, but the open order could not be voided automatically. Void it from Orders.','warn');}
+}
 function payRem(){return r2(PAY.due+PAY.tip-sum(PAY.payments,p=>p.a));}
 function cashSuggest(rem){const c=[rem,Math.ceil(rem),Math.ceil(rem/5)*5,Math.ceil(rem/10)*10,Math.ceil(rem/20)*20,50];return[...new Set(c.map(r2))].filter(v=>v>=rem).slice(0,4);}
 function renderPay(){
+  if(PAY.stage==='prep'){$('#payBody').innerHTML=`<div class="reader wait" style="margin:40px auto;max-width:420px"><b>Preparing the bill…</b><small>Checking prices, tax and any discount with the till server.</small></div>`;return;}
   const rem=payRem(),paidAny=PAY.payments.length>0,tips=S.settings.tipping;
   const tipBtns=[0,10,12.5,15].map(p=>`<button class="chip ${PAY.tipPct===p&&!PAY.tipCustom?'on':''}" data-act="payTip" data-p="${p}" ${paidAny?'disabled':''}>${p?p+'%':'No tip'}</button>`).join('')+`<button class="chip ${PAY.tipCustom?'on':''}" data-act="payTipCustom" ${paidAny?'disabled':''}>Other</button>`;
   let pane='';
@@ -646,7 +719,7 @@ function finishSale(){
   const existing=c.orderId?orderOf(c.orderId):null;
   // Use the authoritative path for a fresh sale, or a dine-in order already
   // opened in Plemmo. A local-only order (Plemmo unreachable at send) pays local.
-  const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId));
+  const usePlemmo=PAY.remote||(window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId)));
   if(usePlemmo){finishSalePlemmo().catch((e)=>{
     const msg=(e&&e.data&&e.data.requiresApproval)?'The manager approval for a price change wasn’t accepted. Change the price again with a manager PIN.'
       :(e&&e.status===403)?'You don’t have permission to take payment'
@@ -659,22 +732,10 @@ function finishSale(){
 async function finishSalePlemmo(){
   const c=U.cart;
   const existing=c.orderId?orderOf(c.orderId):null;
-  // 1. Authoritative order — reuse a dine-in order already opened in Plemmo,
-  // else create one now (Plemmo computes totals + deducts stock).
-  // A retry after a failed save reuses the order and bill already created (PAY.saved)
-  // so pressing "Try again" can never create a second order or reserve stock twice.
-  let plemmoOrderId,orderResp=null;
-  if(PAY.saved){plemmoOrderId=PAY.saved.orderId;orderResp=PAY.saved.orderResp;}
-  else if(existing&&existing.plemmoOrderId){plemmoOrderId=existing.plemmoOrderId;}
-  else{orderResp=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);plemmoOrderId=orderResp.id;}
-  // 2. Bill for the order.
-  let bill=PAY.saved&&PAY.saved.bill;
-  if(!bill){
-    try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:plemmoOrderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-    if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(plemmoOrderId));bill=b&&b.bill;}
-  }
-  if(!bill)throw new Error('No bill for order');
-  PAY.saved={orderId:plemmoOrderId,orderResp:orderResp,bill:bill};
+  // 1+2. Order, discount and bill already exist from the prepare step (or are created now if
+  // this path is reached without it); ensurePlemmoBill never duplicates anything.
+  const sv=await ensurePlemmoBill(PAY);
+  const plemmoOrderId=sv.orderId,orderResp=sv.orderResp||null,bill=sv.bill;
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
     const line={method:p.m==='card'?'card':'cash',amount:r2(p.a)};

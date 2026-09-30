@@ -65,6 +65,17 @@
     return api().request('/orders/' + enc(orderId) + '/status', { method: 'PATCH', body: body, idempotent: false });
   }
 
+  // Apply (or, with value 0, remove) an order discount. The backend enforces who may
+  // discount (owner/manager, or anyone with a manager PIN), the configured mode and
+  // maximums, recomputes tax and the bill, and audits it. Rejects with e.data.requiresApproval
+  // when a manager PIN is needed.
+  function applyDiscount(orderId, d) {
+    const body = { discount_type: d.kind === 'pct' ? 'percentage' : 'amount', discount_value: Number(d.value) || 0 };
+    if (d.reason) body.discount_reason = String(d.reason);
+    if (d.pin) body.override_pin = String(d.pin);
+    return api().request('/orders/' + enc(orderId) + '/discount', { method: 'PATCH', body: body, idempotent: false });
+  }
+
   // Re-read one order from the backend (the authoritative state after a change).
   function fetchOrder(orderId) {
     return api().get('/orders/' + enc(orderId)).then((r) => (r && r.order) || r);
@@ -266,7 +277,7 @@
 
   window.PlemmoTill = {
     errorMessage: errorMessage, isNetworkError: isNetworkError, parseDbTime: parseDbTime,
-    refundBill: refundBill, cancelOrder: cancelOrder, fetchOrder: fetchOrder,
+    refundBill: refundBill, cancelOrder: cancelOrder, applyDiscount: applyDiscount, fetchOrder: fetchOrder,
     printBill: printBill,
     sanitizeCart: sanitizeCart, held: held, newId: newId,
     masterPinStatus: masterPinStatus, createBackup: createBackup,

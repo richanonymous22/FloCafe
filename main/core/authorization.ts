@@ -35,7 +35,7 @@
 import { userHasLocationAccess } from './employee-access';
 
 export type Permission =
-  | 'sales.create' | 'sales.refund' | 'sales.void' | 'sales.price_override' | 'sales.reconcile'
+  | 'sales.create' | 'sales.refund' | 'sales.void' | 'sales.price_override' | 'sales.discount' | 'sales.reconcile'
   | 'inventory.view' | 'inventory.adjust' | 'inventory.receive' | 'inventory.transfer'
   | 'purchasing.manage'
   | 'reports.view'
@@ -62,11 +62,11 @@ const LOCATION_UNRESTRICTED_ROLES: readonly Role[] = ['owner', 'manager'];
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: [
-    'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.discount', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage', 'locations.manage',
   ],
   manager: [
-    'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
+    'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.discount', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
     'inventory.transfer', 'purchasing.manage', 'reports.view', 'employees.manage',
   ],
   // NOTE (SYNC-F Part M): sales.reconcile is deliberately withheld from

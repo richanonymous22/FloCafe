@@ -131,6 +131,30 @@ async function main() {
   const trig2 = db2.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_money_q_%'").get() as any;
   assertEqual(trig2.n, Object.keys(MONEY_COLUMNS).length * 2, 'guards reinstalled after upgrade');
 
+  console.log('\n7. Property check: 150 random sales stay exact');
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const ids: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const id = `p-rand-${i}`;
+    addProduct(db2, id, Math.round(rnd() * 5000) / 100 + 0.01);
+    ids.push(id);
+  }
+  let badSubtotal = 0; let badTotal = 0;
+  for (let n = 0; n < 150; n++) {
+    const lines = Array.from({ length: 1 + Math.floor(rnd() * 5) }, () => ({
+      product_id: ids[Math.floor(rnd() * ids.length)], quantity: 1 + Math.floor(rnd() * 9),
+    }));
+    const r = createSale({ channel: 'takeaway', lines, cashierUserId: USER_ID });
+    const row = db2.prepare(`SELECT ${minorSql('subtotal')} AS s, ${minorSql('total')} AS t, ${minorSql('tax_amount')} AS x FROM orders WHERE id = ?`).get(r.sale.id) as any;
+    const items = db2.prepare(`SELECT SUM(${minorSql('subtotal')}) AS s FROM order_items WHERE order_id = ?`).get(r.sale.id) as any;
+    if (row.s !== items.s) badSubtotal++;
+    if (row.t < row.s) badTotal++; // tax-exclusive totals can never be below the subtotal
+  }
+  assertEqual(badSubtotal, 0, 'order subtotal equals the sum of its line subtotals, in minor units, for every sale');
+  assertEqual(badTotal, 0, 'order total is never below its subtotal');
+  assertEqual(scanMoneyIntegrity(db2).length, 0, 'no residue after 150 random sales');
+
   closeDatabase();
   const results = getResults();
   console.log(`\n${results.failed === 0 ? '✅' : '❌'} ${results.passed} passed, ${results.failed} failed`);

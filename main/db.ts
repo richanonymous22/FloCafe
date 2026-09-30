@@ -9,6 +9,7 @@ import * as crypto from 'crypto';
 import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled';
 import { ulid } from './core/ids';
 import { fromMinor, minorUnitExponent } from './core/money';
+import { dropMoneyGuards, installMoneyGuards, repairMoneyColumns, scanMoneyIntegrity } from './core/money-integrity';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -464,6 +465,12 @@ export function initDatabase(recoverInterruptedReplacement = true): void {
 
   db.pragma('foreign_keys = ON');
 
+  // Re-assert the money guards every start: a later table rebuild or a new money
+  // column must never leave a writer unguarded. (MERIDIAN_MONEY_GUARDS=off exists
+  // only so the test suite can discover writers that store unquantised values.)
+  if (process.env.MERIDIAN_MONEY_GUARDS === 'off') dropMoneyGuards(db);
+  else installMoneyGuards(db);
+
   runStartupIntegrityCheck();
   repairSequences();
   autoRepairPaymentDetails();
@@ -741,6 +748,16 @@ export function getDatabase(): Database.Database {
 
 export function closeDatabase(): void {
   if (db) {
+    if (process.env.MERIDIAN_MONEY_SCAN === '1') {
+      // Strict mode for CI: any unquantised money left behind is a writer bug.
+      const bad = scanMoneyIntegrity(db, 10);
+      if (bad.length) {
+        console.error('[DB] MONEY INTEGRITY VIOLATIONS:', JSON.stringify(bad));
+        db.close();
+        db = null as unknown as Database.Database;
+        throw new Error(`Money integrity: ${bad.length}+ unquantised value(s), e.g. ${bad[0].table}.${bad[0].column}=${bad[0].value}`);
+      }
+    }
     db.close();
     db = null as unknown as Database.Database;
     console.log('[DB] Database closed');
@@ -5324,6 +5341,20 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
         );
         CREATE INDEX IF NOT EXISTS idx_held_carts_created ON held_carts(created_at);
       `);
+    },
+  },
+  {
+    version: 97,
+    name: 'money_integrity_guards',
+    up: () => {
+      // EXACT MONEY (WP2). Sales-side money stays in REAL columns but every stored
+      // value must be a whole number of minor units, and totals are summed in
+      // integer minor units (core/money-integrity.ts). Data-preserving: this only
+      // rounds values that carried float residue (e.g. 0.30000000000000004 -> 0.3),
+      // then installs triggers that keep every future write exact. No column,
+      // table or row is added, removed or reshaped.
+      repairMoneyColumns(db);
+      installMoneyGuards(db);
     },
   },
 ];

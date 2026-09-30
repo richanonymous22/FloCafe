@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { getDatabase, generateOrderNumber, now, parseItemJson, parseRowJson, withTxn, verifyPin, getSettingValue, insertOrderItemAddons, attachEffectiveAddons, utcDayBounds, utcTodayDate } from '../db';
 import {
   calculateConfiguredChargeTaxes,
@@ -21,6 +22,17 @@ import { ApprovalError, resolveApprover } from '../core/approval';
 import { getOrderItemReturnState, recordReturn as recordInventoryReturn } from '../core/inventory';
 
 const router = Router();
+
+// Every orders route reads or writes the sale ledger and is reachable from the LAN.
+// Per-client ceiling far above what a till or tablet generates (polling included);
+// it exists to stop a runaway or hostile client, in addition to the global API limiter.
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
 const MAX_ORDER_IDEMPOTENCY_KEY_LENGTH = 128;
 
 function orderIdempotencyKey(req: Request): string | null {

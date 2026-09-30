@@ -20,7 +20,7 @@ import { getCurrentLocationId } from '../core/location';
 import { recordAuditEvent } from '../core/audit';
 import { currencyExponent, quantiseMoney, sumMoney } from '../core/money-integrity';
 import { ApprovalError, resolveApprover } from '../core/approval';
-import { getOrderItemReturnState, recordReturn as recordInventoryReturn } from '../core/inventory';
+import { restockCancelledLine } from '../core/inventory';
 
 const router = Router();
 
@@ -544,29 +544,10 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
         case 'cancelled': {
           const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id) as any[];
           for (const item of items) {
-            const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id) as any;
-            if (!product || !product.track_inventory) continue;
-            // Stock lives in the inventory ledger, so a cancelled line goes back
-            // through it (which also keeps products.stock_quantity in step).
-            // A line the ledger never sold — an order that predates it — keeps
-            // the legacy direct restore. Lines already cancelled individually
-            // were handled when they were cancelled.
-            if (['cancelled', 'voided', 'void_adjustment'].includes(item.status)) continue;
-            const state = getOrderItemReturnState(item.id);
-            if (state.sold > 0) {
-              const quantity = Math.min(Number(item.quantity), state.returnable);
-              if (quantity > 0) {
-                recordInventoryReturn({
-                  productId: item.product_id, variantId: item.product_variant_id ?? null, quantity,
-                  reason: reason ? `Order cancelled: ${reason}` : 'Order cancelled',
-                  saleReferenceId: String(item.id), referenceType: 'order_cancel', referenceId: String(req.params.id),
-                  actorUserId: authUser?.userId ?? null,
-                });
-              }
-            } else {
-              db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
-                .run(item.quantity, nowStr, product.id);
-            }
+            restockCancelledLine({
+              item, reason: reason ? `Order cancelled: ${reason}` : 'Order cancelled',
+              referenceType: 'order_cancel', referenceId: String(req.params.id), actorUserId: authUser?.userId ?? null,
+            });
           }
           db.prepare('UPDATE orders SET status = ?, cancelled_at = ?, cancellation_reason = ?, updated_at = ? WHERE id = ?')
             .run(status, nowStr, reason, nowStr, req.params.id);

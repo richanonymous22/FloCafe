@@ -317,6 +317,42 @@ export function getOrderItemReturnState(orderItemId: string | number): { sold: n
   return { sold, returnable: Math.max(0, sold - returned) };
 }
 
+/**
+ * Put one cancelled order line back into stock. Tracked stock lives in the
+ * ledger, so a line the ledger sold goes back through `recordReturn` (capped at
+ * what is still returnable, which also keeps products.stock_quantity in step).
+ * A line the ledger never sold — an order that predates it — keeps the legacy
+ * direct restore. Untracked products and lines that are already cancelled/voided
+ * do nothing. Runs inside the caller's transaction.
+ */
+export function restockCancelledLine(input: {
+  item: { id: number | string; product_id: string; product_variant_id?: string | null; quantity: number; status?: string };
+  reason: string;
+  referenceType: string;
+  referenceId: string;
+  actorUserId?: string | null;
+}): void {
+  const { item } = input;
+  if (item.status && ['cancelled', 'voided', 'void_adjustment'].includes(item.status)) return;
+  const db = getDatabase();
+  const product = db.prepare('SELECT id, track_inventory FROM products WHERE id = ?').get(item.product_id) as { id: string; track_inventory: number } | undefined;
+  if (!product || !product.track_inventory) return;
+  const state = getOrderItemReturnState(item.id);
+  if (state.sold > 0) {
+    const quantity = Math.min(Number(item.quantity), state.returnable);
+    if (quantity > 0) {
+      recordReturn({
+        productId: item.product_id, variantId: item.product_variant_id ?? null, quantity,
+        reason: input.reason, saleReferenceId: String(item.id),
+        referenceType: input.referenceType, referenceId: input.referenceId, actorUserId: input.actorUserId ?? null,
+      });
+    }
+  } else {
+    db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
+      .run(item.quantity, now(), product.id);
+  }
+}
+
 export interface AdjustStockInput extends InventoryKey {
   quantityDelta: number;
   reason: string;

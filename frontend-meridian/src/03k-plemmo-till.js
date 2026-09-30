@@ -76,6 +76,17 @@
     return api().request('/orders/' + enc(orderId) + '/discount', { method: 'PATCH', body: body, idempotent: false });
   }
 
+  // Remove one line from an order the backend holds. Owner/manager, or anyone with a
+  // manager PIN; a line the kitchen had not started goes back to stock, one already in
+  // progress is voided (kept on the bill as a negative line, stock not returned).
+  function cancelItem(orderId, itemId, opts) {
+    opts = opts || {};
+    const body = {};
+    if (opts.reason) body.reason = opts.reason;
+    if (opts.pin) body.override_pin = String(opts.pin);
+    return api().request('/orders/' + enc(orderId) + '/items/' + enc(itemId) + '/cancel', { method: 'PATCH', body: body, idempotent: false });
+  }
+
   // Re-read one order from the backend (the authoritative state after a change).
   function fetchOrder(orderId) {
     return api().get('/orders/' + enc(orderId)).then((r) => (r && r.order) || r);
@@ -277,7 +288,7 @@
 
   window.PlemmoTill = {
     errorMessage: errorMessage, isNetworkError: isNetworkError, parseDbTime: parseDbTime,
-    refundBill: refundBill, cancelOrder: cancelOrder, applyDiscount: applyDiscount, fetchOrder: fetchOrder,
+    refundBill: refundBill, cancelOrder: cancelOrder, cancelItem: cancelItem, applyDiscount: applyDiscount, fetchOrder: fetchOrder,
     printBill: printBill,
     sanitizeCart: sanitizeCart, held: held, newId: newId,
     masterPinStatus: masterPinStatus, createBackup: createBackup,

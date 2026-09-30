@@ -164,13 +164,14 @@
     "test:receipt-email": "ts-node --transpile-only -P tests/tsconfig.json tests/plemmo-receipt-email.test.ts",
     "test:meridian-floorplan": "node tests/run-electron-node-test.cjs tests/meridian-floorplan.test.ts",
     "test:meridian-first-run": "node tests/run-electron-node-test.cjs tests/meridian-first-run.test.ts",
+    "test:meridian-item-void": "node tests/run-electron-node-test.cjs tests/meridian-item-void.test.ts",
     "test:meridian-discount": "node tests/run-electron-node-test.cjs tests/meridian-discount.test.ts",
     "test:meridian-card-flow": "node tests/run-electron-node-test.cjs tests/meridian-card-flow.test.ts",
     "test:meridian-till": "node tests/run-electron-node-test.cjs tests/meridian-till.test.ts",
     "test:till-refund-void": "node tests/run-electron-node-test.cjs tests/till-refund-void.test.ts",
     "test:till-price-override": "node tests/run-electron-node-test.cjs tests/till-price-override.test.ts",
     "test:till-print-held-backup": "node tests/run-electron-node-test.cjs tests/till-print-held-backup.test.ts",
-    "test:meridian": "bash tests/run-test.sh npm run test:meridian-foundation && bash tests/run-test.sh npm run test:meridian-catalogue && bash tests/run-test.sh npm run test:meridian-orders && bash tests/run-test.sh npm run test:meridian-cash-adapter && bash tests/run-test.sh npm run test:meridian-inventory && bash tests/run-test.sh npm run test:meridian-tables && bash tests/run-test.sh npm run test:meridian-staff-loyalty && bash tests/run-test.sh npm run test:meridian-reports-ai && bash tests/run-test.sh npm run test:meridian-sync-status && bash tests/run-test.sh npm run test:meridian-ui-boot && bash tests/run-test.sh npm run test:meridian-first-run && bash tests/run-test.sh npm run test:meridian-floorplan && bash tests/run-test.sh npm run test:meridian-till && bash tests/run-test.sh npm run test:meridian-card-flow && bash tests/run-test.sh npm run test:meridian-discount"
+    "test:meridian": "bash tests/run-test.sh npm run test:meridian-foundation && bash tests/run-test.sh npm run test:meridian-catalogue && bash tests/run-test.sh npm run test:meridian-orders && bash tests/run-test.sh npm run test:meridian-cash-adapter && bash tests/run-test.sh npm run test:meridian-inventory && bash tests/run-test.sh npm run test:meridian-tables && bash tests/run-test.sh npm run test:meridian-staff-loyalty && bash tests/run-test.sh npm run test:meridian-reports-ai && bash tests/run-test.sh npm run test:meridian-sync-status && bash tests/run-test.sh npm run test:meridian-ui-boot && bash tests/run-test.sh npm run test:meridian-first-run && bash tests/run-test.sh npm run test:meridian-floorplan && bash tests/run-test.sh npm run test:meridian-till && bash tests/run-test.sh npm run test:meridian-card-flow && bash tests/run-test.sh npm run test:meridian-discount && bash tests/run-test.sh npm run test:meridian-item-void"
   },
   "author": "Plemmo EPOS",
   "license": "MIT",

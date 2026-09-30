@@ -118,7 +118,10 @@
     const fullyRefunded = paidAmt > 0 && refundedAmt + 0.004 >= paidAmt;
     const status = (o.status === 'cancelled' || o.status === 'void') ? 'void'
       : (o.status === 'refunded' || fullyRefunded) ? 'refunded' : paid ? 'paid' : 'open';
-    const items = (o.items || []).map((i) => {
+    // Lines that were cancelled, or voided after the kitchen started (plus their negative
+    // "void adjustment" twin), are not sales: the order's own totals already net them out.
+    const GONE = { cancelled: 1, voided: 1, void_adjustment: 1 };
+    const items = (o.items || []).filter((i) => !GONE[i.status]).map((i) => {
       const mods = [];
       parseMaybeJson(i.addons, []).forEach((a) => mods.push({ n: (a && (a.name || a)) || '' }));
       const line = { pid: i.product_id, name: i.product_name, price: Number(i.unit_price) || 0, cost: 0,

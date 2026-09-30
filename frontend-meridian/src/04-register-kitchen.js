@@ -220,18 +220,37 @@ A.setType=async d=>{
   refreshPos({grid:false});
 };
 A.lineSel=d=>{U.selLine=U.selLine===d.id?null:d.id;refreshPos({grid:false});};
-// An item the kitchen already has is part of an order the till server holds (stock
-// taken, ticket sent, bill pending). The backend has no per-item void for the
-// till, so removing it here would only change this screen and leave the real
-// order — and what the customer is charged — unchanged. Refuse instead of pretending.
+// An item the kitchen already has is part of an order the till server holds (stock taken,
+// ticket sent, bill pending), so removing it is done THERE: the backend checks the approval
+// (manager/owner, or a manager PIN), returns stock for an item not yet started, keeps an
+// in-progress item on the bill as a void, recomputes the bill and audits it. The cart is then
+// re-read from the server — the screen never just drops the line.
 const onBackendOrder=()=>{if(!live()||!U.cart.orderId)return false;const o=orderOf(U.cart.orderId);return !!(o&&o.plemmoOrderId);};
-const ITEM_VOID_MSG='That item is already on the order at the till server, so it can’t be removed from this screen. A manager can void the whole order instead.';
+async function removeSentLine(l){
+  const o=orderOf(U.cart.orderId);
+  if(!o||l.itemId==null){toast('That item can’t be removed from this screen. Void the whole order instead.','warn');return;}
+  const by=await approveServer('refunds',`Removing ${l.name} from an order the kitchen has`);if(!by)return;
+  if(!await confirmBox({title:`Remove ${l.name}?`,text:'It comes off the bill. If the kitchen has not started it, it goes back into stock.',ok:'Remove item',danger:true}))return;
+  try{await PlemmoTill.cancelItem(o.plemmoOrderId,l.itemId,{pin:by.pin,reason:'Removed at the till'});}
+  catch(e){toast(`${l.name} was not removed: ${tillError(e,'the till server refused it')}`,'warn');return;}
+  let fresh=null;
+  try{fresh=PlemmoOrders.mapPlemmoOrder(await PlemmoTill.fetchOrder(o.plemmoOrderId));}catch(e){}
+  if(fresh){
+    Object.assign(o,{items:fresh.items,subtotal:fresh.subtotal,tax:fresh.tax,discAmt:fresh.discAmt,total:fresh.total,status:fresh.status});
+    if(fresh.status==='void'){U.cart=newCart();U.selLine=null;save();refreshCatalogueSoon();renderView();renderRail();toast(`Order ${o.no} had no items left and was voided`);return;}
+    U.cart.items=[...fresh.items,...U.cart.items.filter(x=>!x.sent)];
+  }else{U.cart.items=U.cart.items.filter(x=>x!==l);}
+  U.selLine=null;save();refreshCatalogueSoon();refreshPos();toast(`Removed ${l.name}`);
+}
 A.lineQty=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
   const n=l.qty+(+d.d);
   if(+d.d>0){const p=prod(l.pid);if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
   if(l.sent&&+d.d<0){
-    if(onBackendOrder()){toast(ITEM_VOID_MSG,'warn',{ms:5200});return;}
+    if(onBackendOrder()){
+      if(l.qty===1){await removeSentLine(l);return;}
+      toast('To take one off a line the kitchen already has, remove the line and add the quantity you still want.','warn',{ms:5200});return;
+    }
     const ok=await approve('refunds','Taking back an item the kitchen already has');if(!ok)return;
   }
   if(n<=0){U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;}else l.qty=n;
@@ -240,7 +259,7 @@ A.lineQty=async d=>{
 A.lineDel=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
   if(l.sent){
-    if(onBackendOrder()){toast(ITEM_VOID_MSG,'warn',{ms:5200});return;}
+    if(onBackendOrder()){await removeSentLine(l);return;}
     const ok=await approve('refunds','Removing an item the kitchen already has');if(!ok)return;
   }
   U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;refreshPos();

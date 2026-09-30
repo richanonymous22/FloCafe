@@ -222,9 +222,10 @@ async function run() {
     const before = stock();
     const v1 = await mkOpen(3);
     ok(stock() === before - 3, 'an unpaid order took 3 from stock');
-    // removing a sent line on a backend order would only change this screen — it is refused
+    // a line with no backend item id can't be removed on the server, so the screen refuses rather than pretending
+    // (real lines carry their backend id — see tests/meridian-item-void.test.ts)
     C.clearToasts(); C.click('lineDel', { id: C.M().U.cart.items[0].uid });
-    await waitFor(() => /already on the order at the till server/.test(C.toasts()), 3000, 'item-void refusal');
+    await waitFor(() => /can.t be removed from this screen/.test(C.toasts()), 3000, 'item-void refusal');
     C.click('lineQty', { id: C.M().U.cart.items[0].uid, d: '-1' }); await sleep(200);
     ok(C.M().U.cart.items.length === 1 && C.M().U.cart.items[0].qty === 3 && stock() === before - 3, 'a sent item on a backend order cannot be removed or reduced locally (no screen-only void)');
     // put the order "in progress" so the backend itself demands a manager PIN

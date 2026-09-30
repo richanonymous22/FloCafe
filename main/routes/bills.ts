@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import {
   attachEffectiveAddons,
   utcDayBounds,
@@ -16,7 +17,7 @@ import {
 } from '../db';
 import { notifyKdsUpdate, notifyOrderUpdated } from '../services/kds';
 import { printReceipt } from '../services/receipt';
-import { requireRole, rateLimit } from '../middleware/security';
+import { requireRole } from '../middleware/security';
 import {
   calculateConfiguredChargeTaxes,
   combineItemAndChargeTaxes,
@@ -850,7 +851,13 @@ router.post('/:id/payments', requireRole('owner', 'manager', 'cashier'), (req: R
 // Refund/held-cart routes are money- or data-changing and reachable from the LAN, so
 // they are rate limited per client IP (private IPs are NOT exempt). The ceiling is far
 // above what a till generates; it exists to stop a runaway or hostile client.
-const refundRateLimit = rateLimit({ windowMs: 60 * 1000, max: 120, bypassPrivateIp: false, message: 'Too many refund requests. Slow down and try again shortly.' });
+const refundRateLimit = expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many refund requests. Slow down and try again shortly.' },
+});
 
 // POST /:id/refund — refund all or part of a PAID bill through the authoritative
 // refund service (core/refund.ts → core/payment.ts refundPayment). Nothing on the

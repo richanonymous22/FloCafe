@@ -28,7 +28,9 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   if (enableDevEnroll) {
-    console.warn('[cloud] WARNING: dev enrollment is ENABLED. This must be false in production.');
+    // serve.ts is the production entry point (Postgres only), so this flag is never valid here.
+    console.error('[cloud] refusing to start: PLEMMO_SYNC_ENABLE_DEV_ENROLL=true is not allowed on the production server.');
+    process.exit(2);
   }
 
   const store = await createPostgresCloudStore(backend.connectionString as string);

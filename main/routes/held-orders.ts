@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { getDatabase, now, withTxn } from '../db';
-import { requireRole, rateLimit } from '../middleware/security';
+import { requireRole } from '../middleware/security';
 import { randomUUID } from 'crypto';
 import { validateItemNotes, validateOrderNotes } from '../core/notes-validation';
 
@@ -179,7 +180,13 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
 //   POST   /held-orders/carts/:id/resume    take a cart back — returns it AND removes it in one step,
 //                                           so two terminals can never both resume the same cart
 //   DELETE /held-orders/carts/:id           discard
-const heldCartRateLimit = rateLimit({ windowMs: 60 * 1000, max: 300, bypassPrivateIp: false });
+const heldCartRateLimit = expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many held-cart requests. Slow down and try again shortly.' },
+});
 const MAX_CART_JSON_BYTES = 200_000;
 const MAX_HELD_CARTS = 200;
 const CART_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;

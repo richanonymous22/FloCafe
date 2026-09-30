@@ -9,6 +9,11 @@ All notable changes to Flo Cafe are documented here. Dates are release dates, no
 - Order cancellation now returns stock through the inventory ledger (it previously bumped only the legacy `products.stock_quantity`, leaving the ledger short) and writes a `sale.voided` audit event.
 - The Devices panel no longer shows hard-coded "Connected" printers, card readers or battery levels; it reports only what the backend knows (configured / test successful / test failed / not configured / not integrated).
 
+- The Meridian card pane no longer fakes a card reader ("Visa ending 4417", "battery 82%"). Staff take the amount on their own terminal and confirm Approved / Declined, with an optional terminal reference; the backend records it as an unverified manual card payment. A reused reference is refused; a failed save now offers "Save the sale" and reuses the same order and bill with a stable idempotency key, so a retry can never create a second order or charge twice.
+- The customer kiosk no longer fakes an "Approved" card payment or claims "Printing your receipt…". It places a real open order and tells the customer to pay at the counter.
+- Sales-side money is now exact: totals are summed in integer minor units, and migration v97 installs database triggers that keep every stored money value a whole number of minor units for every writer (see `docs/MONEY_MODEL.md`). Existing rows with float residue are repaired in place; nothing is removed.
+- Security hygiene: refund, held-cart and orders routes use `express-rate-limit`; `npm audit` is clean; the production cloud server refuses to start with dev enrolment enabled.
+
 ### Added
 - Price override: `price_override` on an order line, permission-gated (`sales.price_override`, or a manager PIN), audited, catalogue price preserved on the line (`original_unit_price`), master product price never changed.
 - Barcode scanning in the register (keyboard-wedge scanners) via `GET /api/retail/lookup`.

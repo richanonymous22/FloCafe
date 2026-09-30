@@ -72,10 +72,12 @@
       return api().post('/bills/' + encodeURIComponent(billId) + '/payment', body, { idempotent: true });
     },
     // paySplit(billId, [{ method, amount, tip, tendered }...])
-    paySplit: function (billId, payments, customerId) {
+    // idemKey (optional): reuse the same key when retrying the SAME payment body so a
+    // lost response can never charge twice; the caller must change it if the body changes.
+    paySplit: function (billId, payments, customerId, idemKey) {
       const body = { payments: payments };
       if (customerId) body.customer_id = customerId;
-      return api().post('/bills/' + encodeURIComponent(billId) + '/payments', body, { idempotent: true });
+      return api().post('/bills/' + encodeURIComponent(billId) + '/payments', body, { idempotent: true, idempotencyKey: idemKey || undefined });
     }
   };
 

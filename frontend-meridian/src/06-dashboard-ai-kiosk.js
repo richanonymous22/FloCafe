@@ -560,13 +560,11 @@ function renderKiosk(){
      <div class="k-review"><div class="kr-l">${K.items.map(l=>{const p=prod(l.pid),c=p?catOf(p.cat):null;return`<div class="k-line" style="--c:${c?c.color:'#999'}"><span class="e" aria-hidden="true">${p?p.emoji:'•'}</span><div><b>${esc(l.name)}</b><small>${l.mods.map(m=>esc(m.n)).join(', ')||'&nbsp;'}</small><div class="num" style="font-weight:800;font-size:17px;margin-top:4px">${money(lineTotal(l))}</div></div><div class="k-step"><button data-act="kLine" data-id="${l.uid}" data-d="-1" aria-label="${l.qty===1?'Remove':'One fewer'} ${esc(l.name)}">${ic(l.qty===1?'trash':'minus',22)}</button><b class="num">${l.qty}</b><button data-act="kLine" data-id="${l.uid}" data-d="1" aria-label="One more ${esc(l.name)}">${ic('plus',22)}</button></div></div>`;}).join('')}
       ${ups.length?`<h3 style="font-size:19px;margin:28px 0 12px">Goes well with</h3><div class="k-up">${ups.map(p=>`<button data-act="kUp" data-id="${p.id}"><span aria-hidden="true">${p.emoji}</span><b>${esc(p.name)}</b><em class="num">+ ${money(p.price)}</em></button>`).join('')}</div>`:''}</div>
       <div class="kr-r"><div class="k-tot"><span>Items</span><span class="num">${t.count}</span></div><div class="k-tot"><span>${esc(s.taxName)} ${s.taxInclusive?'included':''}</span><span class="num">${money(t.tax)}</span></div><div class="k-tot big"><span>Total</span><span class="num">${money(t.total)}</span></div><div class="spacer"></div>
-       <button class="k-btn" data-act="kPay" style="width:100%">${ic('contactless',24)} Pay ${money(t.total)}</button><button class="k-btn ghost" data-act="kCancel" style="width:100%">Cancel order</button></div></div></div>`;
+       <button class="k-btn" data-act="kPay" style="width:100%">${ic('check',24)} Place order · ${money(t.total)}</button><button class="k-btn ghost" data-act="kCancel" style="width:100%">Cancel order</button></div></div></div>`;
   }else if(K.screen==='pay'){
-    h=`<div class="k-center"><div><h1>${K.pay==='ok'?'Payment approved':'Tap, insert or swipe'}</h1><p>${K.pay==='ok'?'Printing your receipt…':'Use the card reader below the screen.'}</p>
-     <div class="k-term"><div class="scr">${K.pay==='ok'?`<span style="color:var(--accent)">${ic('check',44)}</span><b>Approved</b>`:`<small>${esc(s.name)}</small><b class="num">${money(t.total)}</b><small>Contactless or card</small>`}</div><div class="cl" aria-hidden="true">${ic('contactless',46)}</div><div class="keys" aria-hidden="true">${'<i></i>'.repeat(9)}</div></div>
-     ${K.pay!=='ok'?`<button class="k-btn ghost" style="margin-top:30px" data-act="kPayCancel">Cancel payment</button>`:''}</div></div>`;
+    h=`<div class="k-center"><div><h1>Sending your order…</h1><p>One moment please.</p></div></div>`;
   }else if(K.screen==='done'){
-    h=`<div class="k-center"><div><p style="margin:0;font-size:22px;font-weight:700;color:var(--k-ink)">Thank you! Your order number is</p><div class="k-no num">${K.order.no}</div><p>${hospitality()?'Watch the screen by the counter. We’ll call your number when it’s ready.':'Your receipt is printing below.'}</p><button class="k-btn dark" style="margin-top:28px" data-act="kNew">Start a new order</button><div class="k-count"><i style="animation-duration:12s"></i></div></div></div>`;
+    h=`<div class="k-center"><div><p style="margin:0;font-size:22px;font-weight:700;color:var(--k-ink)">Thank you! Your order number is</p><div class="k-no num">${K.order.no}</div><p>${hospitality()?'Please pay at the counter with this number. We’ll call it when your order is ready.':'Please take this number to the counter to pay.'}</p><button class="k-btn dark" style="margin-top:28px" data-act="kNew">Start a new order</button><div class="k-count"><i style="animation-duration:12s"></i></div></div></div>`;
   }
   if(K.sheet){
     const sh=K.sheet,p=sh.p,c=catOf(p.cat)||{color:'#999'},unit=r2(p.price+sum(kSheetMods(),m=>m.p));
@@ -603,38 +601,33 @@ A.kBack=()=>{K.screen='menu';renderKiosk();};
 A.kLine=d=>{const l=K.items.find(x=>x.uid===d.id);if(!l)return;const p=prod(l.pid);if(+d.d>0&&p&&kOut(p)){toast(`That’s all the ${p.name} we have`,'warn',{ms:1800});return;}l.qty+=+d.d;if(l.qty<=0)K.items=K.items.filter(x=>x!==l);if(!K.items.length)K.screen='menu';renderKiosk();};
 A.kUp=d=>{const p=prod(d.id);if(!p)return;const groups=(p.mods||[]).map(id=>S.modGroups.find(g=>g.id===id)).filter(Boolean);if(groups.length){A.kItem({id:p.id});return;}kAdd(p,[],1);renderKiosk();};
 A.kCancel=async()=>{if(K.items.length&&!await confirmBox({title:'Start over?',text:'Your order will be cleared.',ok:'Clear my order',danger:true}))return;kReset();};
+// The kiosk places the order and the customer pays at the counter: the till has no
+// integrated card terminal, so the kiosk must not fake an approval. The order is a
+// real backend sale (kitchen, stock, numbering) left OPEN for the register to collect.
 A.kPay=async()=>{
-  K.screen='pay';K.pay='wait';renderKiosk();const token=K.payToken=uid('kp');
-  await sleep(2600);if(K.payToken!==token||K.screen!=='pay')return;
-  K.pay='ok';renderKiosk();await sleep(1100);if(K.payToken!==token)return;
-  kFinish();
+  if(!K.items.length||K.placing)return;
+  K.placing=true;K.screen='pay';K.pay='wait';renderKiosk();
+  try{await kFinish();}finally{K.placing=false;}
 };
-A.kPayCancel=()=>{K.payToken=null;K.screen='review';renderKiosk();};
+A.kPayCancel=()=>{K.screen='review';renderKiosk();};
 async function kFinish(){
-  const t=kTotals();
-  // Kiosk orders are authoritative Plemmo sales (never local-only). Commit
-  // through the same order+bill+payment path used at the register; on failure
-  // fall back to a local order so the customer still gets their receipt.
-  if(window.PlemmoKiosk&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()){
-    try{
-      const order=await PlemmoKiosk.submitOrder({type:K.type||'takeaway',items:K.items});
-      let bill;try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:order.id},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-      if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(order.id));bill=b&&b.bill;}
-      if(!bill)throw new Error('No bill');
-      await PlemmoPayments.pay(bill.id,{method:'card',amount:r2(Number(bill.total)||t.total)});
-      const o={id:uid('o'),no:bill.bill_number||order.order_number||order.id,plemmoOrderId:order.id,plemmoBillId:bill.id,ts:Date.now(),opened:Date.now(),
-        items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:Number(bill.discount_amount)||0,
-        subtotal:Number(bill.subtotal)||t.subtotal,tax:Number(bill.tax_amount)||0,total:Number(bill.total)||t.total,tip:0,payments:[{m:'card',a:Number(bill.total)||t.total}],status:'paid',pts:0,note:''};
-      S.orders.push(o);
-      if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).catch(()=>{});
-      save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();return;
-    }catch(e){/* fall back to local so the kiosk still completes */}
+  if(!(window.PlemmoKiosk&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated())){
+    K.screen='review';K.pay=null;renderKiosk();
+    toast('This kiosk is not connected to the till. Please ask a member of staff.','warn');return;
   }
-  const o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:0,subtotal:t.subtotal,tax:t.tax,total:t.total,tip:0,payments:[{m:'card',a:t.total}],status:'paid',pts:0,note:''};
-  S.orders.push(o);
-  o.items.forEach(l=>{const p=prod(l.pid);if(p&&p.stock!=null)p.stock=Math.max(0,p.stock-l.qty);});
-  if(S.settings.kitchen&&hospitality())addTicket(o,o.items);
-  save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();
+  try{
+    const t=kTotals();
+    const order=await PlemmoKiosk.submitOrder({type:K.type||'takeaway',items:K.items});
+    const o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,ts:Date.now(),opened:Date.now(),
+      items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:Number(order.discount_amount)||0,
+      subtotal:Number(order.subtotal)||t.subtotal,tax:Number(order.tax_amount)||0,total:Number(order.total)||t.total,tip:0,payments:[],status:'open',pts:0,note:''};
+    S.orders.push(o);
+    if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).catch(()=>{});
+    save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();
+  }catch(e){
+    K.screen='review';K.pay=null;renderKiosk();
+    toast('We couldn’t send your order. Please ask a member of staff.','warn');
+  }
 }
 A.kNew=()=>kReset();
 A.kStill=()=>{K.warn=false;K.last=Date.now();renderKiosk();};

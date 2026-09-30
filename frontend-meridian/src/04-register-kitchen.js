@@ -531,10 +531,23 @@ function renderPay(){
   const rem=payRem(),paidAny=PAY.payments.length>0,tips=S.settings.tipping;
   const tipBtns=[0,10,12.5,15].map(p=>`<button class="chip ${PAY.tipPct===p&&!PAY.tipCustom?'on':''}" data-act="payTip" data-p="${p}" ${paidAny?'disabled':''}>${p?p+'%':'No tip'}</button>`).join('')+`<button class="chip ${PAY.tipCustom?'on':''}" data-act="payTipCustom" ${paidAny?'disabled':''}>Other</button>`;
   let pane='';
-  if(PAY.method==='card'){
+  const lastCard=[...PAY.payments].reverse().find(p=>p.m==='card');
+  if(rem<=0.004&&paidAny&&PAY.stage==='idle'){
+    pane=`<div class="reader idle"><div class="rd-ic">${ic('check',30)}</div><b>Payment taken</b><small>The sale has not been saved yet. Nothing more is charged when you try again.</small></div>
+      ${lastCard?`<label class="field"><span>Terminal reference <span class="faint">(optional, fix it if it was mistyped)</span></span><input id="payRef2" maxlength="64" autocomplete="off" value="${esc(lastCard.ref||'')}"></label>`:''}
+      <button class="btn btn-primary btn-lg btn-block" data-act="payRetry">Save the sale</button>`;
+  }else if(PAY.method==='card'){
     const amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
-    pane=`<div class="reader ${PAY.stage}">${PAY.stage==='ok'?`<div class="rd-ic">${ic('check',32)}</div><b>Approved</b><small>Visa ending 4417</small>`:PAY.stage==='wait'?`<div class="rd-ic">${ic('contactless',32)}</div><b>${money(amt)}</b><small>Ask the customer to tap, insert or swipe</small>`:`<div class="rd-ic">${ic('card',30)}</div><b>Card reader ready</b><small>Connected, battery 82%</small>`}</div>
-      <button class="btn btn-primary btn-lg btn-block" data-act="payCard" ${PAY.stage!=='idle'?'disabled':''}>${PAY.stage==='idle'?`Send ${money(amt)} to the reader`:PAY.stage==='wait'?'Waiting for the card…':'Approved'}</button>`;
+    if(PAY.stage==='wait'){
+      const ca=money(PAY.cardAmt||amt);
+      pane=`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>Enter this amount on your card terminal and let the customer pay. Then confirm the result below.</small></div>
+        <label class="field"><span>Terminal receipt or authorisation number <span class="faint">(optional)</span></span><input id="payRef" maxlength="64" autocomplete="off" placeholder="e.g. 004217"></label>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCardOk">Payment approved on the terminal</button>
+        <button class="btn btn-block" data-act="payCardNo">Declined or cancelled</button>`;
+    }else{
+      pane=`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>Take ${money(amt)} on your card terminal, then confirm the result here. The till does not talk to the terminal yet, so this is recorded as an unverified card payment.</small></div>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Take ${money(amt)} by card</button>`;
+    }
   }else if(PAY.method==='cash'){
     const ten=+PAY.tendered||0,ch=r2(ten-rem);
     pane=`<div class="tender num" aria-live="polite">${PAY.tendered?S.settings.currency+PAY.tendered:`<span class="faint">${money(rem)}</span>`}</div>
@@ -578,16 +591,35 @@ A.payNote=d=>{PAY.tendered=String(d.v);renderPay();};
 A.paySplitEven=d=>{PAY.splitAmt=String(r2(Math.ceil((PAY.due+PAY.tip)/+d.n*100)/100));const rem=payRem();if(+PAY.splitAmt>rem)PAY.splitAmt=String(rem);renderPay();};
 A.paySplitRest=()=>{PAY.splitAmt=String(payRem());renderPay();};
 A.payCancel=()=>{PAY.L.close();};
-async function cardFlow(amount){
-  PAY.stage='wait';renderPay();
-  await sleep(1700);
-  if(!PAY||PAY.L.closed)return false;
-  PAY.stage='ok';renderPay();
-  await sleep(650);
-  if(!PAY||PAY.L.closed)return false;
-  PAY.payments.push({m:'card',a:r2(amount)});PAY.stage='idle';
-  return true;
+// The till is not connected to a card terminal: staff take the amount on their own
+// terminal and tell the till what happened. Nothing here pretends to talk to a reader;
+// the backend records the result as an unverified ("captured") manual card payment.
+function cardFlow(amount){
+  PAY.stage='wait';PAY.cardAmt=r2(amount);
+  return new Promise(resolve=>{PAY.cardResolve=resolve;renderPay();});
 }
+function endCardFlow(result){
+  const res=PAY&&PAY.cardResolve;if(!res)return;
+  PAY.cardResolve=null;PAY.stage='idle';res(result);
+}
+A.payRetry=()=>{
+  if(!PAY||PAY.saving)return;
+  const el=$('#payRef2');
+  if(el){const lc=[...PAY.payments].reverse().find(p=>p.m==='card');if(lc){const v=(el.value||'').trim().slice(0,64);lc.ref=v||undefined;}}
+  finishSale();
+};
+A.payCardOk=()=>{
+  if(!PAY||!PAY.cardResolve)return;
+  const el=$('#payRef'),ref=(el&&el.value||'').trim().slice(0,64);
+  const amount=PAY.cardAmt;
+  PAY.payments.push({m:'card',a:r2(amount),ref:ref||undefined});
+  endCardFlow(true);
+};
+A.payCardNo=()=>{
+  if(!PAY||!PAY.cardResolve)return;
+  toast('Card payment not taken. Nothing was recorded on the till.','warn');
+  endCardFlow(false);renderPay();
+};
 A.payCard=async()=>{
   const rem=payRem(),amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
   if(!(await cardFlow(amt)))return;
@@ -617,7 +649,8 @@ function finishSale(){
   const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId));
   if(usePlemmo){finishSalePlemmo().catch((e)=>{
     const msg=(e&&e.data&&e.data.requiresApproval)?'The manager approval for a price change wasn’t accepted. Change the price again with a manager PIN.'
-      :(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+      :(e&&e.status===403)?'You don’t have permission to take payment'
+      :(e&&e.status===409&&/transaction_id/i.test(String((e.data&&e.data.error)||e.message||'')))?'That terminal reference was already used on another sale. Check the number on the terminal receipt.':'Could not record the sale on Plemmo — money not confirmed. Try again.';
     toast(msg,'warn');
     if(PAY){PAY.stage='idle';renderPay();}
   });return;}
@@ -628,22 +661,33 @@ async function finishSalePlemmo(){
   const existing=c.orderId?orderOf(c.orderId):null;
   // 1. Authoritative order — reuse a dine-in order already opened in Plemmo,
   // else create one now (Plemmo computes totals + deducts stock).
+  // A retry after a failed save reuses the order and bill already created (PAY.saved)
+  // so pressing "Try again" can never create a second order or reserve stock twice.
   let plemmoOrderId,orderResp=null;
-  if(existing&&existing.plemmoOrderId){plemmoOrderId=existing.plemmoOrderId;}
+  if(PAY.saved){plemmoOrderId=PAY.saved.orderId;orderResp=PAY.saved.orderResp;}
+  else if(existing&&existing.plemmoOrderId){plemmoOrderId=existing.plemmoOrderId;}
   else{orderResp=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);plemmoOrderId=orderResp.id;}
   // 2. Bill for the order.
-  let bill;
-  try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:plemmoOrderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-  if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(plemmoOrderId));bill=b&&b.bill;}
+  let bill=PAY.saved&&PAY.saved.bill;
+  if(!bill){
+    try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:plemmoOrderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+    if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(plemmoOrderId));bill=b&&b.bill;}
+  }
   if(!bill)throw new Error('No bill for order');
+  PAY.saved={orderId:plemmoOrderId,orderResp:orderResp,bill:bill};
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
     const line={method:p.m==='card'?'card':'cash',amount:r2(p.a)};
     if(i===0&&PAY.tip)line.tip=r2(PAY.tip);
+    if(p.m==='card'&&p.ref)line.transaction_id=p.ref;
     if(p.m==='cash'&&i===PAY.payments.length-1&&PAY.change)line.tendered=r2(p.a+PAY.change);
     return line;
   });
-  await PlemmoPayments.paySplit(bill.id,lines,c.custId);
+  // Same lines -> same idempotency key (a lost response replays instead of charging twice);
+  // changed lines (e.g. a corrected terminal reference) -> a fresh key.
+  const sig=JSON.stringify(lines);
+  if(PAY.payKeyFor!==sig){PAY.payKeyFor=sig;PAY.payKey=PlemmoAPI.idempotencyKey();}
+  await PlemmoPayments.paySplit(bill.id,lines,c.custId,PAY.payKey);
   // 4. Build/patch the local display order from the AUTHORITATIVE bill (receipt
   // + history cache). No local stock/loyalty mutation — Plemmo already did both.
   const o=existing||{id:uid('o'),opened:Date.now(),source:'pos'};

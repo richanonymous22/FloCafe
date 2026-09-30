@@ -294,14 +294,14 @@ A.clearCart=async()=>{
 // A held cart lives on the backend (held_carts) so it survives a reload and is
 // visible on every till. A failed hold leaves the cart exactly where it is.
 function heldLabel(c){const cu=c.custId?cust(c.custId):null,tb=c.table?tableOf(c.table):null;return cu?first(cu.name):tb?'Table '+tb.name:'Held '+fmtT(Date.now());}
-const restoreCart=c=>({items:(c.items||[]).map(l=>({...l,sent:false,uid:l.uid||uid('l'),mods:l.mods||[]})),type:c.type||'takeaway',table:c.table||null,custId:c.custId||null,discount:c.discount||null,orderId:null,note:c.note||''});
+const restoreCart=c=>({items:(c.items||[]).map(l=>({...l,sent:false,uid:l.uid||PlemmoTill.newId('l'),mods:l.mods||[]})),type:c.type||'takeaway',table:c.table||null,custId:c.custId||null,discount:c.discount||null,orderId:null,note:c.note||''});
 let heldBusy=false;   // a double tap must not hold (or resume) the same cart twice
 A.hold=async()=>{
   const c=U.cart;if(!c.items.length)return;
   if(live()){
     if(heldBusy)return;heldBusy=true;
     try{
-      try{await PlemmoTill.held.hold(uid('h'),heldLabel(c),c);}
+      try{await PlemmoTill.held.hold(PlemmoTill.newId('h'),heldLabel(c),c);}
       catch(e){toast(`Couldn’t hold this order: ${tillError(e,'the till server refused it')}`,'warn');return;}
       U.cart=newCart();U.selLine=null;PlemmoOrders.setOverridePin(null);
       await refreshHeld();refreshPos();toast('Order held. Tap it above the menu to pick it up again.');
@@ -318,7 +318,7 @@ A.resume=async d=>{
     try{
       // Park the current, unsent cart first so taking the other one back can't lose it.
       if(U.cart.items.length&&!U.cart.orderId){
-        try{await PlemmoTill.held.hold(uid('h'),heldLabel(U.cart),U.cart);}
+        try{await PlemmoTill.held.hold(PlemmoTill.newId('h'),heldLabel(U.cart),U.cart);}
         catch(e){toast(`Couldn’t hold your current order: ${tillError(e)}`,'warn');return;}
         U.cart=newCart();toast('Your current order was held so you can pick up this one');
       }

@@ -100,6 +100,16 @@
     return { items: items, type: cart.type, table: cart.table || null, custId: cart.custId || null,
       discount: cart.discount || null, note: cart.note || '' };
   }
+  // A held-cart id from the platform's CSPRNG (not Math.random), prefixed for readability.
+  function newId(prefix) {
+    let hex = '';
+    try {
+      const b = new Uint8Array(12);
+      (window.crypto || window.msCrypto).getRandomValues(b);
+      b.forEach((x) => { hex += ('0' + x.toString(16)).slice(-2); });
+    } catch (e) { throw new Error('Secure random numbers are not available in this browser'); }
+    return (prefix || 'id') + '_' + hex;
+  }
   function toHeld(c) { return { id: c.id, ts: parseDbTime(c.heldAt), by: c.heldBy, label: c.label, cart: c.cart }; }
 
   const held = {
@@ -258,7 +268,7 @@
     errorMessage: errorMessage, isNetworkError: isNetworkError, parseDbTime: parseDbTime,
     refundBill: refundBill, cancelOrder: cancelOrder, fetchOrder: fetchOrder,
     printBill: printBill,
-    sanitizeCart: sanitizeCart, held: held,
+    sanitizeCart: sanitizeCart, held: held, newId: newId,
     masterPinStatus: masterPinStatus, createBackup: createBackup,
     hardware: hardware, deviceRows: deviceRows, detectedOffers: detectedOffers,
     lookupBarcode: lookupBarcode,

@@ -16,7 +16,7 @@ import {
 } from '../db';
 import { notifyKdsUpdate, notifyOrderUpdated } from '../services/kds';
 import { printReceipt } from '../services/receipt';
-import { requireRole } from '../middleware/security';
+import { requireRole, rateLimit } from '../middleware/security';
 import {
   calculateConfiguredChargeTaxes,
   combineItemAndChargeTaxes,
@@ -847,6 +847,11 @@ router.post('/:id/payments', requireRole('owner', 'manager', 'cashier'), (req: R
   }
 });
 
+// Refund/held-cart routes are money- or data-changing and reachable from the LAN, so
+// they are rate limited per client IP (private IPs are NOT exempt). The ceiling is far
+// above what a till generates; it exists to stop a runaway or hostile client.
+const refundRateLimit = rateLimit({ windowMs: 60 * 1000, max: 120, bypassPrivateIp: false, message: 'Too many refund requests. Slow down and try again shortly.' });
+
 // POST /:id/refund — refund all or part of a PAID bill through the authoritative
 // refund service (core/refund.ts → core/payment.ts refundPayment). Nothing on the
 // original sale, bill or payments is rewritten; the refund is an additive record.
@@ -858,7 +863,7 @@ router.post('/:id/payments', requireRole('owner', 'manager', 'cashier'), (req: R
 // Idempotency: an `Idempotency-Key` makes a retry (dropped response, reconnect)
 // replay the stored result instead of refunding twice. Without a key, a second
 // identical request is still bounded by the unrefunded balance.
-router.post('/:id/refund', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
   try {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -930,7 +935,7 @@ router.post('/:id/refund', requireRole('owner', 'manager', 'cashier'), (req: Req
 });
 
 // GET /:id/refunds — the refund history and what is still refundable.
-router.get('/:id/refunds', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.get('/:id/refunds', refundRateLimit, requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const bill = db.prepare('SELECT id FROM bills WHERE id = ?').get(req.params.id);

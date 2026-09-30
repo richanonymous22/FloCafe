@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, withTxn } from '../db';
-import { requireRole } from '../middleware/security';
+import { requireRole, rateLimit } from '../middleware/security';
 import { randomUUID } from 'crypto';
 import { validateItemNotes, validateOrderNotes } from '../core/notes-validation';
 
@@ -179,6 +179,7 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
 //   POST   /held-orders/carts/:id/resume    take a cart back — returns it AND removes it in one step,
 //                                           so two terminals can never both resume the same cart
 //   DELETE /held-orders/carts/:id           discard
+const heldCartRateLimit = rateLimit({ windowMs: 60 * 1000, max: 300, bypassPrivateIp: false });
 const MAX_CART_JSON_BYTES = 200_000;
 const MAX_HELD_CARTS = 200;
 const CART_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -202,7 +203,7 @@ function heldCartShape(row: { id: string; label: string; cart_json: string; crea
   return { id: row.id, label: row.label, cart, heldBy: row.created_by, heldAt: row.created_at };
 }
 
-router.get('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (_req: Request, res: Response) => {
+router.get('/carts', heldCartRateLimit, requireRole('owner', 'manager', 'cashier', 'waiter'), (_req: Request, res: Response) => {
   try {
     const rows = getDatabase().prepare('SELECT * FROM held_carts ORDER BY created_at ASC').all() as any[];
     res.json({ carts: rows.map(heldCartShape).filter((c) => c.cart) });
@@ -212,7 +213,7 @@ router.get('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (_req
   }
 });
 
-router.post('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+router.post('/carts', heldCartRateLimit, requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
   try {
     const { id, label, cart } = req.body || {};
     if (typeof id !== 'string' || !CART_ID_RE.test(id)) return res.status(400).json({ error: 'id must be 1-64 letters, digits, - or _' });
@@ -243,7 +244,7 @@ router.post('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (req
   }
 });
 
-router.post('/carts/:id/resume', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+router.post('/carts/:id/resume', heldCartRateLimit, requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const row = withTxn(() => {
@@ -259,7 +260,7 @@ router.post('/carts/:id/resume', requireRole('owner', 'manager', 'cashier', 'wai
   }
 });
 
-router.delete('/carts/:id', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+router.delete('/carts/:id', heldCartRateLimit, requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
   try {
     const result = getDatabase().prepare('DELETE FROM held_carts WHERE id = ?').run(req.params.id);
     res.json({ success: true, deleted: result.changes > 0 });

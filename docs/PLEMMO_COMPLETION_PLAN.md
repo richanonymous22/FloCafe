@@ -208,3 +208,24 @@ WP0 → WP1 ─┬→ WP2 → WP4 ──────────────┐
 
 ## 6. What I need from you to start
 Minimum to begin immediately: **D0** (dismiss vs add dependency) and **D1** (spec PDF + §74). With those I can run WP0 and WP1 straight away. D3 (money model) is the next most important decision; D4–D8 can follow while WP2–WP5 are in progress.
+
+---
+
+## 7. Changes after reading the original spec (added)
+
+The spec PDF is now in hand; see `docs/V1_SCOPE.md` (reconciled scope) and `docs/ACCEPTANCE.md` (§74 checklist with status). It changes the plan as follows — the order in §2 still holds, with these inserts:
+
+- **WP1 is now mostly done** (scope + acceptance docs written); it closes when you answer the ❓ items in `V1_SCOPE.md`.
+- **WP3 gets a new first item: replace the simulated card reader** in the checkout with an honest "take it on your terminal, then confirm Approved/Declined" flow (found while reading the spec; the pay screen currently fakes "Approved – Visa ending 4417").
+- **New WP3b — Retail touch UX** (M, 2 sessions): retail mode of the shell with the spec's simple main menu; left/right till layout; swipe between categories; favourites (business/location/user); default UK retail categories + subcategories/hide/VAT-per-category; global search; measured touch-target and speed budget. Purchasing/suppliers/transfers screens move to an Admin area (spec: not on the retail menu).
+- **New WP3c — Permissions model** (S–M): add Supervisor role and the spec's granular permission list (sell, refund, void, discount, price override, cash adjustment, open drawer, view/export reports, edit products, change VAT, adjust stock, create offers, manage users, settings).
+- **WP4 adds** credit notes for refunds, refund VAT, VAT registered/non-VAT handling, X/Z/EOD permission controls, report export (CSV; XLSX/PDF per your answer).
+- **WP5 adds** the SCAN hub, stock-in by scan with "complete receipt", stocktake by scan with approval, and the import wizard (preview → map → validate → import).
+- **New optional WP5b — Offers engine** (M, 2 sessions) if you say yes.
+- **WP7 adds** human-readable Business MID (`PLM-########`), Location ID (`LOC-###`), Terminal ID (`T-####`) — stored beside, never instead of, the internal ULIDs, separate from payment-provider MIDs; minimal GDPR tools (consent flags, export, anonymise).
+- **New WP7b — Customer web dashboard + admin status page** (M–L, 3 sessions): read-only, cloud-served, per-location/all-location views, TOTP 2FA for owner/admin logins, login history and failed-login monitoring. The spec lists the remote dashboard as Phase 1 and an acceptance item; the earlier plan wrongly left it out.
+- **WP9 adds** the update policy (background download, update now/tonight/scheduled/remind later, no restart during trading or an open sale, staggered multi-terminal, backup-verify-install-verify, version history, rollback).
+- **WP11 adds** the spec's end-to-end trace as one automated test: scan → product → basket → VAT → discount → payment → receipt → inventory → audit → cloud sync → dashboard → reporting.
+- **WP13 adds** the §77 architecture package (schema, permission model, ID structure, transaction/audit, sync, payment, update/rollback, backup/recovery, DB security model, integration plan) and OpenAPI docs.
+
+Revised total: roughly **38–48 Claude sessions** (was 27–35); elapsed time is still dominated by external items.

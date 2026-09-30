@@ -123,6 +123,29 @@ function approve(perm,what){
   return pinPrompt({title:'Manager approval',text:`${esc(what)} needs someone who can ${esc(permLabel(perm).toLowerCase())}. Hand over the till and ask them to enter their PIN.`,check:e=>can(perm,e)});
 }
 
+// Approval for an action the BACKEND enforces (refund, void, price override).
+// Meridian cannot check a manager's PIN — staff PINs are hashed server-side — so
+// when the signed-in user lacks the permission this only COLLECTS the PIN; the
+// backend validates it on the action itself and refuses a wrong one. The result
+// is { id, name, pin }: `pin` is null when the user approved for themselves.
+function pinCollect({title,text}){
+  return new Promise(res=>{let pin='',done=false;
+    const L=modal({title:esc(title),cls:'narrow',body:`<p class="muted pin-txt">${text}</p><div class="pin-dots">${dotsHTML(0)}</div><p class="pin-err" aria-live="assertive"></p>${keypadHTML('pin')}`,onClose:()=>{if(!done)res(null);}});
+    const dots=L.el.querySelector('.pin-dots');
+    bindPad(L.el,k=>{
+      if(done)return;
+      if(k==='back')pin=pin.slice(0,-1);else if(k==='clear')pin='';else if(/^\d$/.test(k)&&pin.length<4)pin+=k;
+      dots.innerHTML=dotsHTML(pin.length);
+      if(pin.length===4){done=true;setTimeout(()=>{L.close();res({id:null,name:'Manager',pin});},140);}
+    });
+  });
+}
+function approveServer(perm,what){
+  if(!(window.PlemmoAPI&&PlemmoAPI.isAuthenticated()))return approve(perm,what);
+  if(can(perm))return Promise.resolve({id:me().id,name:me().name,pin:null});
+  return pinCollect({title:'Manager approval',text:`${esc(what)} needs a manager. Hand over the till and ask them to enter their PIN.`});
+}
+
 /* ---------- Theme ---------- */
 function applyTheme(st){
   st=st||(S&&S.settings)||{};

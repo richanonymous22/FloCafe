@@ -16,6 +16,9 @@ import { createSale, addSaleItems, validateLineAddonGroupLimits } from '../core/
 import { requireRole } from '../middleware/security';
 import { requirePermission } from '../middleware/authorize';
 import { getCurrentLocationId } from '../core/location';
+import { recordAuditEvent } from '../core/audit';
+import { ApprovalError, resolveApprover } from '../core/approval';
+import { getOrderItemReturnState, recordReturn as recordInventoryReturn } from '../core/inventory';
 
 const router = Router();
 const MAX_ORDER_IDEMPOTENCY_KEY_LENGTH = 128;
@@ -257,6 +260,30 @@ router.get('/:id', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: R
   }
 });
 
+
+/**
+ * Price override gate. A line may carry `price_override` only if the caller may
+ * override prices themselves (owner/manager) or supplies a valid manager/owner
+ * PIN. Returns the approving user id (null when no line overrides a price). The
+ * approver comes from the server — the client cannot name one.
+ */
+function resolvePriceOverrideApproval(req: Request, lines: unknown): string | null {
+  if (!Array.isArray(lines) || !lines.some((l) => l && typeof l === 'object' && (l as any).price_override != null)) return null;
+  const body = req.body || {};
+  return resolveApprover({
+    user: (req as any).user, permission: 'sales.price_override', overridePin: body.override_pin,
+    rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:price-override`, action: 'override a price',
+  }).userId;
+}
+
+function approvalFailure(error: any, res: Response): boolean {
+  if (error instanceof ApprovalError) {
+    res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
+    return true;
+  }
+  return false;
+}
+
 /**
  * Create a sale.
  *
@@ -282,9 +309,12 @@ router.post('/', requirePermission('sales.create', { locationId: () => getCurren
     // client-sent user_id would let staff spoof order attribution.
     const authenticatedUserId = (req as any).user.userId;
 
+    const priceOverrideApprovedBy = resolvePriceOverrideApproval(req, items);
+
     const result = createSale({
       channel: type,
       lines: items,
+      priceOverrideApprovedBy,
       cashierUserId: authenticatedUserId,
       customerId: customer_id ?? null,
       tableId: table_id ?? null,
@@ -316,6 +346,7 @@ router.post('/', requirePermission('sales.create', { locationId: () => getCurren
     res.status(result.idempotentReplay ? 200 : 201).json({ order: Object.assign({}, result.sale, { items: result.lines }) });
   } catch (error: any) {
     const statusCode = error?.statusCode || 500;
+    if (approvalFailure(error, res)) return;
     // Client errors are answered, not logged — only unexpected failures are
     // worth a line in a merchant's log file.
     if (statusCode >= 500) {
@@ -366,6 +397,7 @@ router.post('/:id/items', requirePermission('sales.create', { locationId: () => 
     const result = addSaleItems({
       saleId: req.params.id as string,
       lines: items,
+      priceOverrideApprovedBy: resolvePriceOverrideApproval(req, items),
       specialInstructions: special_instructions !== undefined ? { value: special_instructions } : undefined,
       actorUserId: authUser?.userId ?? null,
       idempotency: idempotencyKey && requestHash
@@ -382,6 +414,7 @@ router.post('/:id/items', requirePermission('sales.create', { locationId: () => 
     // never gave add-items its own 201 the way create-sale does.
     res.json({ order: Object.assign({}, result.sale, { items: result.lines }) });
   } catch (error: any) {
+    if (approvalFailure(error, res)) return;
     const statusCode = error?.statusCode || 500;
     if (statusCode >= 500) {
       console.error('[Orders] Add items error:', error);
@@ -425,6 +458,21 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
     `).get(req.params.id) !== undefined;
     const requiresOverride = (currentStatusIndex > 0 || hasItemsInProgress) && status === 'cancelled';
 
+    // An order that has taken money is not cancelled: cancelling would restock
+    // and close the order while the customer's payment stays on the books.
+    // Captured/settled payments are reversed through the refund path, which
+    // records the money movement and keeps the original sale intact.
+    if (status === 'cancelled') {
+      const hasPayments = db.prepare(`
+        SELECT 1 FROM payments p JOIN bills b ON b.id = p.bill_id
+        WHERE b.order_id = ? AND p.state IN ('authorized', 'captured', 'settled', 'refunded') LIMIT 1
+      `).get(req.params.id) !== undefined;
+      if (hasPayments) {
+        return res.status(409).json({ error: 'This order has payments recorded. Refund it instead of cancelling it.', code: 'order_has_payments' });
+      }
+    }
+    let approvedByUserId: string | null = null;
+
     if (requiresOverride) {
       if (!override_pin) {
         return res.status(400).json({ error: 'Manager PIN required to cancel order in progress' });
@@ -445,6 +493,7 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
       if (!user) {
         return res.status(403).json({ error: 'Invalid manager PIN' });
       }
+      approvedByUserId = String((user as any).id);
     }
 
     const nowStr = now();
@@ -483,13 +532,38 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
           const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id) as any[];
           for (const item of items) {
             const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id) as any;
-            if (product && product.track_inventory) {
+            if (!product || !product.track_inventory) continue;
+            // Stock lives in the inventory ledger, so a cancelled line goes back
+            // through it (which also keeps products.stock_quantity in step).
+            // A line the ledger never sold — an order that predates it — keeps
+            // the legacy direct restore. Lines already cancelled individually
+            // were handled when they were cancelled.
+            if (['cancelled', 'voided', 'void_adjustment'].includes(item.status)) continue;
+            const state = getOrderItemReturnState(item.id);
+            if (state.sold > 0) {
+              const quantity = Math.min(Number(item.quantity), state.returnable);
+              if (quantity > 0) {
+                recordInventoryReturn({
+                  productId: item.product_id, variantId: item.product_variant_id ?? null, quantity,
+                  reason: reason ? `Order cancelled: ${reason}` : 'Order cancelled',
+                  saleReferenceId: String(item.id), referenceType: 'order_cancel', referenceId: String(req.params.id),
+                  actorUserId: authUser?.userId ?? null,
+                });
+              }
+            } else {
               db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
                 .run(item.quantity, nowStr, product.id);
             }
           }
           db.prepare('UPDATE orders SET status = ?, cancelled_at = ?, cancellation_reason = ?, updated_at = ? WHERE id = ?')
             .run(status, nowStr, reason, nowStr, req.params.id);
+          recordAuditEvent({
+            type: 'sale.voided',
+            actor: { userId: authUser?.userId ?? null, role: authUser?.role ?? null },
+            entity: { type: 'order', id: String(req.params.id) },
+            summary: `Order ${(order as any).order_number ?? req.params.id} cancelled${reason ? `: ${reason}` : ''}`,
+            metadata: { order_id: Number(req.params.id), reason: reason ?? null, previous_status: (order as any).status, approved_by: approvedByUserId },
+          });
           // Only free table if explicitly requested (default: true for backward compatibility)
           if ((order as any).table_id && free_table !== false) {
             db.prepare("UPDATE tables SET status = 'available', updated_at = ? WHERE id = ?")

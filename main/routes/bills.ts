@@ -25,7 +25,11 @@ import {
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
-import { recordAppliedPaymentLine } from '../core/payment';
+import { recordAppliedPaymentLine, PaymentError } from '../core/payment';
+import { ApprovalError, resolveApprover } from '../core/approval';
+import { refundBill, listBillPayments } from '../core/refund';
+import { minorUnitExponent, toMinor, fromMinor } from '../core/money';
+import { InventoryError } from '../core/inventory';
 import { recordCashSaleForPayment } from '../core/cash';
 import { getCurrentLocationId } from '../core/location';
 import { buildDigitalReceipt, recordReceiptDelivery } from '../core/receipt-digital';
@@ -840,6 +844,112 @@ router.post('/:id/payments', requireRole('owner', 'manager', 'cashier'), (req: R
     const statusCode = error.statusCode || 500;
     console.error('[API] Batch bill payment failed:', error);
     res.status(statusCode).json({ error: statusCode >= 500 ? 'Bill payment failed' : error.message });
+  }
+});
+
+// POST /:id/refund — refund all or part of a PAID bill through the authoritative
+// refund service (core/refund.ts → core/payment.ts refundPayment). Nothing on the
+// original sale, bill or payments is rewritten; the refund is an additive record.
+//
+// Authorization: an owner/manager may refund outright. A cashier may only refund
+// with a manager/owner PIN (`override_pin`); the approving user is the one
+// recorded against the refund. Waiters/chefs cannot reach this route.
+//
+// Idempotency: an `Idempotency-Key` makes a retry (dropped response, reconnect)
+// replay the stored result instead of refunding twice. Without a key, a second
+// identical request is still bounded by the unrefunded balance.
+router.post('/:id/refund', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Refund body must be an object' });
+    }
+    const user = (req as any).user as { userId: string; role: string };
+    const billId = String(req.params.id);
+    const db = getDatabase();
+    const bill = db.prepare('SELECT id, payment_status FROM bills WHERE id = ?').get(billId) as { id: number; payment_status: string } | undefined;
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+    const reason = typeof body.reason === 'string' ? body.reason : '';
+    let itemsInput: { orderItemId: number; quantity: number }[] | undefined;
+    if (body.items !== undefined && body.items !== null) {
+      if (!Array.isArray(body.items)) return res.status(400).json({ error: 'items must be an array' });
+      itemsInput = body.items.map((i: any) => ({ orderItemId: Number(i?.order_item_id), quantity: Number(i?.quantity) }));
+    }
+    let amountMinor: number | undefined;
+    if (body.amount !== undefined && body.amount !== null) {
+      if (typeof body.amount !== 'number' && typeof body.amount !== 'string') return res.status(400).json({ error: 'amount must be a number' });
+      const currency = (getSettingValue('currency') || 'GBP').toUpperCase();
+      try { amountMinor = toMinor(body.amount, minorUnitExponent(currency)); }
+      catch { return res.status(400).json({ error: 'amount must be a valid amount' }); }
+    }
+
+    const idemKey = paymentIdempotencyKey(req);
+    const requestHash = createHash('sha256').update(canonicalizePaymentRequest({
+      billId, amountMinor: amountMinor ?? null, reason: reason.trim(),
+      items: (itemsInput || []).map((i) => [i.orderItemId, i.quantity]),
+    })).digest('hex');
+
+    if (idemKey) {
+      const prior = db.prepare('SELECT bill_id, request_hash, response_json FROM payment_idempotency WHERE user_id = ? AND idempotency_key = ?')
+        .get(user.userId, idemKey) as { bill_id: string; request_hash: string; response_json: string } | undefined;
+      if (prior) {
+        if (String(prior.bill_id) !== billId || prior.request_hash !== requestHash) {
+          return res.status(409).json({ error: 'Idempotency-Key was already used for a different refund request' });
+        }
+        return res.json({ ...JSON.parse(prior.response_json), idempotentReplay: true });
+      }
+    }
+
+    const approver = resolveApprover({
+      user, permission: 'sales.refund', overridePin: body.override_pin,
+      rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:refund`, action: 'refund a sale',
+    });
+
+    const result = withTxn(() => {
+      const refunded = refundBill({
+        billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null,
+        approvedByUserId: approver.userId, requestedByUserId: user.userId,
+      });
+      if (idemKey) {
+        db.prepare('INSERT INTO payment_idempotency (user_id, idempotency_key, bill_id, request_hash, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(user.userId, idemKey, billId, requestHash, JSON.stringify(refunded), now());
+      }
+      return refunded;
+    });
+    notifyOrderUpdated();
+    res.json(result);
+  } catch (error: any) {
+    if (error instanceof ApprovalError) {
+      return res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
+    }
+    const statusCode = (error instanceof PaymentError || error instanceof InventoryError) && error.statusCode ? error.statusCode : 500;
+    if (statusCode >= 500) console.error('[API] Bill refund failed:', error);
+    res.status(statusCode).json({ error: statusCode >= 500 ? 'Refund failed' : error.message });
+  }
+});
+
+// GET /:id/refunds — the refund history and what is still refundable.
+router.get('/:id/refunds', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const bill = db.prepare('SELECT id FROM bills WHERE id = ?').get(req.params.id);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+    const payments = listBillPayments(req.params.id as string);
+    const refunds = db.prepare('SELECT * FROM refunds WHERE bill_id = ? ORDER BY requested_at ASC').all(req.params.id);
+    const live = payments.filter((p) => ['captured', 'settled', 'refunded'].includes(p.state));
+    const exponent = minorUnitExponent(payments[0]?.currency);
+    const refundable = live.reduce((s, p) => s + Math.max(0, p.amount_minor - p.refunded_minor), 0);
+    res.json({
+      refunds, payments,
+      paid_minor: live.reduce((s, p) => s + p.amount_minor, 0),
+      refunded_minor: live.reduce((s, p) => s + p.refunded_minor, 0),
+      refundable_minor: refundable,
+      refundable_amount: fromMinor(refundable, exponent),
+    });
+  } catch (error: any) {
+    console.error('[API] Bill refunds read failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

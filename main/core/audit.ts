@@ -50,6 +50,8 @@ export type AuditEventType =
   | 'sale.items_added'
   | 'sale.voided'
   | 'sale.refunded'
+  | 'bill.refunded'
+  | 'sale.price_overridden'
   | 'sale.discount_applied'
   | 'payment.recorded'
   | 'payment.voided'

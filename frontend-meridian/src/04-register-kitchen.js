@@ -104,13 +104,14 @@ function cartHTML(){
 function lineHTML(l){
   const sel=U.selLine===l.uid,p=prod(l.pid);
   return`<div class="pl ${sel?'sel':''} ${l.uid===U.newLine?'new':''}" data-act="lineSel" data-id="${l.uid}" role="button" tabindex="0" aria-expanded="${sel}">
-    <span class="q num">${l.qty}×</span><span class="n">${esc(l.name)}${l.sent?'<i class="sent-tag">sent</i>':''}</span><span class="num">${money(lineTotal(l))}</span>
+    <span class="q num">${l.qty}×</span><span class="n">${esc(l.name)}${l.sent?'<i class="sent-tag">sent</i>':''}${l.override?'<i class="sent-tag" title="'+esc(l.override.reason)+'">price changed</i>':''}</span><span class="num">${money(lineTotal(l))}</span>
     ${l.mods.length?`<span class="m">${l.mods.map(m=>esc(m.n)+(m.p?' +'+money(m.p):'')).join(', ')}</span>`:''}
     ${l.note?`<span class="m note">“${esc(l.note)}”</span>`:''}
     ${sel?`<div class="pl-ctrl" data-stop>
       <button class="qb" data-act="lineQty" data-id="${l.uid}" data-d="-1" aria-label="One fewer">${ic('minus',16)}</button><b class="num">${l.qty}</b><button class="qb" data-act="lineQty" data-id="${l.uid}" data-d="1" aria-label="One more">${ic('plus',16)}</button>
       <span class="spacer"></span>
       ${p&&p.mods&&p.mods.length?`<button class="btn btn-sm" data-act="lineEdit" data-id="${l.uid}">Options</button>`:''}
+      ${live()&&!l.sent?`<button class="btn btn-sm" data-act="linePrice" data-id="${l.uid}">${l.override?'Change price':'Price'}</button>`:''}${l.override&&!l.sent?`<button class="btn btn-sm" data-act="linePriceReset" data-id="${l.uid}">Reset price</button>`:''}
       <button class="btn btn-sm" data-act="lineNote" data-id="${l.uid}">Note</button>
       <button class="btn btn-sm btn-icon" data-act="lineDel" data-id="${l.uid}" aria-label="Remove ${esc(l.name)}">${ic('trash',16)}</button></div>`:''}
   </div>`;
@@ -123,6 +124,40 @@ function refreshPos(opts={}){
   const mb=$('#mobBar');if(mb){mb.innerHTML=mobBarHTML();mb.hidden=!U.cart.items.length;}
   U.newLine=null;
 }
+/* ---------- Till operations on the authoritative backend ---------- */
+// True when this till is signed in to Plemmo: money/stock/print actions then go
+// to the backend and the UI only shows what the backend answered.
+const live=()=>!!(window.PlemmoTill&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated());
+const billIdsOf=o=>o.plemmoBillIds&&o.plemmoBillIds.length?o.plemmoBillIds:(o.plemmoBillId?[o.plemmoBillId]:[]);
+// What a failed call says. A refused/invalid manager PIN gets its own words.
+function tillError(e,fallback){
+  if(e&&e.data&&e.data.requiresApproval)return(e.data.error&&/Invalid/.test(e.data.error))?'That manager PIN wasn’t accepted.':'A manager’s approval is needed for this.';
+  if(e&&e.status===429)return PlemmoTill.errorMessage(e);
+  if(PlemmoTill.isNetworkError(e))return'Can’t reach the till server. Nothing was changed.';
+  return PlemmoTill.errorMessage(e,fallback);
+}
+// Re-read an order from the backend and overwrite the parts of the local cache
+// that the backend owns. Best effort: if it can't be reached the old cache stays.
+async function refreshOrderFromPlemmo(o){
+  if(!o||!o.plemmoOrderId)return false;
+  try{
+    const m=PlemmoOrders.mapPlemmoOrder(await PlemmoTill.fetchOrder(o.plemmoOrderId));
+    Object.assign(o,{status:m.status,payments:m.payments,tip:m.tip,refund:m.refund,refundedAmt:m.refundedAmt,plemmoBillIds:m.plemmoBillIds,printed:m.printed||o.printed});
+    if(m.plemmoBillId!==undefined)o.plemmoBillId=m.plemmoBillId;
+    try{saveNow();}catch(e){}
+    return true;
+  }catch(e){return false;}
+}
+// Stock, loyalty and customer numbers are backend-owned too.
+function refreshCatalogueSoon(){
+  if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).then(()=>{if(['items','home','customers','pos'].includes(U.view))renderView();}).catch(()=>{});
+}
+async function refreshHeld(){
+  if(!live())return;
+  try{S.held=await PlemmoTill.held.list();}catch(e){/* keep the last list */}
+  if(U.view==='pos'){const sp=$('#posStrip');if(sp)sp.innerHTML=posStripHTML();}
+}
+
 function addProduct(pid){
   const p=prod(pid);if(!p)return;
   if(!p.available){toast(`${p.name} is marked sold out`,'warn');return;}
@@ -132,7 +167,7 @@ function addProduct(pid){
 }
 function addLine(p,mods,qty,note){
   const key=p.id+'|'+mods.map(m=>m.n).join(',');
-  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!note);
+  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!note&&!l.override);
   if(ex){ex.qty+=qty;U.newLine=null;}
   else{const l={key,pid:p.id,name:p.name,price:p.price,cost:p.cost,qty,mods,note:note||'',uid:uid('l'),sent:false};U.cart.items.push(l);U.newLine=l.uid;}
   U.selLine=null;
@@ -141,6 +176,42 @@ function addLine(p,mods,qty,note){
 }
 A.posCat=d=>{U.pos.cat=d.id;U.pos.q='';const i=$('#posQ');if(i)i.value='';$$('.cat-btn').forEach(b=>b.classList.toggle('on',b.dataset.id===d.id));$('#posGrid').innerHTML=gridHTML();$('#posGrid').scrollTop=0;};
 IN.posQ=v=>{U.pos.q=v;$('#posGrid').innerHTML=gridHTML();};
+
+/* ---------- Barcode scanning (keyboard-wedge scanners) ---------- */
+// A scanner types the code within a few milliseconds and ends with Enter/Tab. The
+// detector turns exactly that pattern into ONE lookup through the backend
+// (/retail/lookup); ordinary typing, including Enter in the search box, is left
+// alone. Scans are queued so rapid scans are resolved in order and none is lost
+// or added twice.
+const SCANNER=window.PlemmoScan?PlemmoScan.create():null;
+let scanQueue=Promise.resolve();
+function noteScan(code,ok,info){U.lastScan={code,ok,name:info&&info.name,message:info&&info.message,at:Date.now()};}
+async function handleScan(code){
+  try{
+    const r=await PlemmoTill.lookupBarcode(code);
+    if(r.variant){noteScan(code,false,{message:'a product variant'});toast(`${r.product.name} has variants, which this till can’t sell yet`,'warn');return;}
+    const p=r.product&&prod(r.product.id);
+    if(!p){noteScan(code,false,{message:'not on this till’s menu'});toast(`${r.product?r.product.name:'That item'} isn’t on this till’s menu`,'warn');return;}
+    noteScan(code,true,{name:p.name});
+    addProduct(p.id);
+  }catch(e){
+    if(e&&e.status===404){noteScan(code,false,{message:'no match'});toast(`No item matches barcode ${code}`,'warn');}
+    else if(e&&e.status===403){noteScan(code,false,{message:'not allowed'});toast('Your role can’t look up barcodes','warn');}
+    else{noteScan(code,false,{message:'lookup failed'});toast(`Couldn’t look up ${code}: ${tillError(e)}`,'warn');}
+  }
+}
+document.addEventListener('keydown',e=>{
+  if(!SCANNER||U.view!=='pos'||!U.user||!live()||$('#app').hidden||topLayer())return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const tg=e.target,tag=tg&&tg.tagName;
+  if(tag==='TEXTAREA'||tag==='SELECT'||(tag==='INPUT'&&tg.id!=='posQ')||(tg&&tg.isContentEditable))return;
+  const r=SCANNER.key({key:e.key,ts:Date.now(),value:tag==='INPUT'?tg.value:''});
+  if(!r.scan)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  U.lastAct=Date.now();
+  if(tg&&tg.id==='posQ'){tg.value=r.restore;U.pos.q=r.restore;const g=$('#posGrid');if(g)g.innerHTML=gridHTML();}
+  scanQueue=scanQueue.then(()=>handleScan(r.scan));
+},true);
 A.add=d=>addProduct(d.id);
 A.setType=async d=>{
   if(d.t==='dine'&&!U.cart.table&&S.settings.tables){const t=await pickTable();if(!t)return;U.cart.table=t;}
@@ -149,21 +220,63 @@ A.setType=async d=>{
   refreshPos({grid:false});
 };
 A.lineSel=d=>{U.selLine=U.selLine===d.id?null:d.id;refreshPos({grid:false});};
+// An item the kitchen already has is part of an order the till server holds (stock
+// taken, ticket sent, bill pending). The backend has no per-item void for the
+// till, so removing it here would only change this screen and leave the real
+// order — and what the customer is charged — unchanged. Refuse instead of pretending.
+const onBackendOrder=()=>{if(!live()||!U.cart.orderId)return false;const o=orderOf(U.cart.orderId);return !!(o&&o.plemmoOrderId);};
+const ITEM_VOID_MSG='That item is already on the order at the till server, so it can’t be removed from this screen. A manager can void the whole order instead.';
 A.lineQty=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
   const n=l.qty+(+d.d);
   if(+d.d>0){const p=prod(l.pid);if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
-  if(l.sent&&+d.d<0){const ok=await approve('refunds','Taking back an item the kitchen already has');if(!ok)return;}
+  if(l.sent&&+d.d<0){
+    if(onBackendOrder()){toast(ITEM_VOID_MSG,'warn',{ms:5200});return;}
+    const ok=await approve('refunds','Taking back an item the kitchen already has');if(!ok)return;
+  }
   if(n<=0){U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;}else l.qty=n;
   refreshPos();
 };
 A.lineDel=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
-  if(l.sent){const ok=await approve('refunds','Removing an item the kitchen already has');if(!ok)return;}
+  if(l.sent){
+    if(onBackendOrder()){toast(ITEM_VOID_MSG,'warn',{ms:5200});return;}
+    const ok=await approve('refunds','Removing an item the kitchen already has');if(!ok)return;
+  }
   U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;refreshPos();
   toast(`Removed ${l.name}`,'',{action:'Undo',onAction:()=>{U.cart.items.push(l);refreshPos();}});
 };
 A.lineNote=async d=>{const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;const v=await promptBox({title:'Note for the kitchen',label:l.name,value:l.note,placeholder:'For example, no onions',ok:'Save note'});if(v===null)return;l.note=v.trim();refreshPos({grid:false});};
+// Change the price of an item that has not gone to the kitchen yet. The request
+// is approved (own permission, or a manager PIN) and then sent with the order;
+// the BACKEND re-checks it, keeps the catalogue price beside the new one, and
+// audits it. Nothing about the master product price changes.
+const PRICE_REASONS=['Damaged or marked','Price match','Manager discretion','Staff or friends','Wrong price on the menu','Other'];
+A.linePrice=async d=>{
+  const l=U.cart.items.find(x=>x.uid===d.id);if(!l||!live())return;
+  if(l.sent){toast('The kitchen already has this item, so its price can’t be changed here.','warn');return;}
+  const by=await approveServer('priceOverride',`Changing the price of ${l.name}`);if(!by)return;
+  const list=l.listPrice!=null?l.listPrice:l.price;
+  const r=await new Promise(res=>{let done=false;
+    const L=modal({title:`Price for ${esc(l.name)}`,cls:'narrow',body:`<p class="muted">Catalogue price ${money(list)} each. The catalogue itself isn’t changed.</p>
+      <label class="field mt"><span>Price each</span><input class="input num" id="lpP" type="number" min="0" step="0.01" value="${l.price}" inputmode="decimal" autofocus></label>
+      <label class="field mt"><span>Reason</span><select class="input" id="lpR">${PRICE_REASONS.map(x=>`<option>${x}</option>`).join('')}</select></label>
+      <p class="pin-err" id="lpE" aria-live="polite"></p>`,
+      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="lpGo">Apply price</button>`,onClose:()=>{if(!done)res(null);}});
+    L.el.querySelector('#lpGo').onclick=()=>{
+      const v=parseFloat(L.el.querySelector('#lpP').value);
+      if(!isFinite(v)||v<0||v>1e7){L.el.querySelector('#lpE').textContent='Enter a price of 0 or more.';return;}
+      done=true;const reason=L.el.querySelector('#lpR').value;L.close();res({price:r2(v),reason});
+    };
+  });
+  if(!r)return;
+  if(r.price===r2(list)){delete l.override;delete l.listPrice;l.price=r2(list);refreshPos({grid:false});return;}
+  l.listPrice=list;l.price=r.price;l.override={reason:r.reason};
+  if(by.pin)PlemmoOrders.setOverridePin(by.pin);
+  refreshPos({grid:false});
+  toast(`${l.name} is now ${money(r.price)}. The change is checked when you send or charge.`,'info',{ms:2600});
+};
+A.linePriceReset=d=>{const l=U.cart.items.find(x=>x.uid===d.id);if(!l||!l.override)return;l.price=l.listPrice;delete l.listPrice;delete l.override;refreshPos({grid:false});};
 A.lineEdit=d=>{const l=U.cart.items.find(x=>x.uid===d.id);const p=l&&prod(l.pid);if(p)openMods(p,l);};
 A.orderNote=async()=>{const v=await promptBox({title:'Order note',label:'Shown on the receipt and kitchen ticket',value:U.cart.note,placeholder:'For example, birthday, bring candles',ok:'Save note'});if(v===null)return;U.cart.note=v.trim();refreshPos({grid:false});};
 A.mobCart=()=>{U.mobCart=!U.mobCart;$('#pos').classList.toggle('cart-open',U.mobCart);};
@@ -172,18 +285,55 @@ A.rmDisc=()=>{U.cart.discount=null;refreshPos({grid:false});};
 A.rmCust=()=>{U.cart.custId=null;if(U.cart.discount&&U.cart.discount.pts)U.cart.discount=null;refreshPos({grid:false});};
 A.redeem=()=>{const L=S.settings.loyalty;U.cart.discount={kind:'amt',value:L.redeemVal,reason:'Loyalty reward',pts:L.redeemPts};refreshPos({grid:false});toast(`${money(L.redeemVal)} reward applied`);};
 A.clearCart=async()=>{
+  if(window.PlemmoOrders)PlemmoOrders.setOverridePin(null);   // an approval PIN never outlives its cart
   if(U.cart.orderId){U.cart=newCart();U.selLine=null;refreshPos();toast('Order closed. It’s still open on its table.');return;}
   if(!U.cart.items.length)return;
   const saved=clone(U.cart);U.cart=newCart();U.selLine=null;refreshPos();
   toast('Order cleared','',{action:'Undo',onAction:()=>{U.cart=saved;refreshPos();}});
 };
-A.hold=()=>{
+// A held cart lives on the backend (held_carts) so it survives a reload and is
+// visible on every till. A failed hold leaves the cart exactly where it is.
+function heldLabel(c){const cu=c.custId?cust(c.custId):null,tb=c.table?tableOf(c.table):null;return cu?first(cu.name):tb?'Table '+tb.name:'Held '+fmtT(Date.now());}
+const restoreCart=c=>({items:(c.items||[]).map(l=>({...l,sent:false,uid:l.uid||uid('l'),mods:l.mods||[]})),type:c.type||'takeaway',table:c.table||null,custId:c.custId||null,discount:c.discount||null,orderId:null,note:c.note||''});
+let heldBusy=false;   // a double tap must not hold (or resume) the same cart twice
+A.hold=async()=>{
   const c=U.cart;if(!c.items.length)return;
+  if(live()){
+    if(heldBusy)return;heldBusy=true;
+    try{
+      try{await PlemmoTill.held.hold(uid('h'),heldLabel(c),c);}
+      catch(e){toast(`Couldn’t hold this order: ${tillError(e,'the till server refused it')}`,'warn');return;}
+      U.cart=newCart();U.selLine=null;PlemmoOrders.setOverridePin(null);
+      await refreshHeld();refreshPos();toast('Order held. Tap it above the menu to pick it up again.');
+    }finally{heldBusy=false;}
+    return;
+  }
   const cu=c.custId?cust(c.custId):null,tb=c.table?tableOf(c.table):null;
   S.held.push({id:uid('h'),ts:Date.now(),by:U.user,label:cu?first(cu.name):tb?'Table '+tb.name:'Held '+fmtT(Date.now()),cart:clone(c)});
   U.cart=newCart();U.selLine=null;save();refreshPos();toast('Order held. Tap it above the menu to pick it up again.');
 };
-A.resume=d=>{
+A.resume=async d=>{
+  if(live()){
+    const h=S.held.find(x=>x.id===d.id);if(!h||heldBusy)return;heldBusy=true;
+    try{
+      // Park the current, unsent cart first so taking the other one back can't lose it.
+      if(U.cart.items.length&&!U.cart.orderId){
+        try{await PlemmoTill.held.hold(uid('h'),heldLabel(U.cart),U.cart);}
+        catch(e){toast(`Couldn’t hold your current order: ${tillError(e)}`,'warn');return;}
+        U.cart=newCart();toast('Your current order was held so you can pick up this one');
+      }
+      let got;
+      try{got=await PlemmoTill.held.resume(d.id);}
+      catch(e){
+        await refreshHeld();refreshPos();
+        toast(e&&e.status===404?'That held order was already picked up on another till.':`Couldn’t resume it: ${tillError(e)}`,'warn');return;
+      }
+      U.cart=restoreCart(got.cart);U.selLine=null;
+      await refreshHeld();
+      if(U.view!=='pos')go('pos');else{renderView();}
+    }finally{heldBusy=false;}
+    return;
+  }
   const h=S.held.find(x=>x.id===d.id);if(!h)return;
   if(U.cart.items.length&&!U.cart.orderId){const cu=U.cart.custId?cust(U.cart.custId):null;S.held.push({id:uid('h'),ts:Date.now(),by:U.user,label:cu?first(cu.name):'Held '+fmtT(Date.now()),cart:clone(U.cart)});toast('Your current order was held so you can pick up this one');}
   S.held=S.held.filter(x=>x!==h);U.cart=h.cart;U.selLine=null;save();
@@ -201,8 +351,23 @@ A.cartMenu=(d,el)=>{
 A.changeTable=async()=>{const t=await pickTable(U.cart.table);if(!t)return;U.cart.table=t;U.cart.type='dine';if(U.cart.orderId){const o=orderOf(U.cart.orderId);if(o){o.table=t;save();}}renderView();toast(`Moved to table ${tableOf(t).name}`);};
 A.voidOpen=async()=>{
   const o=orderOf(U.cart.orderId);if(!o)return;
-  const ok=await approve('refunds','Voiding an open order');if(!ok)return;
+  // An order the backend knows about is cancelled THERE (stock back, audit, KDS);
+  // an order that only ever existed on this device is voided locally.
+  const remote=live()&&!!o.plemmoOrderId;
+  const ok=await(remote?approveServer:approve)('refunds','Voiding an open order');if(!ok)return;
   if(!await confirmBox({title:`Void order ${o.no}?`,text:'The table becomes free and the order is kept in history as voided. Nothing is charged.',ok:'Void order',danger:true}))return;
+  if(remote){
+    try{await PlemmoTill.cancelOrder(o.plemmoOrderId,{reason:'Voided at table',overridePin:ok.pin});}
+    catch(e){
+      toast(`Order ${o.no} was not voided: ${tillError(e,'the till server refused it')}`,'warn');
+      if(!PlemmoTill.isNetworkError(e)){await refreshOrderFromPlemmo(o);renderView();renderRail();}
+      return;
+    }
+    await refreshOrderFromPlemmo(o);
+    S.tickets.forEach(t=>{if(t.orderId===o.id&&t.status!=='done'){t.status='done';t.doneTs=Date.now();}});
+    U.cart=newCart();U.selLine=null;save();refreshCatalogueSoon();renderView();renderRail();toast(`Order ${o.no} voided`);
+    return;
+  }
   o.status='void';o.refund={ts:Date.now(),by:ok.id,reason:'Voided at table',restock:false};
   S.tickets.forEach(t=>{if(t.orderId===o.id&&t.status!=='done'){t.status='done';t.doneTs=Date.now();}});
   U.cart=newCart();save();renderView();renderRail();toast(`Order ${o.no} voided`);
@@ -309,7 +474,13 @@ A.sendKitchen=async()=>{
   // the real KDS. On failure, save locally so the kitchen still gets it.
   if(window.PlemmoOrders&&PlemmoAPI.isAuthenticated()){
     try{ await sendKitchenPlemmo(c,unsent); return; }
-    catch(e){ toast('Could not reach Plemmo — order saved locally','warn'); }
+    catch(e){
+      // The server answered and said no (price change not approved, permission,
+      // validation): show its reason and keep the cart — do NOT quietly save a
+      // local-only order the backend has never seen.
+      if(!PlemmoTill.isNetworkError(e)){toast(tillError(e,'The till server refused this order'),'warn');return;}
+      toast('Could not reach Plemmo — order saved locally','warn');
+    }
   }
   let o=c.orderId?orderOf(c.orderId):null;
   if(!o){o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0};S.orders.push(o);}
@@ -325,8 +496,7 @@ async function sendKitchenPlemmo(c,unsent){
   let o=c.orderId?orderOf(c.orderId):null;
   if(o&&o.plemmoOrderId){
     // Append the new items to the existing authoritative order.
-    const items=unsent.map(l=>PlemmoOrders.cartLineToItem(l,S._plemmoAddons));
-    await PlemmoAPI.post('/orders/'+encodeURIComponent(o.plemmoOrderId)+'/items',{items:items},{idempotent:true});
+    await PlemmoOrders.addItems(o.plemmoOrderId,unsent,S._plemmoAddons);
   }else{
     const order=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:unsent},S._plemmoAddons);
     o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0,
@@ -446,7 +616,8 @@ function finishSale(){
   // opened in Plemmo. A local-only order (Plemmo unreachable at send) pays local.
   const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId));
   if(usePlemmo){finishSalePlemmo().catch((e)=>{
-    const msg=(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+    const msg=(e&&e.data&&e.data.requiresApproval)?'The manager approval for a price change wasn’t accepted. Change the price again with a manager PIN.'
+      :(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
     toast(msg,'warn');
     if(PAY){PAY.stage='idle';renderPay();}
   });return;}
@@ -538,6 +709,7 @@ function receiptHTML(o,{cls=''}={}){
    <div class="rule"></div>
    ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':'Card, contactless'}</span><span>${money(p.a)}</span></div>`).join('')}
    ${o.status==='refunded'?`<div class="rule"></div><div class="kv b"><span>REFUNDED</span><span>${fmtT(o.refund.ts)}</span></div>`:''}
+   ${o.status!=='refunded'&&o.refundedAmt>0?`<div class="rule"></div><div class="kv b"><span>Part refunded</span><span>−${money(o.refundedAmt)}</span></div>`:''}
    ${o.status==='void'?`<div class="rule"></div><div class="kv b"><span>VOIDED</span></div>`:''}
    ${cu?`<div class="rule"></div><div class="pm">${esc(cu.name)}: +${o.pts||0} points, balance ${cu.points}</div>`:''}
    ${o.note?`<div class="rule"></div><div class="pm">Note: ${esc(o.note)}</div>`:''}
@@ -550,7 +722,26 @@ function showReceipt(o,{change=0,fresh=false}={}){
   modal({title:fresh?'Payment complete':`Order ${o.no}`,cls:'rc-modal',body:`${change>0?`<div class="change-due">Give ${money(change)} change</div>`:''}${receiptHTML(o,{cls:fresh?'rc-print':''})}`,
     foot:`<button class="btn" data-act="printRc" data-id="${o.id}">${ic('printer',18)} Print</button><button class="btn" data-act="emailRc" data-id="${o.id}">${ic('mail',18)} Email</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop" autofocus>${fresh?'Start the next sale':'Done'}</button>`});
 }
-A.printRc=()=>toast('Sent to the receipt printer');
+// Real print: the backend builds the receipt for the configured printer
+// (58/80 mm profile) and reports whether the printer transport accepted it.
+// Success is only announced after that; a failure says why and offers Retry.
+const printing=new Set();
+A.printRc=async d=>{
+  const o=orderOf(d.id);if(!o)return;
+  if(!live()){toast('Sign in to the till to print receipts.','warn');return;}
+  const ids=billIdsOf(o);
+  if(!ids.length){toast('This sale hasn’t reached the till server yet, so it can’t be printed.','warn');return;}
+  if(printing.has(o.id))return;printing.add(o.id);
+  const btn=document.querySelector('[data-act="printRc"]');if(btn)btn.disabled=true;
+  try{
+    for(const id of ids)await PlemmoTill.printBill(id,{reprint:!!o.printed});
+    o.printed=true;
+    toast('Receipt sent to the printer','ok');
+  }catch(e){
+    const detail=e&&e.data&&e.data.detail;
+    toast(detail?`Couldn’t print: ${detail}`:`Couldn’t print: ${tillError(e,'the printer did not respond')}`,'warn',{action:'Retry',onAction:()=>A.printRc(d),ms:7000});
+  }finally{printing.delete(o.id);if(btn)btn.disabled=false;}
+};
 A.emailRc=async d=>{
   const o=orderOf(d.id),cu=o&&o.custId?cust(o.custId):null;
   let to=cu&&cu.email?cu.email:null;
@@ -807,18 +998,48 @@ function openOrderDrawer(id){
    foot:`${o.status==='open'?`<button class="btn btn-primary" data-act="drOpenOrder" data-id="${o.id}">Open in register</button>`:''}${canRefund?`<button class="btn btn-danger" data-act="refund" data-id="${o.id}">${ic('refund',16)} Refund</button>`:''}<span class="spacer"></span><button class="btn" data-act="printRc" data-id="${o.id}">${ic('printer',16)} Reprint</button><button class="btn" data-act="emailRc" data-id="${o.id}">${ic('mail',16)} Email</button>`});
 }
 A.drOpenOrder=d=>{const o=orderOf(d.id);closeAll();loadOrderToCart(o);go('pos');};
+// Refund an order through the backend: permission/PIN check, an immutable refund
+// record against the ORIGINAL payment, stock back through the ledger, drawer and
+// loyalty effects, audit. Meridian then re-reads the order — it never flips the
+// status itself, and a failed refund leaves everything as it was.
+async function refundOrderOnPlemmo(o,by,reason,restock){
+  const ids=billIdsOf(o);
+  o._rfKey=o._rfKey||PlemmoAPI.idempotencyKey();           // same key on a retry of this refund
+  const items=restock?(o.items||[]).filter(l=>l.itemId).map(l=>({id:l.itemId,qty:l.qty})):[];
+  let done=0;
+  try{
+    for(let i=0;i<ids.length;i++){
+      await PlemmoTill.refundBill(ids[i],{reason,items:i===0?items:[],overridePin:by.pin,key:o._rfKey+':'+ids[i]});
+      done++;
+    }
+  }catch(e){
+    toast(`Order ${o.no} was not refunded${done?' in full':''}: ${tillError(e,'the till server refused it')}`,'warn');
+    if(!PlemmoTill.isNetworkError(e)){await refreshOrderFromPlemmo(o);renderView();}
+    return false;
+  }
+  delete o._rfKey;
+  await refreshOrderFromPlemmo(o);
+  refreshCatalogueSoon();
+  closeAll();if(U.view==='orders'||U.view==='home')renderView();renderRail();
+  toast(`Order ${o.no} refunded`);
+  return true;
+}
 A.refund=async d=>{
   const o=orderOf(d.id);if(!o||o.status!=='paid')return;
-  const by=await approve('refunds',`Refunding order ${o.no}`);if(!by)return;
+  const remote=live();
+  if(remote&&!billIdsOf(o).length){toast('This sale only exists on this device — it never reached the till server — so it can’t be refunded here.','warn');return;}
+  const by=await(remote?approveServer:approve)('refunds',`Refunding order ${o.no}`);if(!by)return;
   let reason='Customer changed their mind',restock=true;
+  const due=remote?r2(o.total-(o.refundedAmt||0)):o.total+(o.tip||0);
   const ok=await new Promise(res=>{let done=false;
-    const L=modal({title:`Refund ${money(o.total+(o.tip||0))}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.</p>
+    const L=modal({title:`Refund ${money(due)}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.${remote&&o.tip?' Tips are not refunded.':''}</p>
       <label class="field mt"><span>Reason</span><select class="input" id="rfR">${['Customer changed their mind','Wrong item','Quality problem','Charged twice','Other'].map(r=>`<option>${r}</option>`).join('')}</select></label>
       <label class="switch mt"><input type="checkbox" id="rfS" checked><span class="tr"></span><span>Put the items back in stock</span></label>`,
      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-danger-solid" id="rfGo">Refund order</button>`,onClose:()=>{if(!done)res(false);}});
     L.el.querySelector('#rfGo').onclick=()=>{reason=L.el.querySelector('#rfR').value;restock=L.el.querySelector('#rfS').checked;done=true;L.close();res(true);};
   });
   if(!ok)return;
+  if(remote){await refundOrderOnPlemmo(o,by,reason,restock);return;}
   o.status='refunded';o.refund={ts:Date.now(),by:by.id,reason,restock};
   if(restock)o.items.forEach(l=>{const p=prod(l.pid);if(p&&p.stock!=null){p.stock+=l.qty;S.stockLog.push({id:uid('sl'),ts:Date.now(),pid:p.id,name:p.name,change:l.qty,kind:'return',reason:'Refund of order '+o.no,by:by.id,after:p.stock});}});
   if(o.custId){const cu=cust(o.custId);if(cu){cu.points=Math.max(0,cu.points-(o.pts||0));cu.spend=r2(Math.max(0,cu.spend-o.total));cu.visits=Math.max(0,cu.visits-1);}}

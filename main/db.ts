@@ -5290,6 +5290,42 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       if (!has('error')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN error TEXT`);
     },
   },
+  {
+    version: 96,
+    name: 'till_price_override_and_held_carts',
+    up: () => {
+      // MERIDIAN TILL WIRING — two additive changes, nothing existing is altered.
+      //
+      // 1) Price override. `order_items.unit_price` remains the price the sale
+      //    actually RAN at (every total/tax/report already reads it), so an
+      //    override must keep the catalogue price somewhere else or it is lost.
+      //    `original_unit_price` is NULL for every line that was not overridden
+      //    (including all historical rows), which is what marks a line as
+      //    overridden; the reason and the approving user ride with it.
+      const itemCols = db.prepare(`PRAGMA table_info(order_items)`).all() as { name: string }[];
+      const hasItemCol = (c: string) => itemCols.some((x) => x.name === c);
+      if (!hasItemCol('original_unit_price')) db.exec(`ALTER TABLE order_items ADD COLUMN original_unit_price REAL`);
+      if (!hasItemCol('price_override_reason')) db.exec(`ALTER TABLE order_items ADD COLUMN price_override_reason TEXT`);
+      if (!hasItemCol('price_override_by')) db.exec(`ALTER TABLE order_items ADD COLUMN price_override_by TEXT`);
+
+      // 2) Held carts. `held_orders` is keyed by TABLE (one parked order per
+      //    table, upsert) which cannot represent several parked counter
+      //    sales, so a cart that has not been sent or paid gets its own
+      //    device-local table. A held cart is NOT a sale: it has no totals, no
+      //    stock effect and no sync footprint until it is resumed and rung up.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS held_carts (
+          id          TEXT PRIMARY KEY,
+          label       TEXT NOT NULL,
+          cart_json   TEXT NOT NULL,
+          created_by  TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_held_carts_created ON held_carts(created_at);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {
@@ -6386,6 +6422,12 @@ export function deriveBillPaymentDetails(billId: number | string): Array<Record<
       timestamp: p.requested_at,
     };
     if (paymentMethodId !== undefined) line.payment_method_id = paymentMethodId;
+    // Additive read fields so a client can show refund state without a second
+    // query: which payment this line is, its lifecycle state, and how much of it
+    // has been refunded. Existing receipt/bill consumers ignore unknown keys.
+    line.payment_id = p.id;
+    line.state = p.state;
+    if (p.refunded_minor > 0) line.refunded_amount = fromMinor(p.refunded_minor, exponent);
     if (p.tendered_minor != null) line.tendered_amount = fromMinor(p.tendered_minor, exponent);
     if (p.change_minor != null) line.change_amount = fromMinor(p.change_minor, exponent);
     if (p.provider_reference) line.transaction_id = p.provider_reference;

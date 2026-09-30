@@ -431,8 +431,8 @@ VIEWS.settings=()=>{
     <div class="set-row"><div class="sr-t"><b>Try it</b><small>Leave kiosk mode with any team member’s PIN</small></div><button class="btn btn-primary" data-act="nav" data-v="kiosk">${ic('kiosk',16)} Launch the kiosk</button></div></div></div>`;
   else if(t==='look')b=`<div class="panel"><div class="panel-b" style="display:grid;gap:22px"><div class="field"><span>Accent colour</span><div class="swatches">${Object.entries(ACCENTS).map(([k,a])=>`<button class="swatch ${s.accent===k?'on':''}" style="--sw:${a.c};--swi:${a.ink}" data-act="setAccent" data-v="${k}" aria-label="${a.name}" aria-pressed="${s.accent===k}">${s.accent===k?ic('check',20):''}</button>`).join('')}</div></div>
     <div class="field"><span>Appearance</span><div class="seg">${[['light','Light'],['dark','Dark'],['system','Match this device']].map(([k,l])=>`<button class="${s.theme===k?'on':''}" data-act="setTheme" data-v="${k}">${l}</button>`).join('')}</div></div></div></div>`;
-  else if(t==='devices')b=`<div class="panel"><div class="panel-b">${[['printer','Receipt printer','Thermal, 80mm, USB','ok','Connected','Print a test'],['card','Card reader','Contactless, chip and PIN, battery 82%','ok','Connected','Test a payment'],['drawer','Cash drawer','Opens with the receipt printer','ok','Connected','Open the drawer'],['chef','Kitchen printer','Backup for the kitchen display','warn','Not connected','Pair'],['wifi','Offline mode','Sales save on this device and sync when you’re back online','ok','Ready','']].map(([i,n,d,k,st,a])=>`<div class="device"><span class="dv-ic">${ic(i)}</span><div class="dv-t"><b>${n}</b><small>${d}</small></div><span class="badge ${k}">${st}</span>${a?`<button class="btn btn-sm" data-act="devTest" data-n="${n}">${a}</button>`:''}</div>`).join('')}</div></div>`;
-  else b=`<div class="panel"><div class="panel-b">
+  else if(t==='devices')b=devicesHTML();
+  else b=live()?dataHTML():`<div class="panel"><div class="panel-b">
     <div class="set-row"><div class="sr-t"><b>Download a backup</b><small>Everything in one JSON file: items, orders, customers and team</small></div><button class="btn" data-act="backup">${ic('download',16)} Download</button></div>
     <div class="set-row"><div class="sr-t"><b>Run setup again</b><small>Start from the setup wizard. Your current data is replaced.</small></div><button class="btn" data-act="reOnboard">Start setup</button></div>
     <div class="set-row"><div class="sr-t"><b>Reset to the demo café</b><small>Replace everything with fresh sample data</small></div><button class="btn btn-danger" data-act="resetDemo">Reset</button></div>
@@ -440,7 +440,7 @@ VIEWS.settings=()=>{
   return`<div class="page"><div class="page-head"><div><h2>Settings</h2><p class="sub">Changes save as you make them.</p></div></div>
    <div class="set-layout"><nav class="set-nav" aria-label="Settings sections">${SET_TABS.map(([k,l,i])=>`<button class="${t===k?'on':''}" data-act="setTab" data-t="${k}">${ic(i,18)}${l}</button>`).join('')}</nav><div class="set-sec">${b}</div></div></div>`;
 };
-A.setTab=d=>{U.set.tab=d.t;renderView();};
+A.setTab=d=>{U.set.tab=d.t;renderView();if(d.t==='devices')loadDevices();};
 CH.set=(v,el)=>{
   const k=el.dataset.k,t=el.dataset.t;let val=t==='bool'?el.checked:t==='num'?(+v||0):v;
   if(k==='name'&&!String(val).trim()){toast('Your business needs a name','warn');el.value=S.settings.name;return;}
@@ -452,7 +452,85 @@ CH.set=(v,el)=>{
 };
 A.setAccent=d=>{S.settings.accent=d.v;applyTheme();save();renderView();};
 A.setTheme=d=>{S.settings.theme=d.v;applyTheme();save();renderTopbar();renderView();};
-A.devTest=d=>toast(`${d.n}: test sent and confirmed`);
-A.backup=()=>offerDownload(`meridian-backup-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(S,null,1));
+/* ---------- Devices: only what the backend actually knows ---------- */
+function devicesHTML(){
+  if(!live())return`<div class="panel"><div class="panel-b"><div class="empty"><h3>Not connected to a till</h3><p>Sign in to see the printer, cash drawer and scanner status.</p></div></div></div>`;
+  const D=U.dev||(U.dev={loaded:false,error:null,printers:[],detected:[],stations:[],results:{},busy:null,offers:[]});
+  const rows=PlemmoTill.deviceRows({loaded:D.loaded,error:D.error,printers:D.printers,stations:D.stations,results:D.results,online:PlemmoAPI.isOnline(),lastScan:U.lastScan});
+  D.offers=PlemmoTill.detectedOffers(D.detected,D.printers);
+  return`<div class="panel"><div class="panel-b">
+   ${rows.map(r=>`<div class="device"><span class="dv-ic">${ic(r.icon)}</span><div class="dv-t"><b>${esc(r.name)}</b><small>${esc(r.detail)}</small></div><span class="badge ${r.badge.kind}">${esc(r.badge.text)}</span>${r.action?`<button class="btn btn-sm" data-act="devAct" data-a="${r.action.id}" data-id="${esc(r.action.printerId||'')}" ${D.busy?'disabled':''}>${D.busy===r.key?'Working…':esc(r.action.label)}</button>`:''}</div>`).join('')}
+   ${D.offers.map((o,i)=>`<div class="device"><span class="dv-ic">${ic('printer')}</span><div class="dv-t"><b>${esc(o.name)}</b><small>Found by this computer (${esc(o.connectionType)}${o.ipAddress?', '+esc(o.ipAddress):''}). Not added to the till yet.</small></div><span class="badge info">Detected</span><button class="btn btn-sm" data-act="devAddDetected" data-i="${i}">Add</button></div>`).join('')}
+   <div class="set-row"><div class="sr-t"><b>Add a network printer</b><small>For a receipt printer on your network. Most use port 9100.</small></div><button class="btn" data-act="devAddNet">Add printer</button></div>
+  </div></div>`;
+}
+async function loadDevices(){
+  if(!live())return;
+  const D=U.dev||(U.dev={loaded:false,error:null,printers:[],detected:[],stations:[],results:{},busy:null,offers:[]});
+  D.loaded=false;D.error=null;redrawDevices();
+  const [p,st]=await Promise.allSettled([PlemmoTill.hardware.printers(),PlemmoTill.hardware.stations()]);
+  if(p.status==='fulfilled'){D.printers=p.value;D.loaded=true;}else{D.error=tillError(p.reason,'Could not read the printers');}
+  D.stations=st.status==='fulfilled'?st.value:[];
+  redrawDevices();
+  PlemmoTill.hardware.detect().then(d=>{D.detected=d;redrawDevices();}).catch(()=>{});
+}
+function redrawDevices(){if(U.view==='settings'&&U.set.tab==='devices')renderView();}
+A.devAct=async d=>{
+  const D=U.dev;if(!D||D.busy)return;
+  const key=d.a==='test-printer'?'printer':'drawer';D.busy=key;redrawDevices();
+  try{
+    if(d.a==='test-printer'){await PlemmoTill.hardware.testPrinter(d.id);D.results.printer={ok:true,message:'test page delivered to the printer — check that it printed',at:Date.now()};}
+    else{await PlemmoTill.hardware.openDrawer();D.results.drawer={ok:true,message:'open pulse delivered to the printer — check that the drawer opened',at:Date.now()};}
+  }catch(e){D.results[key]={ok:false,message:(e&&e.data&&(e.data.detail||e.data.error))||tillError(e,'the test failed'),at:Date.now()};}
+  D.busy=null;redrawDevices();
+};
+A.devAddDetected=async d=>{
+  const o=(U.dev&&U.dev.offers||[])[+d.i];if(!o)return;
+  try{await PlemmoTill.hardware.addPrinter({name:o.name,connection_type:o.connectionType,ip_address:o.ipAddress||undefined,port:o.port||undefined,paper_width:o.paperWidth||undefined});toast(`${o.name} added`,'ok');}
+  catch(e){toast(`Couldn’t add ${o.name}: ${tillError(e)}`,'warn');return;}
+  loadDevices();
+};
+A.devAddNet=()=>{
+  const L=modal({title:'Add a network printer',cls:'narrow',body:`<div class="fgrid">
+    <label class="field span2"><span>Name</span><input class="input" id="dpN" value="Receipt printer" autofocus></label>
+    <label class="field"><span>IP address</span><input class="input" id="dpI" placeholder="192.168.1.50" inputmode="decimal"></label>
+    <label class="field"><span>Port</span><input class="input num" id="dpP" type="number" value="9100"></label>
+    <label class="field span2"><span>Paper width</span><select class="input" id="dpW"><option value="80mm">80 mm</option><option value="58mm">58 mm</option></select></label></div>
+    <p class="pin-err" id="dpE" aria-live="polite"></p>`,
+    foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="dpGo">Add printer</button>`});
+  L.el.querySelector('#dpGo').onclick=async()=>{
+    const v=id=>L.el.querySelector(id).value.trim(),err=L.el.querySelector('#dpE');
+    const body={name:v('#dpN'),connection_type:'network',ip_address:v('#dpI'),port:parseInt(v('#dpP'),10),paper_width:v('#dpW')};
+    if(!body.name||!body.ip_address||!(body.port>0)){err.textContent='Enter a name, an IP address and a port.';return;}
+    try{await PlemmoTill.hardware.addPrinter(body);}catch(e){err.textContent=tillError(e,'The till server refused this printer');return;}
+    L.close();toast('Printer added. Press “Print a test” to check it.','ok');loadDevices();
+  };
+};
+// Data tab on a signed-in till. The only backup here is the REAL one: the
+// backend's consistent copy of the SQLite database (owner + Master PIN).
+function dataHTML(){
+  const owner=(me()&&me().plemmoRole)==='owner';
+  const lb=U.lastBackup;
+  return`<div class="panel"><div class="panel-b">
+    <div class="set-row"><div class="sr-t"><b>Back up the database</b><small>Saves a safe copy of this till’s database on this computer. Needs the owner’s Master PIN.${lb?` Last backup this session: ${esc(lb.filename)} at ${fmtT(lb.at)}.`:''}${owner?'':' Only the owner can do this.'}</small></div><button class="btn btn-primary" data-act="backup" ${owner&&!U.backingUp?'':'disabled'}>${ic('download',16)} ${U.backingUp?'Backing up…':'Back up now'}</button></div>
+    <div class="set-row"><div class="sr-t"><b>Where your data lives</b><small>Orders, items, customers and the team are stored in the till’s database and loaded from it. This screen only shows a working copy.</small></div></div></div></div>`;
+}
+A.backup=async()=>{
+  if(!live()){toast('Sign in to the till to make a backup.','warn');return;}
+  if(U.backingUp)return;
+  let st;
+  try{st=await PlemmoTill.masterPinStatus();}catch(e){toast(`Couldn’t check backup readiness: ${tillError(e)}`,'warn');return;}
+  if(!st.available){toast('Backups need this computer’s secure storage, which isn’t available here.','warn');return;}
+  if(!st.isSet){toast('Set a Master PIN before making a backup.','warn');return;}
+  const pin=await promptBox({title:'Back up the database',label:'Master PIN',type:'password',placeholder:'4 digits',ok:'Back up now'});
+  if(pin===null)return;
+  U.backingUp=true;renderView();
+  try{
+    const r=await PlemmoTill.createBackup(String(pin).trim());
+    U.lastBackup={filename:r.filename,at:Date.now()};
+    toast(`Backup saved: ${r.filename}`,'ok',{ms:5000});
+  }catch(e){toast(`Backup failed: ${tillError(e,'the till server could not make the backup')}`,'warn',{ms:6000});}
+  finally{U.backingUp=false;if(U.view==='settings')renderView();}
+};
 A.reOnboard=async()=>{if(!await confirmBox({title:'Run setup again?',text:'Everything on this device is replaced by what you set up. Download a backup first if you want to keep it.',ok:'Start setup',danger:true}))return;wipeState();U.user=null;U.cart=null;showOnboarding();};
 A.resetDemo=async()=>{if(!await confirmBox({title:'Reset to the demo café?',text:'All orders, items, customers and team members on this device are replaced with sample data.',ok:'Reset everything',danger:true}))return;const a=S.settings.accent,th=S.settings.theme;S=buildBusiness({name:'Ember & Oat',type:'cafe',address:'14 Market Row, Kingsbridge',currency:'£',taxName:'VAT',taxRate:20,taxInclusive:true,catalog:'sample',history:true,ownerName:'Jordan Reed',ownerPin:'1234',sampleStaff:true,accent:a,theme:th,demo:true});saveNow();U.cart=newCart();LK.sel=S.employees[0].id;showLock();toast('Demo café restored. Jordan’s PIN is 1234.','info');};

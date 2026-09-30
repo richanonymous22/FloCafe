@@ -62,6 +62,7 @@ import {
   withTxn,
   insertOrderItemAddons,
   attachEffectiveAddons,
+  getSettingValue,
 } from '../db';
 import {
   calculateConfiguredChargeTaxes,
@@ -73,6 +74,7 @@ import {
 import { applyPayableRounding } from '../services/tax-engine';
 import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
+import { fromMinor, minorUnitExponent, toMinor } from './money';
 import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
@@ -119,6 +121,15 @@ export interface SaleLineInput {
    * `variant_selection`, the pre-existing free-form JSON column.
    */
   variant_id?: string | null;
+  /**
+   * Sell this line at a price other than the catalogue price. Honoured ONLY when
+   * the caller also supplies `priceOverrideApprovedBy` (set by the route after
+   * it has checked the `sales.price_override` permission or a manager PIN);
+   * without that the line is rejected, so a client cannot price its own sale.
+   * The catalogue price and the master product price are never modified — the
+   * original is kept on the line (`original_unit_price`).
+   */
+  price_override?: { unit_price: number | string; reason: string } | null;
 }
 
 /**
@@ -149,6 +160,8 @@ export interface CreateSaleInput {
   packagingCharge?: number | null;
   deliveryCharge?: number | null;
   idempotency?: SaleIdempotency | null;
+  /** The user who approved any `price_override` on these lines. Route-derived, never client-supplied. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 /** The persisted sale header. Mirrors the `orders` row. */
@@ -342,6 +355,8 @@ interface PersistLineContext {
   customer: any;
   /** The authenticated cashier, threaded through for inventory movement attribution (Milestone 4). */
   actorUserId?: string | null;
+  /** Approver for `line.price_override`; see SaleLineInput.price_override. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 /** What `persistSaleLine` reports back, so both callers can aggregate however they need to. */
@@ -418,7 +433,33 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
 
   // Price always comes from the catalogue, never from the request — the
   // catalogue is now "the variant if one was named, else the product".
-  const unitPrice = parseFloat(variant ? variant.price : product.price);
+  const cataloguePrice = parseFloat(variant ? variant.price : product.price);
+  let unitPrice = cataloguePrice;
+  let override: { originalUnitPrice: number; reason: string; approvedBy: string } | null = null;
+  if (line.price_override !== undefined && line.price_override !== null) {
+    if (!ctx.priceOverrideApprovedBy) {
+      throw new SaleError('A price override requires manager approval', 403);
+    }
+    const o = line.price_override;
+    if (typeof o !== 'object' || (typeof o.unit_price !== 'number' && typeof o.unit_price !== 'string')) {
+      throw new SaleError(`Invalid price override for ${product.name}`, 400);
+    }
+    const reason = typeof o.reason === 'string' ? o.reason.trim() : '';
+    if (!reason) throw new SaleError('A price override needs a reason', 400);
+    if (reason.length > 200) throw new SaleError('Price override reason must be 200 characters or fewer', 400);
+    const exponent = minorUnitExponent((getSettingValue('currency') || 'GBP').toUpperCase());
+    let overrideMinor: number;
+    try { overrideMinor = toMinor(o.unit_price, exponent); } catch { throw new SaleError(`Invalid price override for ${product.name}`, 400); }
+    if (!Number.isSafeInteger(overrideMinor) || overrideMinor < 0 || overrideMinor > 100_000_000_00) {
+      throw new SaleError(`Price override for ${product.name} must be between 0 and 100,000,000`, 400);
+    }
+    const overridePrice = fromMinor(overrideMinor, exponent);
+    // Overriding to the catalogue price changes nothing, so nothing is recorded.
+    if (overridePrice !== cataloguePrice) {
+      unitPrice = overridePrice;
+      override = { originalUnitPrice: cataloguePrice, reason, approvedBy: ctx.priceOverrideApprovedBy };
+    }
+  }
   const unitCost = parseFloat((variant ? variant.cost : product.cost) ?? 0) || 0;
   const lineSku = variant ? (variant.sku || product.sku) : product.sku;
   const quantity = line.quantity;
@@ -458,8 +499,9 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
   const insertItemResult = db.prepare(`
     INSERT INTO order_items (order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
       subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total, variant_selection,
-      modifier_selection, special_instructions, status, created_at, updated_at, product_variant_id, unit_cost)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+      modifier_selection, special_instructions, status, created_at, updated_at, product_variant_id, unit_cost,
+      original_unit_price, price_override_reason, price_override_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     orderId, lineUid, product.id, product.name, lineSku, unitPrice, quantity,
     itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
@@ -468,7 +510,21 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
     JSON.stringify(line.modifier_selection || null),
     line.special_instructions || null, itemCreatedAt, itemCreatedAt,
     variant ? variant.id : null, unitCost,
+    override ? override.originalUnitPrice : null, override ? override.reason : null, override ? override.approvedBy : null,
   );
+  if (override) {
+    recordAuditEvent({
+      type: 'sale.price_overridden',
+      actor: { userId: ctx.actorUserId ?? null },
+      entity: { type: 'order_item', id: String(insertItemResult.lastInsertRowid) },
+      summary: `${product.name} sold at ${unitPrice} instead of ${override.originalUnitPrice}: ${override.reason}`,
+      metadata: {
+        order_id: Number(orderId), product_id: product.id, quantity,
+        original_unit_price: override.originalUnitPrice, unit_price: unitPrice,
+        reason: override.reason, requested_by: ctx.actorUserId ?? null, approved_by: override.approvedBy,
+      },
+    });
+  }
   insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
 
   if (product.track_inventory) {
@@ -606,7 +662,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     // sale has nothing to aggregate but the lines just inserted, so summing
     // as we go is correct and matches the original inline behaviour exactly.
     for (const line of input.lines) {
-      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId }, line);
+      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId, priceOverrideApprovedBy: input.priceOverrideApprovedBy }, line);
       totalTax += persisted.taxAmount;
       if (persisted.taxType !== 'inclusive') {
         exclusiveTax += persisted.taxAmount;
@@ -712,6 +768,8 @@ export interface AddSaleItemsInput {
   /** For audit attribution only — see the note above `recordAuditEvent` below. Not used for authorization. */
   actorUserId?: string | null;
   idempotency?: SaleIdempotency | null;
+  /** The user who approved any `price_override` on these lines. Route-derived, never client-supplied. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 export interface AddSaleItemsResult {
@@ -822,7 +880,7 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
 
     // Shared line engine — see the module docstring and persistSaleLine above.
     for (const line of input.lines) {
-      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer, actorUserId: input.actorUserId }, line);
+      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer, actorUserId: input.actorUserId, priceOverrideApprovedBy: input.priceOverrideApprovedBy }, line);
     }
 
     // Re-derive totals from every ACTIVE line on the sale, not just the ones

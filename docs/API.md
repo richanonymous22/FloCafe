@@ -367,6 +367,12 @@ Create new order.
 
 ---
 
+**Price override.** A line may carry `"price_override": { "unit_price": 3.00, "reason": "Damaged box" }` (also accepted by `POST /api/orders/:id/items`). It needs the `sales.price_override` permission (owner/manager) or a manager/owner `override_pin` in the request body; otherwise `403` (`requiresApproval: true`). The line is sold at the override price; the catalogue price is kept on the line as `original_unit_price` (with `price_override_reason` / `price_override_by`), the product's own price is never changed, and a `sale.price_overridden` audit event records the original price, new price, reason, requester and approver.
+
+**Cancelling (void).** `PATCH /api/orders/:id/status` with `{"status":"cancelled"}` cancels an unpaid order and returns its stock through the inventory ledger. An order that has taken payment is refused with `409` (`code: "order_has_payments"`) — refund it instead.
+
+---
+
 ### GET `/api/orders/:id`
 Get order details.
 
@@ -492,6 +498,26 @@ Mark bill as paid.
   "amount_tendered": 500
 }
 ```
+
+---
+
+### POST `/api/bills/:id/refund`
+Refund all or part of a paid bill. Owners/managers refund directly; a cashier must send a manager/owner `override_pin`, and the approving user is recorded against the refund. The original sale, bill and payments are never rewritten — a refund only adds records (refund row, payment event, inventory return, cash-drawer movement, ledger entries, audit events).
+
+**Headers:** `Authorization: Bearer <token>`, optional `Idempotency-Key` (a retry with the same key replays the stored result; the same key with a different request is `409`)
+
+**Request:**
+```json
+{ "reason": "Wrong item", "amount": 4.00, "items": [{ "order_item_id": 12, "quantity": 1 }], "override_pin": "2222" }
+```
+`reason` is required. `amount` is optional (omitted = everything still refundable). `items` is optional: listed lines are returned to stock through the inventory ledger (capped at what was sold and not yet returned).
+
+**Response (200):** `bill_id`, `amount_minor`, `refunds[]`, `payments[]`, `fully_refunded`, `refundable_remaining_minor`, `restocked[]`, `cash_drawer_recorded`, `loyalty_points_reversed`, `wallet_points_returned`, `idempotentReplay`.
+
+**Errors:** `400` invalid amount/items, amount above the unrefunded balance, or nothing left to refund · `403` approval required (`requiresApproval: true`) or invalid manager PIN · `404` bill not found · `409` idempotency-key reuse · `429` too many PIN attempts.
+
+### GET `/api/bills/:id/refunds`
+Refund history for a bill and what is still refundable (`refunds`, `payments`, `paid_minor`, `refunded_minor`, `refundable_minor`).
 
 ---
 
@@ -854,6 +880,20 @@ Print a kitchen order ticket for `orderId`. A caller may provide `stationName` a
   "useUnicode": false
 }
 ```
+
+---
+
+### POST `/api/printers/print-bill`
+Sends a bill's receipt to the default printer (this is the route that actually prints; `POST /api/bills/:id/print` only records a print-log entry). Body: `{ "billId": 12, "isReprint": false, "preview": false }`. `200 { success: true }` only when the printer transport accepted the job; `400` no default printer; `404` unknown bill; `502` print failed, with `detail` (the transport's reason, e.g. connection refused), `code`, `stage` and `correlation_id`.
+
+## Held carts
+
+Parked counter carts (not sales — no totals, stock or sync until resumed and rung up). Separate from the table-keyed `/api/held-orders`.
+
+- `POST /api/held-orders/carts` `{ "id": "h_ab12", "label": "Sam", "cart": { "items": [{ "pid": "p1", "qty": 2 }], … } }` — park (or update) a cart; `201` created, `200` updated.
+- `GET /api/held-orders/carts` — `{ carts: [{ id, label, cart, heldBy, heldAt }] }`.
+- `POST /api/held-orders/carts/:id/resume` — returns the cart and removes it in one step (`404` if another till already took it).
+- `DELETE /api/held-orders/carts/:id` — discard.
 
 ---
 

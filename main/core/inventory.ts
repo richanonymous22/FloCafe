@@ -296,6 +296,27 @@ export function recordReturn(input: RecordReturnInput): InventoryMovementRecord 
   });
 }
 
+/**
+ * How much of one sold order line the ledger says was taken out of stock, and
+ * how much of that can still be returned. `sold` is 0 for a line that never
+ * moved tracked stock (an untracked product, or a sale that predates the
+ * ledger) — callers use that to tell "nothing to return" from "already
+ * returned". Same arithmetic `recordReturn` uses for its own cap.
+ */
+export function getOrderItemReturnState(orderItemId: string | number): { sold: number; returnable: number } {
+  const db = getDatabase();
+  const ref = String(orderItemId);
+  const sold = (db.prepare(`
+    SELECT COALESCE(SUM(-quantity_delta), 0) as total FROM inventory_movements
+    WHERE movement_type = 'sale' AND reference_type = 'order_item' AND reference_id = ?
+  `).get(ref) as { total: number }).total;
+  const returned = (db.prepare(`
+    SELECT COALESCE(SUM(quantity_delta), 0) as total FROM inventory_movements
+    WHERE movement_type = 'return' AND json_extract(metadata, '$.soldOrderItemId') = ?
+  `).get(ref) as { total: number }).total;
+  return { sold, returnable: Math.max(0, sold - returned) };
+}
+
 export interface AdjustStockInput extends InventoryKey {
   quantityDelta: number;
   reason: string;

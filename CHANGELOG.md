@@ -2,6 +2,18 @@
 
 All notable changes to Flo Cafe are documented here. Dates are release dates, not commit dates. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- Meridian till actions that only changed the screen are now backed by the authoritative backend: **refund** (new `POST /api/bills/:id/refund`: immutable refund record against the original payment, stock back through the ledger, cash-drawer and loyalty effects, audit, idempotent, manager-PIN approval for cashiers), **void** (cancels the real order; an order that has taken payment is refused with "refund it instead"), **receipt printing** (real dispatch to the configured printer with the real failure reason), **hold/resume** (server-side held carts that survive a reload and can't be resumed twice), and **backup** (the real database backup, owner + Master PIN, instead of exporting browser state).
+- Order cancellation now returns stock through the inventory ledger (it previously bumped only the legacy `products.stock_quantity`, leaving the ledger short) and writes a `sale.voided` audit event.
+- The Devices panel no longer shows hard-coded "Connected" printers, card readers or battery levels; it reports only what the backend knows (configured / test successful / test failed / not configured / not integrated).
+
+### Added
+- Price override: `price_override` on an order line, permission-gated (`sales.price_override`, or a manager PIN), audited, catalogue price preserved on the line (`original_unit_price`), master product price never changed.
+- Barcode scanning in the register (keyboard-wedge scanners) via `GET /api/retail/lookup`.
+- Migration v96 (additive): `order_items.original_unit_price / price_override_reason / price_override_by`, and the `held_carts` table.
+
 ## [3.1.0] - 2026-09-25
 
 ### Added

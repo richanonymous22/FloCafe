@@ -35,7 +35,21 @@
     });
     if (addons.length) item.addons = addons;
     if (line.note) item.special_instructions = line.note;
+    // A price the cashier changed at the till. The backend re-checks the
+    // permission / manager PIN and records the catalogue price beside it; the
+    // client's number is only a request.
+    if (line.override) item.price_override = { unit_price: line.price, reason: line.override.reason };
     return item;
+  }
+
+  // The manager PIN (if any) that approved this cart's price overrides. Kept in
+  // memory only — never in `S`/localStorage — and cleared once the order lands.
+  let overridePin = null;
+  function setOverridePin(pin) { overridePin = pin ? String(pin) : null; }
+  function hasOverride(items) { return (items || []).some((i) => i && i.price_override); }
+  function withApproval(body) {
+    if (overridePin && hasOverride(body.items)) body.override_pin = overridePin;
+    return body;
   }
 
   // Build the full POST /api/orders body from a Meridian cart.
@@ -53,10 +67,21 @@
   async function createOrder(cart, addonIndex) {
     const api = window.PlemmoAPI;
     const idx = addonIndex || (typeof S !== 'undefined' && S && S._plemmoAddons) || {};
-    const body = cartToOrderBody(cart, idx);
+    const body = withApproval(cartToOrderBody(cart, idx));
     if (!body.items.length) throw new Error('The order is empty.');
     const res = await api.post('/orders', body, { idempotent: true, idempotencyKey: cart._idem || api.idempotencyKey() });
+    setOverridePin(null);
     return (res && res.order) || res;
+  }
+
+  // Append lines to an order that already exists on the backend (dine-in).
+  async function addItems(plemmoOrderId, lines, addonIndex) {
+    const api = window.PlemmoAPI;
+    const idx = addonIndex || (typeof S !== 'undefined' && S && S._plemmoAddons) || {};
+    const body = withApproval({ items: lines.map((l) => cartLineToItem(l, idx)) });
+    const res = await api.post('/orders/' + encodeURIComponent(plemmoOrderId) + '/items', body, { idempotent: true });
+    setOverridePin(null);
+    return res;
   }
 
   // Plemmo sale channel → Meridian order type (reverse of orderTypeToChannel).
@@ -73,24 +98,42 @@
   function mapPlemmoOrder(o) {
     const ts = o.created_at ? (Date.parse(o.created_at) || Date.now()) : Date.now();
     const bills = o.bills || (o.bill ? [o.bill] : []);
-    const payments = []; let tip = 0;
+    const payments = []; let tip = 0, paidAmt = 0, refundedAmt = 0;
+    // Payment lines that never took money (voided/failed/declined) are history,
+    // not takings.
+    const DEAD = { voided: 1, cancelled: 1, failed: 1, declined: 1 };
     bills.forEach((b) => {
       parseMaybeJson(b && b.payment_details, []).forEach((p) => {
+        if (p.state && DEAD[p.state]) return;
         payments.push({ m: p.method === 'cash' ? 'cash' : 'card', a: Number(p.amount) || 0 });
         tip += Number(p.tip) || 0;
+        paidAmt += Number(p.amount) || 0;
+        refundedAmt += Number(p.refunded_amount) || 0;
       });
     });
     const paid = bills.some((b) => b && b.payment_status === 'paid') || o.status === 'completed' || o.status === 'paid';
+    refundedAmt = Math.round(refundedAmt * 100) / 100;
+    // A sale is 'refunded' only once everything it took has been refunded; a
+    // partial refund leaves it 'paid' with `refundedAmt` showing how much.
+    const fullyRefunded = paidAmt > 0 && refundedAmt + 0.004 >= paidAmt;
     const status = (o.status === 'cancelled' || o.status === 'void') ? 'void'
-      : o.status === 'refunded' ? 'refunded' : paid ? 'paid' : 'open';
+      : (o.status === 'refunded' || fullyRefunded) ? 'refunded' : paid ? 'paid' : 'open';
     const items = (o.items || []).map((i) => {
       const mods = [];
       parseMaybeJson(i.addons, []).forEach((a) => mods.push({ n: (a && (a.name || a)) || '' }));
-      return { pid: i.product_id, name: i.product_name, price: Number(i.unit_price) || 0, cost: 0,
-        qty: Number(i.quantity) || 0, mods: mods, note: i.special_instructions || '', sent: true, uid: 'l' + i.id };
+      const line = { pid: i.product_id, name: i.product_name, price: Number(i.unit_price) || 0, cost: 0,
+        qty: Number(i.quantity) || 0, mods: mods, note: i.special_instructions || '', sent: true, uid: 'l' + i.id, itemId: i.id };
+      if (i.original_unit_price != null) { line.listPrice = Number(i.original_unit_price); line.override = { reason: i.price_override_reason || '' }; }
+      return line;
     });
+    const updatedTs = o.updated_at ? (Date.parse(o.updated_at.replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(o.updated_at) ? '' : 'Z')) || ts) : ts;
     return {
       id: 'po' + o.id, no: o.order_number || o.id, plemmoOrderId: o.id,
+      plemmoBillIds: bills.map((b) => b && b.id).filter((x) => x != null),
+      plemmoBillId: bills[0] && bills[0].id != null ? bills[0].id : undefined,
+      printed: bills.some((b) => b && b.printed_at),
+      refundedAmt: refundedAmt,
+      refund: status === 'refunded' ? { ts: updatedTs, by: null, reason: '', restock: null } : null,
       ts: ts, opened: ts, empId: o.user_id || null,
       type: CHANNEL_TO_TYPE[o.type] || 'takeaway', table: o.table_id || null, custId: o.customer_id || null,
       source: 'pos', items: items,
@@ -122,6 +165,8 @@
     cartToOrderBody: cartToOrderBody,
     createOrder: createOrder,
     mapPlemmoOrder: mapPlemmoOrder,
+    setOverridePin: setOverridePin,
+    addItems: addItems,
     history: history
   };
 })();

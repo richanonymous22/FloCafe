@@ -201,7 +201,7 @@ function defaultTables(){return[
  ['t7','7',6,'rect','l',5,70],['t8','8',4,'square','m',26,70],
  ['t9','9',4,'round','m',66,8],['t10','10',4,'round','m',82,8],['t11','11',6,'rect','l',66,44],['t12','12',2,'round','s',84,76]
 ].map(([id,name,seats,shape,size,x,y])=>({id,name,seats,shape,size,x,y}));}
-const PERMS=[['pos','Take payments'],['discounts','Give discounts'],['refunds','Refund and void orders'],['kitchen','Use the kitchen display'],['orders','See order history'],['products','Edit items and stock'],['customers','Manage customers'],['cash','Open and close the cash drawer'],['reports','See reports'],['team','Manage the team'],['assistant','Ask the assistant'],['settings','Change settings']];
+const PERMS=[['pos','Take payments'],['discounts','Give discounts'],['refunds','Refund and void orders'],['priceOverride','Change item prices at the till'],['kitchen','Use the kitchen display'],['orders','See order history'],['products','Edit items and stock'],['customers','Manage customers'],['cash','Open and close the cash drawer'],['reports','See reports'],['team','Manage the team'],['assistant','Ask the assistant'],['settings','Change settings']];
 const permLabel=p=>(PERMS.find(x=>x[0]===p)||[p,p])[1];
 function defaultRoles(){const all=PERMS.map(p=>p[0]);return{owner:{label:'Owner',perms:all},manager:{label:'Manager',perms:all.filter(p=>p!=='settings')},staff:{label:'Staff',perms:['pos','kitchen','orders','customers','assistant']}};}
 const ACCENTS={

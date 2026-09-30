@@ -135,6 +135,8 @@ async function bootstrapFromPlemmo() {
   } catch (e) { /* keep the single signed-in operator */ }
   try { if (window.PlemmoCatalogue) await window.PlemmoCatalogue.load(S); } catch (e) { /* offline cache */ }
   try { if (window.PlemmoTables && S.settings.tables) await window.PlemmoTables.load(S); } catch (e) { /* tables optional */ }
+  // Held carts live on the backend; the strip above the menu is a view of them.
+  try { if (window.PlemmoTill) S.held = await window.PlemmoTill.held.list(); } catch (e) { S.held = S.held || []; }
   // Hydrate recent authoritative order history so the home dashboard, reports,
   // Z-report and CSV export compute over real Plemmo data, not just this
   // session's sales. Bounded window; best-effort (offline keeps what we have).

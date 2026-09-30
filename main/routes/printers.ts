@@ -450,7 +450,9 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
     if (result.ok) {
       res.json({ success: true, warnings: result.warnings || [] });
     } else {
-      res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, correlation_id: result.correlationId, stage: result.stage });
+      // `detail` is the printer-level reason (offline, refused, paper out, …) so
+      // the till can tell the operator WHY instead of a generic failure.
+      res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, correlation_id: result.correlationId, stage: result.stage, detail: (result as any).detail, failure_class: (result as any).failureClass });
     }
   } catch (error: any) {
     console.error('[Print Bill] Error:', error);

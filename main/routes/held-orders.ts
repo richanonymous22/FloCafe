@@ -167,6 +167,108 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
   }
 });
 
+// ── Held carts (counter / retail parking) ───────────────────────────────────
+//
+// The routes above park a TABLE's order (one per table). A till also parks
+// ordinary counter carts that have no table and several at once, so those live
+// in `held_carts` (migration v96). A held cart is not a sale: it has no totals,
+// no stock effect and no sync footprint until it is resumed and rung up.
+//
+//   POST   /held-orders/carts               park (or update) a cart, keyed by the client-supplied id
+//   GET    /held-orders/carts               list parked carts
+//   POST   /held-orders/carts/:id/resume    take a cart back — returns it AND removes it in one step,
+//                                           so two terminals can never both resume the same cart
+//   DELETE /held-orders/carts/:id           discard
+const MAX_CART_JSON_BYTES = 200_000;
+const MAX_HELD_CARTS = 200;
+const CART_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function validateHeldCart(cart: unknown): string | null {
+  if (!isRecord(cart)) return 'cart must be an object';
+  if (!Array.isArray(cart.items) || cart.items.length === 0 || cart.items.length > MAX_HELD_ORDER_ITEMS) {
+    return `cart.items must contain between 1 and ${MAX_HELD_ORDER_ITEMS} lines`;
+  }
+  for (const line of cart.items) {
+    if (!isRecord(line)) return 'each cart line must be an object';
+    if (!isValidIdentifier(line.pid)) return 'each cart line needs a product id';
+    if (!Number.isSafeInteger(line.qty) || line.qty <= 0) return 'each cart line needs a positive whole quantity';
+  }
+  return null;
+}
+
+function heldCartShape(row: { id: string; label: string; cart_json: string; created_by: string | null; created_at: string; updated_at: string }) {
+  let cart: unknown = null;
+  try { cart = JSON.parse(row.cart_json); } catch { cart = null; }
+  return { id: row.id, label: row.label, cart, heldBy: row.created_by, heldAt: row.created_at };
+}
+
+router.get('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (_req: Request, res: Response) => {
+  try {
+    const rows = getDatabase().prepare('SELECT * FROM held_carts ORDER BY created_at ASC').all() as any[];
+    res.json({ carts: rows.map(heldCartShape).filter((c) => c.cart) });
+  } catch (error: any) {
+    console.error('[API] Held carts fetch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/carts', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+  try {
+    const { id, label, cart } = req.body || {};
+    if (typeof id !== 'string' || !CART_ID_RE.test(id)) return res.status(400).json({ error: 'id must be 1-64 letters, digits, - or _' });
+    const problem = validateHeldCart(cart);
+    if (problem) return res.status(400).json({ error: problem });
+    const cartJson = JSON.stringify(cart);
+    if (Buffer.byteLength(cartJson) > MAX_CART_JSON_BYTES) return res.status(400).json({ error: 'cart is too large' });
+    const cleanLabel = (typeof label === 'string' && label.trim() ? label.trim() : 'Held order').slice(0, 80);
+    const userId = String((req as any).user?.userId ?? '');
+    const db = getDatabase();
+    const created = withTxn(() => {
+      const existing = db.prepare('SELECT id FROM held_carts WHERE id = ?').get(id);
+      if (existing) {
+        db.prepare('UPDATE held_carts SET label = ?, cart_json = ?, updated_at = ? WHERE id = ?').run(cleanLabel, cartJson, now(), id);
+        return false;
+      }
+      const count = (db.prepare('SELECT COUNT(*) AS n FROM held_carts').get() as { n: number }).n;
+      if (count >= MAX_HELD_CARTS) throw Object.assign(new Error('Too many held orders. Resume or discard some first.'), { statusCode: 409 });
+      db.prepare('INSERT INTO held_carts (id, label, cart_json, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(id, cleanLabel, cartJson, userId || null, now(), now());
+      return true;
+    });
+    res.status(created ? 201 : 200).json({ success: true, id, created });
+  } catch (error: any) {
+    if (error?.statusCode === 409) return res.status(409).json({ error: error.message });
+    console.error('[API] Hold cart error:', error);
+    res.status(500).json({ error: 'Could not hold the order' });
+  }
+});
+
+router.post('/carts/:id/resume', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const row = withTxn(() => {
+      const found = db.prepare('SELECT * FROM held_carts WHERE id = ?').get(req.params.id) as any;
+      if (found) db.prepare('DELETE FROM held_carts WHERE id = ?').run(req.params.id);
+      return found;
+    });
+    if (!row) return res.status(404).json({ error: 'That held order is no longer available' });
+    res.json(heldCartShape(row));
+  } catch (error: any) {
+    console.error('[API] Resume held cart error:', error);
+    res.status(500).json({ error: 'Could not resume the held order' });
+  }
+});
+
+router.delete('/carts/:id', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
+  try {
+    const result = getDatabase().prepare('DELETE FROM held_carts WHERE id = ?').run(req.params.id);
+    res.json({ success: true, deleted: result.changes > 0 });
+  } catch (error: any) {
+    console.error('[API] Discard held cart error:', error);
+    res.status(500).json({ error: 'Could not discard the held order' });
+  }
+});
+
 router.delete('/:tableId', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
   try {
     const tableId = req.params.tableId;

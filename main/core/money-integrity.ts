@@ -102,7 +102,7 @@ export function installMoneyGuards(db: Database.Database): void {
     const cols = existingColumns(db, table, wanted);
     if (!cols.length) continue;
     const dirty = cols
-      .map((c) => `(NEW.${c} IS NOT NULL AND ABS(NEW.${c} * f.v - ROUND(NEW.${c} * f.v)) > 0.000001)`)
+      .map((c) => `(NEW.${c} IS NOT NULL AND NEW.${c} != ROUND(NEW.${c} * f.v) / f.v)`)
       .join(' OR ');
     const setters = cols
       .map((c) => `${c} = CASE WHEN ${c} IS NULL THEN NULL ELSE ROUND(${c} * (${FACTOR_SQL})) / (${FACTOR_SQL}) END`)
@@ -135,7 +135,7 @@ export function repairMoneyColumns(db: Database.Database): number {
     for (const col of existingColumns(db, table, wanted)) {
       changed += db.prepare(
         `UPDATE ${table} SET ${col} = ROUND(${col} * ${factor}) / ${factor}
-         WHERE ${col} IS NOT NULL AND ABS(${col} * ${factor} - ROUND(${col} * ${factor})) > 0.000001`,
+         WHERE ${col} IS NOT NULL AND ${col} != ROUND(${col} * ${factor}) / ${factor}`,
       ).run().changes;
     }
   }
@@ -165,7 +165,7 @@ export function scanMoneyIntegrity(db: Database.Database, limit = 50): MoneyViol
     for (const col of existingColumns(db, table, wanted)) {
       const rows = db.prepare(
         `SELECT rowid AS rid, ${col} AS v FROM ${table}
-         WHERE ${col} IS NOT NULL AND ABS(${col} * ${factor} - ROUND(${col} * ${factor})) > 0.000001 LIMIT ?`,
+         WHERE ${col} IS NOT NULL AND ${col} != ROUND(${col} * ${factor}) / ${factor} LIMIT ?`,
       ).all(limit - out.length) as Array<{ rid: number; v: number }>;
       for (const r of rows) out.push({ table, column: col, rowid: r.rid, value: r.v });
       if (out.length >= limit) return out;

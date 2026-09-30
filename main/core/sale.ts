@@ -75,6 +75,7 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
 import { fromMinor, minorUnitExponent, toMinor } from './money';
+import { currencyExponent, sumMoney } from './money-integrity';
 import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
@@ -648,6 +649,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     );
     const orderId = orderResult.lastInsertRowid;
 
+    const moneyExp = currencyExponent(getSettingValue('currency'));
     let subtotal = 0;
     let totalTax = 0;
     let exclusiveTax = 0;
@@ -663,15 +665,15 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     // as we go is correct and matches the original inline behaviour exactly.
     for (const line of input.lines) {
       const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId, priceOverrideApprovedBy: input.priceOverrideApprovedBy }, line);
-      totalTax += persisted.taxAmount;
+      totalTax = sumMoney([totalTax, persisted.taxAmount], moneyExp);
       if (persisted.taxType !== 'inclusive') {
-        exclusiveTax += persisted.taxAmount;
+        exclusiveTax = sumMoney([exclusiveTax, persisted.taxAmount], moneyExp);
       }
       if (persisted.taxBreakdown) {
         allTaxBreakdowns.push(persisted.taxBreakdown);
       }
       allTaxSnapshots.push(persisted.taxSnapshotJson);
-      subtotal += persisted.subtotal;
+      subtotal = sumMoney([subtotal, persisted.subtotal], moneyExp);
     }
 
     const chargeTaxes = calculateConfiguredChargeTaxes(tenantInfo, chargeContext, customer);
@@ -683,8 +685,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       itemTaxRatio: 1,
       chargeTaxes,
     });
-    const preRoundTotal = subtotal + taxRollup.exclusiveTaxAmount + deliveryCharge + packagingCharge;
-    const total = Number(preRoundTotal.toFixed(2));
+    const total = sumMoney([subtotal, taxRollup.exclusiveTaxAmount, deliveryCharge, packagingCharge], moneyExp);
     // Payable rounding is applied at bill generation, not here — an order total
     // and its bill total can legitimately differ by that adjustment (B5).
     const roundOff = 0;
@@ -887,16 +888,17 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
     // just inserted — the sale may already have items, and some may have
     // been cancelled since. (Inherited as "BUG #3 FIX".)
     const activeItems = db.prepare("SELECT * FROM order_items WHERE order_id = ? AND status != 'cancelled'").all(input.saleId) as any[];
+    const moneyExp = currencyExponent(getSettingValue('currency'));
     let subtotal = 0;
     let totalTax = 0;
     let exclusiveTax = 0;
     const allTaxBreakdowns: any[] = [];
     const allTaxSnapshots: (string | null)[] = [];
     for (const item of activeItems) {
-      subtotal += item.subtotal;
-      totalTax += item.tax_amount;
+      subtotal = sumMoney([subtotal, item.subtotal], moneyExp);
+      totalTax = sumMoney([totalTax, item.tax_amount], moneyExp);
       if (item.tax_type !== 'inclusive') {
-        exclusiveTax += item.tax_amount;
+        exclusiveTax = sumMoney([exclusiveTax, item.tax_amount], moneyExp);
       }
       if (item.tax_breakdown) {
         try {
@@ -919,7 +921,7 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
       // amount type: keep the same value
     }
 
-    const discountedSubtotal = Math.max(0, subtotal - newDiscountAmount);
+    const discountedSubtotal = Math.max(0, sumMoney([subtotal, -newDiscountAmount], moneyExp));
     let newTaxAmount = totalTax;
     let newExclusiveTax = exclusiveTax;
     let taxRatio = 1;
@@ -941,9 +943,8 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
       itemTaxRatio: taxRatio,
       chargeTaxes,
     });
-    const preRoundTotal = discountedSubtotal + taxRollup.exclusiveTaxAmount
-      + (currentOrder.delivery_charge || 0) + (currentOrder.packaging_charge || 0);
-    const total = Number(preRoundTotal.toFixed(2));
+    const total = sumMoney([discountedSubtotal, taxRollup.exclusiveTaxAmount,
+      currentOrder.delivery_charge || 0, currentOrder.packaging_charge || 0], moneyExp);
     const roundOff = 0;
 
     if (input.specialInstructions !== undefined) {
@@ -962,7 +963,7 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
     if (existingBill) {
       const pack = getActiveCountryPack(tenantInfo.country);
       const { total: billTotal, adjustment: billRoundOff } = applyPayableRounding(total, pack);
-      const newBillBalance = Math.max(0, billTotal - (existingBill.paid_amount || 0));
+      const newBillBalance = Math.max(0, sumMoney([billTotal, -(existingBill.paid_amount || 0)], moneyExp));
       db.prepare(`UPDATE bills SET total = ?, balance = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, round_off = ?, updated_at = ? WHERE id = ?`)
         .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
     }

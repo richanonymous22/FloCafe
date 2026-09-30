@@ -175,6 +175,7 @@ async function run() {
 
     // correct manager PIN: real refund
     resetApprovalRateLimits(); C.clearToasts();
+    await waitFor(() => !C.doc.querySelector('.modal'), 4000, 'previous dialogs closed'); // never start while one is still closing
     C.click('refund', { id: s1.local.id });
     await C.pin('2222');
     await waitFor(() => !!C.doc.getElementById('rfGo'), 4000, 'refund modal');
@@ -200,6 +201,7 @@ async function run() {
     ok((await http(mgrTok, 'POST', `/bills/${s2.billId}/refund`, { reason: 'Refunded at another till' })).status === 200, 'another till refunded the sale');
     ok(C.M().S.orders.find((o: any) => o.id === s2.local.id).status === 'paid', 'this till still believes it is paid (stale)');
     resetApprovalRateLimits(); C.clearToasts();
+    await waitFor(() => !C.doc.querySelector('.modal'), 4000, 'previous dialogs closed');
     C.click('refund', { id: s2.local.id }); await C.pin('2222');
     await waitFor(() => !!C.doc.getElementById('rfGo'), 4000, 'refund modal (stale)');
     C.clickEl('#rfGo');

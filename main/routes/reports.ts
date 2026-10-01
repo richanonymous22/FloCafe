@@ -7,6 +7,10 @@ import { aggregateTaxComponents } from '../services/tax-components';
 import { fromMinor, minorUnitExponent } from '../core/money';
 import { ReportError, buildXReport, generateZReport, getZReport, listZReports, verifyZReport } from '../core/trading-report';
 import { getCurrentLocationId } from '../core/location';
+import { printTextLinesDetailed } from '../printers/thermal';
+import { formatTradingReport } from '../printers/report-format';
+import { getCountryByCode, getCurrencySymbol } from '../countries';
+import type { TradingSnapshot } from '../core/trading-report';
 
 function fromMinorAmount(amountMinor: number, currency: string): number {
   return fromMinor(amountMinor, minorUnitExponent(currency));
@@ -48,6 +52,33 @@ router.post('/z', requirePermission('reports.z'), (req: Request, res: Response) 
 
 router.get('/z', requirePermission('reports.view'), (req: Request, res: Response) => {
   try { res.json({ reports: listZReports(getCurrentLocationId(), Number(req.query.limit) || 60) }); } catch (e) { reportFailure(e, res); }
+});
+
+// Print an X or Z report on the default receipt printer. A Z that was already closed prints again as a REPRINT
+// of the stored figures (it is never recomputed).
+async function printReport(snapshot: TradingSnapshot, number: number | undefined, generatedAt: string | undefined, digest: string | undefined, reprint: boolean, userId: string, res: Response): Promise<void> {
+  const country = getSettingValue('country') || '';
+  const currency = (getSettingValue('currency') || snapshot.currency || 'GBP').toUpperCase();
+  const symbol = getCurrencySymbol(currency, getCountryByCode(country)?.locale) || currency;
+  const taxName = getCountryByCode(country)?.taxName || 'Tax';
+  const result = await printTextLinesDetailed((cols, prefix) => formatTradingReport(snapshot, {
+    businessName: getSettingValue('business_name') || '', address: getSettingValue('business_address') || '', taxName,
+    taxNumber: getSettingValue('tax_registration_number') || '', prefix: prefix(symbol).trim(), number, generatedAt, digest, reprint, printedBy: userId,
+  }, cols));
+  if (result.ok) { res.json({ success: true, warnings: result.warnings || [] }); return; }
+  res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, detail: result.detail, failure_class: result.failureClass });
+}
+
+router.post('/x/print', requirePermission('reports.view'), async (req: Request, res: Response) => {
+  try { await printReport(buildXReport(getCurrentLocationId()), undefined, undefined, undefined, false, String((req as any).user.userId), res); } catch (e) { reportFailure(e, res); }
+});
+
+router.post('/z/:id/print', requirePermission('reports.view'), async (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) { res.status(404).json({ error: 'Z report not found' }); return; }
+    await printReport(record.snapshot, record.number, record.generated_at, record.digest, req.body?.reprint === true, String((req as any).user.userId), res);
+  } catch (e) { reportFailure(e, res); }
 });
 
 router.get('/z/:id', requirePermission('reports.view'), (req: Request, res: Response) => {

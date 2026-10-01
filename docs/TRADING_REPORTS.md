@@ -33,6 +33,16 @@ Server-side, from the authoritative ledgers, in integer minor units. Code: `main
 | Cash | Drawer movements in the period (sales, refunds, pay in/out, drops, tips), float of sessions opened, and counted / expected / variance of sessions closed. |
 | Checks | `tenders_equal_bills`, `vat_equals_bills`, `gross_by_rate_equals_bills`, `cash_tenders_equal_drawer`, and `open_cash_session`. A Z that fails a check is still stored (it is a true record) but the failure is visible. |
 
+## Printing
+
+`POST /api/reports/x/print` and `POST /api/reports/z/:id/print` (owner/manager) send the report to the default receipt
+printer using the printer's own column count and cut mode (`main/printers/report-format.ts`). A Z is never recomputed to
+print: it prints from the stored snapshot, and a later print with `{"reprint": true}` is marked `*** REPRINT ***`. Failures
+come back as `502` with the printer's own reason (`detail`, `failure_class`), exactly like receipts.
+
+Currency on paper follows the printer's character set: in plain-text mode `£` is printed as `GBP` (the same rule receipts
+use). Printing a true `£` depends on the printer's code page and is part of the hardware test matrix.
+
 ## Why the period boundary is inclusive and Z waits a second
 
 Timestamps have one-second resolution. The period end is inclusive and `POST /z` waits out the current second before it

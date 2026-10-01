@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { printViaNetwork, printViaUSB, buildTestPage, printReceiptDetailed, printKOTDetailed, detectConnectedPrinters, prepareReceipt, escPosToText } from '../printers/thermal';
 import { getSupportedPrinterProfiles, resolvePrinterProfile } from '../printers/profiles';
 import { requireRole } from '../middleware/security';
+import { getCountryByCode, getCurrencySymbol } from '../countries';
 
 const router = Router();
 
@@ -403,7 +404,8 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
       address: settings.business_address || '',
       phone: settings.business_phone || '',
       taxRegistrationNumber: settings.tax_registration_number || '',
-      currency_symbol: settings.currency_symbol || '₹',
+      // The symbol follows the business currency; a stored symbol (or the legacy rupee default) is only a fallback.
+      currency_symbol: (settings.currency ? getCurrencySymbol(settings.currency, getCountryByCode(settings.country || '')?.locale) : '') || settings.currency_symbol || '₹',
       country: settings.country || 'IN',
       instagram_handle: settings.instagram_handle || '',
       customer_name: customer?.name || '',

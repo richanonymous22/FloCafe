@@ -178,6 +178,44 @@ async function run() {
     const zNo = await as(T.mgr)(request(base).get('/api/reports/z/does-not-exist'));
     ok(zNo.status === 404, 'an unknown Z id is a 404');
 
+    console.log('\n7. printing X and Z on the thermal printer');
+    const net = require('node:net');
+    const received: Buffer[] = [];
+    const fake = await new Promise<{ server: any; port: number }>((resolve) => {
+      const server = net.createServer((sock: any) => { sock.on('data', (d: Buffer) => received.push(d)); sock.on('error', () => {}); });
+      server.listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as any).port }));
+    });
+    const { escPosToText } = require('../main/printers/thermal');
+    const noPrinter = await as(T.mgr)(request(base).post(`/api/reports/z/${Z.id}/print`)).send({});
+    ok(noPrinter.status === 502 && /No printer configured/.test(noPrinter.body.detail || ''), 'with no printer set up the print fails with the real reason');
+    const added = await as(T.own)(request(base).post('/api/printers')).send({ name: 'Till 80', connection_type: 'network', ip_address: '127.0.0.1', port: fake.port, paper_width: '80mm' });
+    ok(added.status === 201 || added.status === 200, 'a network printer is added');
+    const textOf = () => escPosToText(Buffer.concat(received));
+    received.length = 0;
+    const pz = await as(T.mgr)(request(base).post(`/api/reports/z/${Z.id}/print`)).send({});
+    ok(pz.status === 200 && pz.body.success === true, 'the Z report prints');
+    await new Promise((r) => setTimeout(r, 150));
+    let out = textOf();
+    ok(/Z REPORT 0001/.test(out) && /Net sales/.test(out) && /50\.60/.test(out), 'the printed Z carries its number and the net sales 50.60');
+    ok(/VAT 20%/.test(out) && /VAT due/.test(out) && /4\.00/.test(out), 'VAT by rate and VAT due (4.00) are on the paper');
+    ok(/Seal [0-9a-f]{16}/.test(out), 'it carries the seal');
+    ok(!/REPRINT/.test(out), 'the first print is not a reprint');
+    ok(!/₹/.test(out), 'no rupee sign');
+    received.length = 0;
+    await as(T.mgr)(request(base).post(`/api/reports/z/${Z.id}/print`)).send({ reprint: true });
+    await new Promise((r) => setTimeout(r, 150));
+    out = textOf();
+    ok(/REPRINT/.test(out) && /Z REPORT 0001/.test(out), 'a later print is marked REPRINT and shows the same stored figures');
+    received.length = 0;
+    const px = await as(T.mgr)(request(base).post('/api/reports/x/print')).send({});
+    await new Promise((r) => setTimeout(r, 150));
+    ok(px.status === 200 && /X REPORT/.test(textOf()) && /Not closed/.test(textOf()), 'an X report prints and says it is not closed');
+    const pc = await as(T.cash)(request(base).post(`/api/reports/z/${Z.id}/print`)).send({});
+    ok(pc.status === 403, 'a cashier cannot print reports');
+    const missing = await as(T.mgr)(request(base).post('/api/reports/z/nope/print')).send({});
+    ok(missing.status === 404, 'printing an unknown Z is a 404');
+    fake.server.close();
+
     console.log(`\n✅ Trading reports passed (${passed} checks)`);
   } finally {
     stopServer();

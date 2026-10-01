@@ -105,7 +105,7 @@
     bills.forEach((b) => {
       parseMaybeJson(b && b.payment_details, []).forEach((p) => {
         if (p.state && DEAD[p.state]) return;
-        payments.push({ m: p.method === 'cash' ? 'cash' : 'card', a: Number(p.amount) || 0 });
+        payments.push({ m: p.method === 'cash' ? 'cash' : p.method === 'wallet' ? 'wallet' : 'card', a: Number(p.amount) || 0 });
         tip += Number(p.tip) || 0;
         paidAmt += Number(p.amount) || 0;
         refundedAmt += Number(p.refunded_amount) || 0;

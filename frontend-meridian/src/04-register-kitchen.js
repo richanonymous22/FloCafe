@@ -68,7 +68,9 @@ function gridHTML(){
 function cartHTML(){
   const c=U.cart,t=cartTotals(),cu=c.custId?cust(c.custId):null,o=c.orderId?orderOf(c.orderId):null,tb=c.table?tableOf(c.table):null;
   const hosp=hospitality(),L=S.settings.loyalty;
-  const canRedeem=cu&&L.on&&cu.points>=L.redeemPts&&!(c.discount&&c.discount.pts);
+  // With the till server connected, points are the server's cashback wallet and are spent as a
+  // payment (Wallet tender), not as a locally calculated discount.
+  const canRedeem=cu&&L.on&&cu.points>=L.redeemPts&&!(c.discount&&c.discount.pts)&&!live();
   const lines=c.items.map(lineHTML).join('');
   return`<div class="tape-head">
     <div class="th-row"><div class="th-title"><b>${o?'Order '+o.no:'New order'}</b><span>${typeLabel(c.type)}${tb?`, table ${esc(tb.name)}`:''}${c.items.length?`, ${t.count} item${t.count===1?'':'s'}`:''}</span></div>
@@ -593,9 +595,15 @@ async function ensurePlemmoBill(p){
   }
   return sv;
 }
+// The wallet balance is the server's: re-read it before offering it and after a sale changed it.
+async function refreshWallet(custId){
+  if(!custId)return;
+  try{const w=await PlemmoAPI.get('/customers/'+encodeURIComponent(custId)+'/wallet');const cu=cust(custId);if(cu&&w&&w.balance!=null)cu.points=Number(w.balance)||0;}catch(e){/* keep the last known balance */}
+}
 async function preparePlemmoSale(p){
   try{
     await ensurePlemmoBill(p);
+    await refreshWallet(U.cart.custId);
     if(PAY!==p||(p.L&&p.L.closed)){releasePreparedSale(p);return;}
     p.due=Number(p.saved.bill.total);p.stage='idle';renderPay();
   }catch(e){
@@ -640,6 +648,10 @@ function renderPay(){
       pane=`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>Take ${money(amt)} on your card terminal, then confirm the result here. The till does not talk to the terminal yet, so this is recorded as an unverified card payment.</small></div>
         <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Take ${money(amt)} by card</button>`;
     }
+  }else if(PAY.method==='wallet'){
+    const use=Math.min(walletMinor(),Math.round(rem*100));
+    pane=`<div class="reader idle"><div class="rd-ic">${ic('star',30)}</div><b>Wallet balance ${money(walletMinor()/100)}</b><small>${esc(cust(U.cart.custId).name)}’s cashback. Spending it takes it off their wallet straight away.</small></div>
+      <button class="btn btn-primary btn-lg btn-block" data-act="payWallet" ${use>0?'':'disabled'}>Use ${money(use/100)} from the wallet</button>`;
   }else if(PAY.method==='cash'){
     const ten=+PAY.tendered||0,ch=r2(ten-rem);
     pane=`<div class="tender num" aria-live="polite">${PAY.tendered?S.settings.currency+PAY.tendered:`<span class="faint">${money(rem)}</span>`}</div>
@@ -657,14 +669,14 @@ function renderPay(){
   }
   $('#payBody').innerHTML=`<div class="pay">
    <div class="pay-sum">
-    <div><span class="muted" style="font-weight:600">${paidAny?'Left to pay':'Amount due'}</span><div class="pay-big num">${money(rem)}</div><p class="pay-sub">Order ${money(PAY.due)}${PAY.tip?`, tip ${money(PAY.tip)}`:''}${U.cart.custId?`, ${esc(first(cust(U.cart.custId).name))} earns ${Math.floor(PAY.due*S.settings.loyalty.earn)} points`:''}</p></div>
+    <div><span class="muted" style="font-weight:600">${paidAny?'Left to pay':'Amount due'}</span><div class="pay-big num">${money(rem)}</div><p class="pay-sub">Order ${money(PAY.due)}${PAY.tip?`, tip ${money(PAY.tip)}`:''}${U.cart.custId&&!PAY.remote?`, ${esc(first(cust(U.cart.custId).name))} earns ${Math.floor(PAY.due*S.settings.loyalty.earn)} points`:''}</p></div>
     ${tips?`<div class="field"><span>Tip</span><div class="chips">${tipBtns}</div></div>`:''}
-    ${paidAny?`<div class="pay-taken">${PAY.payments.map(p=>`<div><span>${p.m==='cash'?'Cash':'Card'}</span><span class="num">${money(p.a)}</span></div>`).join('')}</div>`:''}
+    ${paidAny?`<div class="pay-taken">${PAY.payments.map(p=>`<div><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Wallet':'Card'}</span><span class="num">${money(p.a)}</span></div>`).join('')}</div>`:''}
     <div class="spacer"></div>
     <button class="btn btn-ghost" data-act="payCancel" ${PAY.stage==='wait'?'disabled':''}>${paidAny?'Cancel remaining payment':'Back to the order'}</button>
    </div>
    <div class="pay-pane">
-    <div class="seg">${[['card','Card','card'],['cash','Cash','cash'],['split','Split','split']].map(([k,l,i])=>`<button class="${PAY.method===k?'on':''}" data-act="payMethod" data-m="${k}" ${PAY.stage!=='idle'?'disabled':''}>${ic(i,16)}${l}</button>`).join('')}</div>
+    <div class="seg">${[['card','Card','card'],['cash','Cash','cash'],...(walletMinor()>0?[['wallet','Wallet','star']]:[]),['split','Split','split']].map(([k,l,i])=>`<button class="${PAY.method===k?'on':''}" data-act="payMethod" data-m="${k}" ${PAY.stage!=='idle'?'disabled':''}>${ic(i,16)}${l}</button>`).join('')}</div>
     ${pane}
    </div></div>`;
   if(PAY.method!=='card')bindPad($('#payBody'),payKey);
@@ -676,6 +688,18 @@ function payKey(k){
   else if(/^\d$/.test(k)){if(v.includes('.')&&v.split('.')[1].length>=2)return;if(v.replace('.','').length>=7)return;v=v==='0'?k:v+k;}
   PAY[f]=v;renderPay();
 }
+// The cashback wallet is held by the till server in points; 1 point is 1 minor unit (1p), and the
+// server refuses a wallet payment above the real balance. Only offered for a server-backed sale.
+function walletMinor(){
+  if(!PAY||!PAY.remote||!U.cart.custId)return 0;
+  const c=cust(U.cart.custId);return c?Math.max(0,Math.floor(Number(c.points)||0)):0;
+}
+A.payWallet=()=>{
+  const rem=payRem(),use=Math.min(walletMinor(),Math.round(rem*100));
+  if(use<=0)return;
+  PAY.payments.push({m:'wallet',a:r2(use/100)});
+  afterPayment();
+};
 A.payMethod=d=>{PAY.method=d.m;PAY.splitMode=d.m==='split';if(d.m!=='split')PAY.splitAmt='';renderPay();};
 A.payTip=d=>{PAY.tipPct=+d.p;PAY.tipCustom=false;PAY.tip=r2(PAY.due*PAY.tipPct/100);renderPay();};
 A.payTipCustom=async()=>{const v=await promptBox({title:'Add a tip',label:'Tip amount',value:PAY.tip||'',type:'number',ok:'Add tip'});if(v===null)return;PAY.tip=Math.max(0,r2(+v||0));PAY.tipCustom=true;PAY.tipPct=-1;renderPay();};
@@ -743,6 +767,14 @@ function finishSale(){
     const msg=(e&&e.data&&e.data.requiresApproval)?'The manager approval for a price change wasn’t accepted. Change the price again with a manager PIN.'
       :(e&&e.status===403)?'You don’t have permission to take payment'
       :(e&&e.status===409&&/transaction_id/i.test(String((e.data&&e.data.error)||e.message||'')))?'That terminal reference was already used on another sale. Check the number on the terminal receipt.':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+    // The server refused the wallet part (balance changed since it was read): take the wallet
+    // line back out so the cashier can pick another way to pay, rather than looping on "Save".
+    const errText=String((e&&e.data&&e.data.error)||(e&&e.message)||'');
+    if(e&&e.status===400&&/wallet/i.test(errText)&&PAY){
+      PAY.payments=PAY.payments.filter(p=>p.m!=='wallet');PAY.payKeyFor=null;
+      refreshWallet(U.cart.custId).then(()=>{if(PAY){PAY.stage='idle';renderPay();}});
+      toast(`The wallet payment was refused: ${errText}`,'warn');return;
+    }
     toast(msg,'warn');
     if(PAY){PAY.stage='idle';renderPay();}
   });return;}
@@ -757,7 +789,7 @@ async function finishSalePlemmo(){
   const plemmoOrderId=sv.orderId,orderResp=sv.orderResp||null,bill=sv.bill;
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
-    const line={method:p.m==='card'?'card':'cash',amount:r2(p.a)};
+    const line={method:p.m==='card'?'card':p.m==='wallet'?'wallet':'cash',amount:r2(p.a)};
     if(i===0&&PAY.tip)line.tip=r2(PAY.tip);
     if(p.m==='card'&&p.ref)line.transaction_id=p.ref;
     if(p.m==='cash'&&i===PAY.payments.length-1&&PAY.change)line.tendered=r2(p.a+PAY.change);
@@ -767,7 +799,8 @@ async function finishSalePlemmo(){
   // changed lines (e.g. a corrected terminal reference) -> a fresh key.
   const sig=JSON.stringify(lines);
   if(PAY.payKeyFor!==sig){PAY.payKeyFor=sig;PAY.payKey=PlemmoAPI.idempotencyKey();}
-  await PlemmoPayments.paySplit(bill.id,lines,c.custId,PAY.payKey);
+  const payRes=await PlemmoPayments.paySplit(bill.id,lines,c.custId,PAY.payKey);
+  await refreshWallet(c.custId);
   // 4. Build/patch the local display order from the AUTHORITATIVE bill (receipt
   // + history cache). No local stock/loyalty mutation — Plemmo already did both.
   const o=existing||{id:uid('o'),opened:Date.now(),source:'pos'};
@@ -776,7 +809,7 @@ async function finishSalePlemmo(){
     items:c.items.map(l=>({...l,sent:true})),
     subtotal:Number(bill.subtotal)||cartTotals(c).subtotal,tax:Number(bill.tax_amount)||0,
     discAmt:Number(bill.discount_amount)||0,total:Number(bill.total)||0,
-    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:0,discount:c.discount||null});
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||null});
   if(!existing)S.orders.push(o);
   const change=PAY.change||0;
   PAY.done=true;PAY.L.close();PAY=null;
@@ -831,7 +864,7 @@ function receiptHTML(o,{cls=''}={}){
    <div class="kv b"><span>Total</span><span>${money(o.total)}</span></div>
    ${o.tip?`<div class="kv"><span>Tip, thank you</span><span>${money(o.tip)}</span></div><div class="kv b"><span>Paid</span><span>${money(grand)}</span></div>`:''}
    <div class="rule"></div>
-   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':'Card, contactless'}</span><span>${money(p.a)}</span></div>`).join('')}
+   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Loyalty wallet':'Card'}</span><span>${money(p.a)}</span></div>`).join('')}
    ${o.status==='refunded'?`<div class="rule"></div><div class="kv b"><span>REFUNDED</span><span>${fmtT(o.refund.ts)}</span></div>`:''}
    ${o.status!=='refunded'&&o.refundedAmt>0?`<div class="rule"></div><div class="kv b"><span>Part refunded</span><span>−${money(o.refundedAmt)}</span></div>`:''}
    ${o.status==='void'?`<div class="rule"></div><div class="kv b"><span>VOIDED</span></div>`:''}

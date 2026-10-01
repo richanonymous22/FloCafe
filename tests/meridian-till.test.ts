@@ -203,10 +203,8 @@ async function run() {
     resetApprovalRateLimits(); C.clearToasts();
     await waitFor(() => !C.doc.querySelector('.modal'), 4000, 'previous dialogs closed');
     C.click('refund', { id: s2.local.id }); await C.pin('2222');
-    await waitFor(() => !!C.doc.getElementById('rfGo'), 4000, 'refund modal (stale)');
-    C.clickEl('#rfGo');
-    await waitFor(() => /not refunded/.test(C.toasts()), 6000, 'failure toast');
-    ok(/Nothing left to refund/.test(C.toasts()), 'the backend reason is shown, not a fake success');
+    await waitFor(() => /Nothing left to refund/.test(C.toasts()), 6000, 'nothing-left toast');
+    ok(!C.doc.getElementById('rfGo'), 'no refund dialog is opened for a sale the server says is already fully refunded (checked before asking)');
     await waitFor(() => C.M().S.orders.find((o: any) => o.id === s2.local.id).status === 'refunded', 6000, 'cache corrected from the backend');
     ok((db.prepare(`SELECT COUNT(*) n FROM refunds WHERE bill_id=?`).get(s2.billId) as any).n === 1, 'no second refund was created');
 

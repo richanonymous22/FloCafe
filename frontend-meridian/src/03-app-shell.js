@@ -24,7 +24,7 @@ function tierOf(c){const sp=c.spend||0;return sp>=300?{k:'gold',name:'Gold'}:sp>
 const tierBadge=c=>{const t=tierOf(c);return`<span class="tier ${t.k}">${t.name}</span>`;};
 const typeLabel=t=>({takeaway:'Takeaway',dine:'Dine in',delivery:'Delivery',instore:'In store'})[t]||t;
 const typeIcon=t=>({takeaway:'bag',dine:'dine',delivery:'truck',instore:'bag'})[t]||'bag';
-const payLabel=o=>{if(o.status==='open')return'Unpaid';const ms=[...new Set(o.payments.map(p=>p.m))];return ms.length>1?'Split':ms[0]==='cash'?'Cash':'Card';};
+const payLabel=o=>{if(o.status==='open')return'Unpaid';const ms=[...new Set(o.payments.map(p=>p.m))];return ms.length>1?'Split':ms[0]==='cash'?'Cash':ms[0]==='wallet'?'Wallet':'Card';};
 function hospitality(){return S.settings.type!=='retail';}
 
 /* ---------- Toasts & tooltips ---------- */

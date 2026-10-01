@@ -9,7 +9,7 @@ function stats(a,b){
   const gross=sum(paid,o=>o.total),tax=sum(paid,o=>o.tax),net=gross-tax,cost=sum(paid,o=>sum(o.items,l=>(l.cost||0)*l.qty));
   const pm=m=>sum(paid,o=>sum(o.payments.filter(p=>p.m===m),p=>p.a));
   return{paid,count:paid.length,gross,tax,net,cost,profit:net-cost,margin:net?(net-cost)/net:0,tips:sum(paid,o=>o.tip||0),disc:sum(paid,o=>o.discAmt||0),
-    refunds:sum(ref,o=>o.total),refCount:ref.length,avg:paid.length?gross/paid.length:0,items:sum(paid,o=>sum(o.items,l=>l.qty)),card:pm('card'),cash:pm('cash'),members:paid.filter(o=>o.custId).length};
+    refunds:sum(ref,o=>o.total),refCount:ref.length,avg:paid.length?gross/paid.length:0,items:sum(paid,o=>sum(o.items,l=>l.qty)),card:pm('card'),cash:pm('cash'),wallet:pm('wallet'),members:paid.filter(o=>o.custId).length};
 }
 function itemStatsFrom(orders){
   const m={};

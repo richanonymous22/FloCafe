@@ -98,7 +98,7 @@ PLEMMO_CLOUD_DB_URL=postgres://... npm run test:pg-sync   # needs a PostgreSQL
 5. **Real-device testing** of printers, scanners, drawers, tablets and the Windows installer; a **pilot merchant** (WP12).
 6. **Product decisions still open**: a Supervisor role (needs a `users` table rebuild migration), offers/promotions,
    stock transfers screen, low-stock alert list,
-   product CSV import screen.
+   (product CSV import is now in Items & stock → Items file).
 
 ## 7. Known limits
 

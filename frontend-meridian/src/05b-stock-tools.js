@@ -27,6 +27,7 @@ function stockToolsBody(tab){
   if(tab==='value')return valueBody();
   if(tab==='sup')return suppliersBody();
   if(tab==='po')return purchasesBody();
+  if(tab==='menu')return menuFileBody();
   return importBody();
 }
 
@@ -172,6 +173,41 @@ A.impApply=async()=>{
     if(window.PlemmoCatalogue&&PlemmoCatalogue.load)try{await PlemmoCatalogue.load(S);}catch(e){/* refreshed on next load */}
     U.st.logKey=0;renderRail();}
   renderView();
+};
+
+/* ---------- Items file: export, template and import of items, categories and option groups ---------- */
+const MENU_KINDS={products:['Items','items'],categories:['Categories','categories'],addons:['Option groups','option groups']};
+function menuFileBody(){
+  const m=U.st.mc||{kind:'products',text:'',name:'',result:null,busy:false};U.st.mc=m;
+  const r=m.result;
+  const lines=m.text.trim()?m.text.trim().split(/\r?\n/):[];
+  const res=r?`<div class="panel mt"><div class="panel-h"><h3>Import result</h3></div><div class="panel-b"><div class="strip" style="--n:5">${[['Added',r.created],['Updated',r.updated],['Brought back',r.reactivated],['Skipped',r.skipped],['Problems',r.failed]].map(([l,v])=>`<div><div class="k-l"><span>${l}</span></div><div class="k-v num">${+v||0}</div></div>`).join('')}</div>
+    ${(r.errors||[]).length?`<p class="hint" style="margin-top:12px"><b>Rows that were not imported</b></p><ul class="muted" style="margin:6px 0 0 18px">${r.errors.slice(0,25).map(e=>`<li>${stEsc(e)}</li>`).join('')}</ul>${r.errors.length>25?`<p class="hint">…and ${r.errors.length-25} more</p>`:''}`:''}</div></div>`:'';
+  return`<div class="panel"><div class="panel-b"><p class="muted" style="margin-top:0">Move ${MENU_KINDS[m.kind][1]} in and out as a spreadsheet file (CSV). Start from the template, fill it in, then import. Rows that match something you already have are updated or skipped; nothing is deleted.</p>
+    <div class="fgrid"><label class="field"><span>What are you moving?</span><select class="input" data-ch="mcKind">${Object.entries(MENU_KINDS).map(([k,v])=>`<option value="${k}" ${m.kind===k?'selected':''}>${v[0]}</option>`).join('')}</select></label>
+    <div class="field"><span>Download</span><div class="row" style="gap:8px"><button class="btn" data-act="mcExport">${ic('download',14)} Everything now in the till</button><button class="btn" data-act="mcTemplate">${ic('download',14)} Blank template</button></div></div></div>
+    <div class="fgrid"><label class="field"><span>File to import</span><input class="input" type="file" accept=".csv,text/csv" data-ch="mcFile"></label>
+    <label class="field"><span>Or paste the CSV</span><textarea class="input" rows="5" data-in="mcText" placeholder="Paste a CSV here">${stEsc(m.text)}</textarea></label></div>
+    <p class="hint" id="mcHint">${mcHint(m)}</p>
+    <button class="btn btn-primary" data-act="mcImport" ${lines.length>1&&!m.busy?'':'disabled'}>Import ${MENU_KINDS[m.kind][1]}</button></div></div>${res}`;
+}
+function mcHint(m){const l=m.text.trim()?m.text.trim().split(/\r?\n/):[];return l.length?`${l.length-1} row${l.length===2?'':'s'} ready to import${m.name?' from '+stEsc(m.name):''}. First line: <span class="num">${stEsc(l[0].slice(0,120))}</span>`:'';}
+CH.mcKind=v=>{const m=U.st.mc;m.kind=MENU_KINDS[v]?v:'products';m.result=null;renderView();};
+IN.mcText=v=>{const m=U.st.mc;m.text=v;m.name='';m.result=null;const b=document.querySelector('[data-act="mcImport"]');if(b)b.disabled=!(v.trim().split(/\r?\n/).length>1)||m.busy;const hn=document.getElementById('mcHint');if(hn)hn.innerHTML=mcHint(m);};
+CH.mcFile=async(v,el)=>{const f=el.files&&el.files[0];if(!f)return;if(f.size>500000){toast('That file is too large (limit 500 KB). Split it into smaller files.','warn');return;}const m=U.st.mc;m.text=await f.text();m.name=f.name;m.result=null;renderView();};
+A.mcExport=async()=>{const k=U.st.mc.kind;try{offerDownload(`${k}-${new Date().toISOString().slice(0,10)}.csv`,await PlemmoAPI.get('/menu-csv/export/'+k));}catch(e){toast(stErr(e,'The file could not be downloaded'),'warn');}};
+A.mcTemplate=async()=>{const k=U.st.mc.kind;try{offerDownload(`${k}-template.csv`,await PlemmoAPI.get('/menu-csv/template/'+k));}catch(e){toast(stErr(e,'The template could not be downloaded'),'warn');}};
+A.mcImport=async()=>{
+  const m=U.st.mc;if(m.busy||m.text.trim().split(/\r?\n/).length<2)return;
+  if(!await confirmBox({title:`Import ${MENU_KINDS[m.kind][1]}?`,text:'Matching rows are updated or skipped and new ones are added. Nothing is deleted. Take a backup first if you are unsure.',ok:'Import'}))return;
+  m.busy=true;renderView();
+  try{
+    m.result=await PlemmoAPI.post('/menu-csv/import/'+m.kind,{csv:m.text},{idempotent:false});
+    toast(`Imported: ${m.result.created} added, ${m.result.updated} updated${m.result.failed?`, ${m.result.failed} with a problem`:''}`,m.result.failed?'warn':'ok',{ms:5200});
+    if(window.PlemmoCatalogue&&PlemmoCatalogue.load)try{await PlemmoCatalogue.load(S);}catch(e){/* refreshed on next load */}
+    renderRail();
+  }catch(e){toast(stErr(e,'The file could not be imported'),'warn',{ms:6000});}
+  finally{m.busy=false;renderView();}
 };
 
 /* ---------- Suppliers ---------- */

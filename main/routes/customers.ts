@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 import { getDatabase, now, getSettingValue, withTxn } from '../db';
 import { recordAuditEvent } from '../core/audit';
@@ -16,6 +17,16 @@ export function parseCustomer(c: any): any {
 }
 
 const router = Router();
+
+// Customer and wallet routes read/write the customer ledger and are reachable from the LAN: a generous
+// per-client ceiling (far above a till's own traffic) to stop a runaway or hostile client.
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
 
 export function getWalletBalance(customerId: string | number | null): number {
   if (!customerId) return 0;

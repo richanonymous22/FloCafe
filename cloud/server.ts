@@ -19,6 +19,8 @@
  * headers are emitted (this is a device-to-server API, never browser-origin).
  */
 
+import { hashToken } from './enrollment';
+import { CloudMerchant, MerchantStatus, generateMerchantCode, licenceFromPlan, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
@@ -239,6 +241,16 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
   app.post('/sync/v1/enroll', async (req: Request, res: Response) => {
     const { token, device_uid, public_key } = req.body ?? {};
     try {
+      // The licence decides whether another device may join: refuse BEFORE the token is consumed, so a
+      // suspended merchant or a full plan does not burn a good activation token.
+      const claim = typeof token === 'string' ? await store.peekEnrollmentToken(hashToken(token), new Date().toISOString()) : null;
+      if (claim) {
+        const lic = await store.getLicense(claim.organization_uid);
+        if (lic && (lic.status === 'suspended' || lic.status === 'revoked')) return res.status(403).json({ error: 'enrollment_refused', reason: 'license_not_active' });
+        if (lic && lic.device_limit != null && (await store.organizationHealth(claim.organization_uid)).active_devices >= lic.device_limit) {
+          return res.status(403).json({ error: 'enrollment_refused', reason: 'device_limit_reached', device_limit: lic.device_limit });
+        }
+      }
       const enrolled = await enrollWithToken(store, { token, deviceUid: device_uid, publicKey: public_key });
       await store.logSync('enrolled', { deviceUid: enrolled.device_uid, organizationUid: enrolled.organization_uid }, new Date().toISOString());
       res.status(201).json({ enrolled: true, ...enrolled });
@@ -536,6 +548,151 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     if (!(await requireOperator(req, res))) return;
     const health = await store.organizationHealth(req.params.org);
     res.json(health);
+  });
+
+  // ── Commercial layer: plans and merchants (operator API) ─────────────────
+  // A plan is data; a merchant is a customer with a human-readable code. Creating a merchant creates its
+  // organisation and issues a licence derived from the plan, so "new merchant" is one call. Every change is
+  // audited in the sync log.
+  const merchantView = async (m: CloudMerchant) => ({ merchant: m, license: await store.getLicense(m.organization_uid) });
+  async function loadMerchant(req: Request, res: Response): Promise<CloudMerchant | null> {
+    const code = normaliseMerchantCode(String(req.params.code));
+    if (!code) { res.status(400).json({ error: 'invalid_merchant_code' }); return null; }
+    const m = await store.getMerchant(code);
+    if (!m) { res.status(404).json({ error: 'not_found' }); return null; }
+    return m;
+  }
+
+  app.get('/admin/v1/plans', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    res.json({ plans: await store.listPlans() });
+  });
+
+  app.put('/admin/v1/plans/:id', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const { plan, error } = parsePlan(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    if (!plan) return res.status(400).json({ error });
+    const nowIso = new Date().toISOString();
+    await store.upsertPlan(plan, nowIso);
+    await store.logSync('plan_saved', { message: plan.plan_id }, nowIso);
+    res.json({ plan });
+  });
+
+  app.post('/admin/v1/merchants', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const name = typeof b.name === 'string' ? b.name.trim() : '';
+    if (!name || name.length > 120) return res.status(400).json({ error: 'name is required (120 characters at most)' });
+    const email = typeof b.contact_email === 'string' && b.contact_email.trim() ? b.contact_email.trim().slice(0, 200) : null;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'contact_email is not a valid address' });
+    const plan = typeof b.plan_id === 'string' ? await store.getPlan(b.plan_id) : null;
+    if (!plan || !plan.is_active) return res.status(400).json({ error: 'plan_id must name an active plan' });
+    const termDays = b.term_days == null ? undefined : Number(b.term_days);
+    if (termDays !== undefined && (!Number.isInteger(termDays) || termDays < 1 || termDays > 3650)) return res.status(400).json({ error: 'term_days must be a whole number of days' });
+    const nowIso = new Date().toISOString();
+    const merchant: CloudMerchant = {
+      merchant_code: generateMerchantCode(), name, contact_email: email, organization_uid: organizationUidFor(), plan_id: plan.plan_id,
+      status: 'active', notes: typeof b.notes === 'string' ? b.notes.slice(0, 500) : null, created_at: nowIso, updated_at: nowIso,
+    };
+    await store.createMerchant(merchant);
+    await store.upsertLicense(licenceFromPlan(plan, merchant.organization_uid, nowIso, { termDays }), nowIso);
+    await store.logSync('merchant_created', { organizationUid: merchant.organization_uid, message: `${merchant.merchant_code} ${plan.plan_id}` }, nowIso);
+    res.status(201).json(await merchantView(merchant));
+  });
+
+  app.get('/admin/v1/merchants', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
+    const merchants = await store.listMerchants(q || undefined);
+    res.json({ merchants: await Promise.all(merchants.map(async (m) => ({ ...m, license_status: (await store.getLicense(m.organization_uid))?.status ?? null }))) });
+  });
+
+  app.get('/admin/v1/merchants/:code', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    res.json({ ...(await merchantView(m)), health: await store.organizationHealth(m.organization_uid) });
+  });
+
+  app.put('/admin/v1/merchants/:code', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const fields: Partial<CloudMerchant> = {};
+    if (typeof b.name === 'string') { const n = b.name.trim(); if (!n || n.length > 120) return res.status(400).json({ error: 'name must be 1–120 characters' }); fields.name = n; }
+    if (typeof b.contact_email === 'string') { const e = b.contact_email.trim(); if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return res.status(400).json({ error: 'contact_email is not a valid address' }); fields.contact_email = e || null; }
+    if (typeof b.notes === 'string') fields.notes = b.notes.slice(0, 500);
+    const nowIso = new Date().toISOString();
+    const updated = await store.updateMerchant(m.merchant_code, fields, nowIso);
+    await store.logSync('merchant_updated', { organizationUid: m.organization_uid, message: m.merchant_code }, nowIso);
+    res.json(await merchantView(updated as CloudMerchant));
+  });
+
+  // suspend / reactivate / close move the merchant AND its licence together.
+  const transitions: Record<string, { from: MerchantStatus[]; to: MerchantStatus; licence: CloudLicense['status'] }> = {
+    suspend: { from: ['active'], to: 'suspended', licence: 'suspended' },
+    reactivate: { from: ['suspended'], to: 'active', licence: 'active' },
+    close: { from: ['active', 'suspended'], to: 'closed', licence: 'revoked' },
+  };
+  for (const [action, t] of Object.entries(transitions)) {
+    app.post(`/admin/v1/merchants/:code/${action}`, async (req: Request, res: Response) => {
+      if (!(await requireOperator(req, res))) return;
+      const m = await loadMerchant(req, res); if (!m) return;
+      if (!t.from.includes(m.status)) return res.status(409).json({ error: `a ${m.status} merchant cannot be ${action === 'close' ? 'closed' : action + 'd'}`, status: m.status });
+      const nowIso = new Date().toISOString();
+      const lic = await store.getLicense(m.organization_uid);
+      if (lic) await store.upsertLicense({ ...lic, status: t.licence, activated_at: t.licence === 'active' ? (lic.activated_at ?? nowIso) : lic.activated_at, signature: null }, nowIso);
+      const updated = await store.updateMerchant(m.merchant_code, { status: t.to }, nowIso);
+      const reason = typeof (req.body ?? {}).reason === 'string' ? String(req.body.reason).slice(0, 200) : '';
+      await store.logSync(`merchant_${action}`, { organizationUid: m.organization_uid, message: `${m.merchant_code}${reason ? ' ' + reason : ''}` }, nowIso);
+      res.json(await merchantView(updated as CloudMerchant));
+    });
+  }
+
+  // Change plan: the licence is re-derived from the new plan; status, activation and expiry carry over.
+  app.post('/admin/v1/merchants/:code/plan', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    if (m.status === 'closed') return res.status(409).json({ error: 'a closed merchant cannot change plan' });
+    const plan = typeof (req.body ?? {}).plan_id === 'string' ? await store.getPlan(req.body.plan_id) : null;
+    if (!plan || !plan.is_active) return res.status(400).json({ error: 'plan_id must name an active plan' });
+    const nowIso = new Date().toISOString();
+    const lic = await store.getLicense(m.organization_uid);
+    const next = licenceFromPlan(plan, m.organization_uid, lic?.issued_at ?? nowIso, { status: lic?.status ?? 'active', activatedAt: lic?.activated_at ?? nowIso });
+    next.expires_at = lic?.expires_at ?? next.expires_at;
+    await store.upsertLicense(next, nowIso);
+    const updated = await store.updateMerchant(m.merchant_code, { plan_id: plan.plan_id }, nowIso);
+    await store.logSync('merchant_plan_changed', { organizationUid: m.organization_uid, message: `${m.merchant_code} ${m.plan_id}->${plan.plan_id}` }, nowIso);
+    res.json(await merchantView(updated as CloudMerchant));
+  });
+
+  // Renew: extend from the later of now and the current expiry, so renewing early never loses paid time.
+  app.post('/admin/v1/merchants/:code/renew', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    const days = Number((req.body ?? {}).term_days);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) return res.status(400).json({ error: 'term_days must be a whole number of days' });
+    const lic = await store.getLicense(m.organization_uid);
+    if (!lic || m.status === 'closed') return res.status(409).json({ error: 'nothing to renew' });
+    const nowIso = new Date().toISOString();
+    const base = Math.max(Date.now(), lic.expires_at ? Date.parse(lic.expires_at) : 0);
+    const status = lic.status === 'expired' ? 'active' : lic.status;
+    await store.upsertLicense({ ...lic, status, expires_at: new Date(base + days * 86_400_000).toISOString(), signature: null }, nowIso);
+    await store.logSync('merchant_renewed', { organizationUid: m.organization_uid, message: `${m.merchant_code} +${days}d` }, nowIso);
+    res.json(await merchantView(m));
+  });
+
+  app.post('/admin/v1/merchants/:code/activation-tokens', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    if (m.status !== 'active') return res.status(409).json({ error: `a ${m.status} merchant cannot enrol devices` });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const ttlMs = Number.isFinite(Number(b.ttl_seconds)) && Number(b.ttl_seconds) > 0 ? Number(b.ttl_seconds) * 1000 : undefined;
+    const { token } = await issueEnrollmentToken(store, {
+      organizationUid: m.organization_uid, locationUid: typeof b.location_uid === 'string' ? b.location_uid : null,
+      registerUid: typeof b.register_uid === 'string' ? b.register_uid : null, ttlMs,
+    });
+    await store.logSync('activation_token_issued', { organizationUid: m.organization_uid, message: m.merchant_code }, new Date().toISOString());
+    res.status(201).json({ token, merchant_code: m.merchant_code });
   });
 
   return app;

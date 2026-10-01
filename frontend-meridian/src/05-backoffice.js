@@ -497,9 +497,16 @@ VIEWS.settings=()=>{
     <label class="field span2"><span>Address</span><input class="input" data-ch="set" data-k="address" value="${esc(s.address)}"></label>
     <label class="field"><span>Phone</span><input class="input" data-ch="set" data-k="phone" value="${esc(s.phone)}"></label>
     <label class="field"><span>${esc(s.taxName)} registration number</span><input class="input" data-ch="set" data-k="vatNo" value="${esc(s.vatNo)}" placeholder="Shown on receipts"></label>
-    <label class="field"><span>Opens at</span><select class="input" data-ch="set" data-k="openHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h}" ${s.openHour===h?'selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('')}</select></label>
-    <label class="field"><span>Closes at</span><select class="input" data-ch="set" data-k="closeHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h+1}" ${s.closeHour===h+1?'selected':''}>${String(h+1).padStart(2,'0')}:00</option>`).join('')}</select></label>
+    ${live()?'':`<label class="field"><span>Opens at</span><select class="input" data-ch="set" data-k="openHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h}" ${s.openHour===h?'selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('')}</select></label>
+    <label class="field"><span>Closes at</span><select class="input" data-ch="set" data-k="closeHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h+1}" ${s.closeHour===h+1?'selected':''}>${String(h+1).padStart(2,'0')}:00</option>`).join('')}</select></label>`}
    </div></div></div>`;
+  else if(t==='tax'&&live())b=`<div class="grid g-73"><div class="panel"><div class="panel-b"><div class="fgrid">
+    <div class="field span2"><span>Currency</span><div class="muted">${esc(s.currency.trim())} — set when the business was set up</div></div>
+    <div class="span2">${sw(!!s.vatRegistered,'data-ch="set" data-k="vatRegistered" data-t="bool"',`Registered for ${esc(s.taxName)} (charge ${esc(s.taxName)} on sales)`)}</div>
+    <p class="hint span2">${s.vatRegistered?`${esc(s.taxName)} is worked out by the till server for every sale, using the rate you choose on each item (Items → ${esc(s.taxName)} rate). Prices ${s.taxInclusive?'include':'do not include'} ${esc(s.taxName)}.`:`Not registered: no ${esc(s.taxName)} is added to sales. Turn this on once you are registered; your ${esc(s.taxName)} number is on the Business tab.`}</p>
+    <label class="field span2"><span>Receipt message</span><input class="input" data-ch="set" data-k="receiptFooter" value="${esc(s.receiptFooter)}"></label>
+    <div class="span2 row">${sw(s.showTaxLine,'data-ch="set" data-k="showTaxLine" data-t="bool"','Show the tax line on receipts')}</div>
+   </div></div></div><div style="background:var(--sunken);border-radius:var(--r-lg);padding:20px 20px 30px">${receiptHTML(S.orders.filter(o=>o.status==='paid').slice(-1)[0]||{no:S.seq,ts:Date.now(),items:[],subtotal:0,discAmt:0,tax:0,total:0,tip:0,payments:[],status:'paid',type:hospitality()?'takeaway':'instore'})}</div></div>`;
   else if(t==='tax')b=`<div class="grid g-73"><div class="panel"><div class="panel-b"><div class="fgrid">
     <label class="field span2"><span>Currency</span><select class="input" data-ch="set" data-k="currency">${CURRENCIES.map(([v,l])=>`<option value="${esc(v)}" ${s.currency===v?'selected':''}>${l}</option>`).join('')}</select></label>
     <label class="field"><span>Tax name</span><input class="input" data-ch="set" data-k="taxName" value="${esc(s.taxName)}"></label>
@@ -508,15 +515,18 @@ VIEWS.settings=()=>{
     <label class="field span2"><span>Receipt message</span><input class="input" data-ch="set" data-k="receiptFooter" value="${esc(s.receiptFooter)}"></label>
     <div class="span2 row">${sw(s.showTaxLine,'data-ch="set" data-k="showTaxLine" data-t="bool"','Show the tax line')}${sw(s.showBarcode,'data-ch="set" data-k="showBarcode" data-t="bool"','Print a barcode for returns')}</div>
    </div></div></div><div style="background:var(--sunken);border-radius:var(--r-lg);padding:20px 20px 30px">${receiptHTML(S.orders.filter(o=>o.status==='paid').slice(-1)[0]||{no:S.seq,ts:Date.now(),items:[],subtotal:0,discAmt:0,tax:0,total:0,tip:0,payments:[],status:'paid',type:hospitality()?'takeaway':'instore'})}</div></div>`;
-  else if(t==='features')b=`<div class="panel"><div class="panel-b">${tog('tables','Tables and floor plan','Seat parties, run tabs and send courses to the kitchen')}${tog('kitchen','Kitchen display','Orders appear as tickets for the kitchen to bump')}${tog('tipping','Ask for tips','Show tip options when a customer pays')}${tog('kioskEnabled','Customer kiosk','Let customers order and pay themselves')}
-    ${row('Lock the till when idle','Protects the till if someone walks away',`<select class="input" style="width:auto" data-ch="set" data-k="autoLock" data-t="num">${[[0,'Never'],[2,'After 2 minutes'],[5,'After 5 minutes'],[10,'After 10 minutes'],[30,'After 30 minutes']].map(([v,l])=>`<option value="${v}" ${s.autoLock===v?'selected':''}>${l}</option>`).join('')}</select>`)}
+  else if(t==='features')b=`<div class="panel"><div class="panel-b">${tog('tables','Tables and floor plan','Seat parties, run tabs and send courses to the kitchen')}${tog('kitchen','Kitchen display','Orders appear as tickets for the kitchen to bump')}${tog('tipping','Ask for tips','Show tip options when a customer pays')}${tog('kioskEnabled','Customer kiosk'+(live()?' (this till only)':''),'Let customers place an order and pay at the counter')}
+    ${row('Lock the till when idle'+(live()?' (this till only)':''),'Protects the till if someone walks away',`<select class="input" style="width:auto" data-ch="set" data-k="autoLock" data-t="num">${[[0,'Never'],[2,'After 2 minutes'],[5,'After 5 minutes'],[10,'After 10 minutes'],[30,'After 30 minutes']].map(([v,l])=>`<option value="${v}" ${s.autoLock===v?'selected':''}>${l}</option>`).join('')}</select>`)}
     ${row('Default cash float','Suggested when opening the drawer',`<input class="input num" style="width:120px" type="number" step="5" min="0" data-ch="set" data-k="defaultFloat" data-t="num" value="${s.defaultFloat}">`)}</div></div>`;
+  else if(t==='loyalty'&&live())b=`<div class="panel"><div class="panel-b">${tog('loyalty.on','Loyalty cashback','Customers earn cashback into a wallet they can spend as a payment')}
+    ${row('Cashback on every sale (%)','Used for items that have no cashback of their own. Each item can override it.',`<input class="input num" style="width:100px" type="number" min="0" max="100" step="0.5" data-ch="set" data-k="loyalty.cashback" data-t="num" value="${(s.loyalty&&s.loyalty.cashback)||0}">`)}
+    ${row('Tiers','Based on lifetime spend',`<div class="row"><span class="tier bronze">Bronze</span><span class="tier silver">Silver ${money(120,0)}+</span><span class="tier gold">Gold ${money(300,0)}+</span></div>`)}</div></div>`;
   else if(t==='loyalty')b=`<div class="panel"><div class="panel-b">${tog('loyalty.on','Loyalty points','Customers collect points on every order')}
     ${row(`Points per ${esc(s.currency.trim())}1 spent`,'',`<input class="input num" style="width:100px" type="number" min="0" step="1" data-ch="set" data-k="loyalty.earn" data-t="num" value="${s.loyalty.earn}">`)}
     ${row('Points for a reward','',`<input class="input num" style="width:100px" type="number" min="10" step="10" data-ch="set" data-k="loyalty.redeemPts" data-t="num" value="${s.loyalty.redeemPts}">`)}
     ${row('Reward value','Taken off the order total',`<input class="input num" style="width:100px" type="number" min="0.5" step="0.5" data-ch="set" data-k="loyalty.redeemVal" data-t="num" value="${s.loyalty.redeemVal}">`)}
     ${row('Tiers','Based on lifetime spend',`<div class="row"><span class="tier bronze">Bronze</span><span class="tier silver">Silver ${money(120,0)}+</span><span class="tier gold">Gold ${money(300,0)}+</span></div>`)}</div></div>`;
-  else if(t==='kiosk')b=`<div class="panel"><div class="panel-b">${tog('kioskEnabled','Kiosk on','Show the kiosk in the menu and on the lock screen')}
+  else if(t==='kiosk')b=`<div class="panel"><div class="panel-b">${live()?'<p class="hint" style="margin:0 0 8px">These settings apply to this till only.</p>':''}${tog('kioskEnabled','Kiosk on','Show the kiosk in the menu and on the lock screen')}
     ${row('Welcome headline','The first thing customers read',`<input class="input" style="max-width:280px" data-ch="set" data-k="kioskWelcome" value="${esc(s.kioskWelcome)}">`)}
     ${tog('kioskUpsell','Suggest add-ons','Offer a pastry or treat before payment')}${hospitality()?tog('kioskEatIn','Ask eat in or take away','Skip this if you only do takeaway'):''}
     <div class="set-row"><div class="sr-t"><b>Try it</b><small>Leave kiosk mode with any team member’s PIN</small></div><button class="btn btn-primary" data-act="nav" data-v="kiosk">${ic('kiosk',16)} Launch the kiosk</button></div></div></div>`;
@@ -532,14 +542,32 @@ VIEWS.settings=()=>{
    <div class="set-layout"><nav class="set-nav" aria-label="Settings sections">${SET_TABS.map(([k,l,i])=>`<button class="${t===k?'on':''}" data-act="setTab" data-t="${k}">${ic(i,18)}${l}</button>`).join('')}</nav><div class="set-sec">${b}</div></div></div>`;
 };
 A.setTab=d=>{U.set.tab=d.t;renderView();if(d.t==='devices')loadDevices();};
-CH.set=(v,el)=>{
+CH.set=async(v,el)=>{
   const k=el.dataset.k,t=el.dataset.t;let val=t==='bool'?el.checked:t==='num'?(+v||0):v;
   if(k==='name'&&!String(val).trim()){toast('Your business needs a name','warn');el.value=S.settings.name;return;}
+  // A SHARED setting is saved on the till server first and only changed on screen once it accepts it,
+  // so every terminal agrees. Anything else is "this till only".
+  if(adminLive()&&PlemmoAdmin.settings.isShared(k)){
+    const old=getPath(S.settings,k);
+    try{await PlemmoAdmin.settings.save(k,val,S.settings.country);}
+    catch(e){
+      if(t==='bool')el.checked=!val;else el.value=old==null?'':old;
+      toast(`Not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;
+    }
+    setPath(S.settings,k,val);
+    // Turning VAT on activates the tax pack: take its rates and the items' default VAT category back from the server.
+    if(k==='vatRegistered'){try{PlemmoAdmin.settings.apply(S,await PlemmoAdmin.settings.load());await reloadCatalogue();}catch(e){/* keep what we have */}}
+    save();
+    if(['tables','kitchen','name'].includes(k))renderRail();
+    if(k==='name')renderTopbar();
+    if(['vatRegistered','vatNo','receiptFooter','showTaxLine','name'].includes(k))renderView();
+    toast('Saved','',{ms:1400});return;
+  }
   setPath(S.settings,k,val);save();
   if(['tables','kitchen','kioskEnabled','name'].includes(k))renderRail();
   if(k==='name')renderTopbar();
   if(['currency','taxName','taxRate','taxInclusive','receiptFooter','showTaxLine','showBarcode','name'].includes(k)&&U.set.tab==='tax')renderView();
-  toast('Saved','',{ms:1400});
+  toast(adminLive()?'Saved on this till':'Saved','',{ms:1400});
 };
 A.setAccent=d=>{S.settings.accent=d.v;applyTheme();save();renderView();};
 A.setTheme=d=>{S.settings.theme=d.v;applyTheme();save();renderTopbar();renderView();};

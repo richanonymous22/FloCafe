@@ -115,6 +115,10 @@ async function bootstrapFromPlemmo() {
   S = buildBusiness(cfg);
   S.settings.language = biz.language || S.settings.language;
 
+  // The business settings (name, address, VAT number, tipping, kitchen, loyalty, receipt text…)
+  // are the server's, so every terminal agrees; read them rather than showing local defaults.
+  try { if (window.PlemmoAdmin) window.PlemmoAdmin.settings.apply(S, await window.PlemmoAdmin.settings.load()); } catch (e) { /* defaults until the server answers */ }
+
   // The signed-in Plemmo user is the current operator.
   const meRole = plemmoRoleToMeridian(user.role);
   S.employees = [{ id: user.id, name: user.name || 'Owner', role: meRole, plemmoRole: user.role,

@@ -221,6 +221,16 @@ function totalsFor(items,discount,s){
   let disc=0;
   if(discount){disc=discount.kind==='pct'?r2(subtotal*discount.value/100):Math.min(subtotal,r2(discount.value));}
   const after=r2(subtotal-disc),rate=(+s.taxRate||0)/100;
+  // Connected to a till server: VAT follows each item's rate, grouped per rate, and is zero when the
+  // business is not registered. (A preview — the pay screen charges the server's own total.)
+  if(s._live){
+    if(!s.vatRegistered)return{subtotal,disc,tax:0,total:after,count:sum(items,l=>l.qty)};
+    const groups={},scale=subtotal?after/subtotal:1;
+    items.forEach(l=>{const p=typeof prod==='function'?prod(l.pid):null,pct=(S._vatRates&&p&&p.taxCat&&S._vatRates[p.taxCat]!=null)?S._vatRates[p.taxCat]:0;groups[pct]=(groups[pct]||0)+lineTotal(l)*scale;});
+    let tx=0;Object.keys(groups).forEach(k=>{const r=(+k)/100,g=groups[k];tx+=s.taxInclusive!==false?g-g/(1+r):g*r;});
+    tx=r2(tx);
+    return s.taxInclusive!==false?{subtotal,disc,tax:tx,total:after,count:sum(items,l=>l.qty)}:{subtotal,disc,tax:tx,total:r2(after+tx),count:sum(items,l=>l.qty)};
+  }
   let tax,total;
   if(s.taxInclusive!==false){total=after;tax=r2(after-after/(1+rate));}
   else{tax=r2(after*rate);total=r2(after+tax);}

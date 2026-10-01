@@ -37,6 +37,7 @@ import adminReconciliationRoutes from './admin-reconciliation';
 import { getDatabase, now, parseItemJson, attachEffectiveAddons, withTxn, getSettingValue, getCachedPairingCode, setCachedPairingCode, verifyPin } from '../db';
 import { ulid } from '../core/ids';
 import { checkPinRateLimit } from './orders';
+import { getCountryByCode } from '../countries';
 import { ApprovalError, resolveApprover } from '../core/approval';
 import { restockCancelledLine } from '../core/inventory';
 import { recordAuditEvent } from '../core/audit';
@@ -169,6 +170,8 @@ export function registerRoutes(app: Express): void {
         default_category_id: configurationReady ? pack.defaultCategories.product : null,
         configuration_ready: configurationReady,
         unclassified_category_id: pack.unclassifiedCategoryId,
+        inclusive_pricing_default: !!pack.inclusivePricingDefault,
+        tax_name: getCountryByCode(country)?.taxName || null,
       });
     } catch (error: any) {
       console.error('[API] Internal error:', error);

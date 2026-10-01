@@ -80,6 +80,89 @@
     remove: function (id) { return api().del('/addon-groups/' + enc(id), { idempotent: false }); },
   };
 
+  /* ---------- Settings ----------
+   * Two kinds. SHARED settings belong to the business and are saved on the till server, so every
+   * terminal agrees (name, address, VAT number, tipping, kitchen display, loyalty, receipt text, …).
+   * Everything else in Settings (screen lock, theme, kiosk wording) is "this till only" and stays
+   * on this device — the screen says so. A shared setting is only changed on screen after the
+   * server accepted it, and Meridian reads them back from the server at sign-in.
+   */
+  const SHARED = {
+    name:            { route: 'business', field: 'business_name' },
+    address:         { route: 'business', field: 'business_address' },
+    phone:           { route: 'business', field: 'business_phone' },
+    vatNo:           { route: 'business', field: 'tax_registration_number' },
+    tables:          { route: 'business', field: 'tables_required', bool: true },
+    'loyalty.on':    { route: 'loyalty', field: 'loyalty_enabled', bool: true },
+    'loyalty.cashback': { route: 'loyalty', field: 'global_cashback_percent', num: true },
+    receiptFooter:   { key: 'bill_footer_message' },
+    showTaxLine:     { key: 'bill_show_tax_breakdown', bool: true },
+    tipping:         { key: 'tipping_enabled', bool: true },
+    kitchen:         { key: 'kds_enabled', bool: true },
+    defaultFloat:    { key: 'default_cash_float', num: true },
+    vatRegistered:   { special: 'vat' },
+  };
+  function isShared(k) { return Object.prototype.hasOwnProperty.call(SHARED, k); }
+
+  function setPathDeep(obj, path, val) {
+    const parts = path.split('.'); let o = obj;
+    for (let i = 0; i < parts.length - 1; i++) { o[parts[i]] = o[parts[i]] || {}; o = o[parts[i]]; }
+    o[parts[parts.length - 1]] = val;
+  }
+
+  // Save one shared setting. Resolves only when the server accepted it.
+  function saveSetting(k, val, country) {
+    const m = SHARED[k];
+    if (!m) return Promise.reject(new Error('not a shared setting: ' + k));
+    if (m.special === 'vat') {
+      const next = val ? api().post('/tax-packs/ensure-country', { country: country || 'GB' }, { idempotent: false })
+                       : api().request('/settings/taxes_enabled', { method: 'PUT', body: { value: 'false' }, idempotent: false });
+      return next.then(() => api().request('/settings/tax', { method: 'PUT', body: { tax_registered: !!val }, idempotent: false }));
+    }
+    const v = m.bool ? !!val : (m.num ? Number(val) : String(val));
+    if (m.route === 'business') return api().request('/settings/business', { method: 'PUT', body: { [m.field]: v }, idempotent: false });
+    if (m.route === 'loyalty') return api().request('/settings/loyalty', { method: 'PUT', body: { [m.field]: v }, idempotent: false });
+    return api().request('/settings/' + enc(m.key), { method: 'PUT', body: { value: m.bool ? (v ? 'true' : 'false') : String(v) }, idempotent: false });
+  }
+
+  // Read the shared settings (and the active tax pack's facts) into a partial Meridian settings object.
+  function loadSettings() {
+    return Promise.all([
+      api().get('/settings'),
+      api().get('/tax/categories').catch(() => null),
+    ]).then((rs) => {
+      const s = (rs[0] && rs[0].settings) || {};
+      const tax = rs[1] || {};
+      const flag = (v, dflt) => (v === undefined || v === '' ? dflt : (v === 'true' || v === '1'));
+      const out = {
+        name: s.business_name, address: s.business_address || '', phone: s.business_phone || '', vatNo: s.tax_registration_number || '',
+        tables: flag(s.tables_required, true), tipping: flag(s.tipping_enabled, false), kitchen: flag(s.kds_enabled, true),
+        defaultFloat: Number(s.default_cash_float) || 0, receiptFooter: s.bill_footer_message || '',
+        showTaxLine: flag(s.bill_show_tax_breakdown, true), vatRegistered: flag(s.taxes_enabled, false),
+        country: s.country || '',
+      };
+      if (tax.tax_name) out.taxName = tax.tax_name;
+      if (tax.inclusive_pricing_default !== undefined) out.taxInclusive = !!tax.inclusive_pricing_default;
+      out.vatRates = {};
+      (tax.categories || []).forEach((c) => { if (c.rate_percent != null) out.vatRates[c.id] = Number(c.rate_percent); });
+      out.loyaltyOn = flag(s.loyalty_enabled, false);
+      out.loyaltyCashback = Number(s.global_cashback_percent) || 0;
+      return out;
+    });
+  }
+  // Apply a loaded settings object onto Meridian's state.
+  function applySettings(S, o) {
+    const st = S.settings;
+    ['name', 'address', 'phone', 'vatNo', 'tables', 'tipping', 'kitchen', 'defaultFloat', 'receiptFooter', 'showTaxLine', 'vatRegistered', 'taxName', 'taxInclusive', 'country'].forEach((k) => {
+      if (o[k] !== undefined && o[k] !== '' && !(k === 'name' && !o[k])) st[k] = o[k];
+      else if (o[k] === '' && ['address', 'phone', 'vatNo', 'receiptFooter'].indexOf(k) >= 0) st[k] = '';
+    });
+    S._vatRates = o.vatRates || {};
+    st._live = true;
+    st.loyalty = st.loyalty || {};
+    st.loyalty.on = !!o.loyaltyOn; st.loyalty.cashback = o.loyaltyCashback || 0;
+  }
+
   // The server's message for a refused change, in plain words.
   function errorMessage(e, fallback) {
     if (!e) return fallback;
@@ -89,5 +172,6 @@
     return first ? String(first) : fallback;
   }
 
-  window.PlemmoAdmin = { products: products, taxCategories: taxCategories, categories: categories, optionGroups: optionGroups, errorMessage: errorMessage };
+  window.PlemmoAdmin = { products: products, taxCategories: taxCategories, categories: categories, optionGroups: optionGroups, errorMessage: errorMessage,
+    settings: { isShared: isShared, save: saveSetting, load: loadSettings, apply: applySettings, setPath: setPathDeep } };
 })();

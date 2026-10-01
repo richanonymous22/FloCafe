@@ -53,6 +53,8 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   bill_footer_message: '',
   printer_trim_decimals: 'false',
   split_checks_enabled: 'false',
+  tipping_enabled: 'false',
+  default_cash_float: '0',
 };
 
 function maskSetting(key: string, value: string): string {
@@ -691,6 +693,8 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'diagnostics_consent',
   'kds_enabled', 'server_app_enabled', 'kot_printing_enabled',
   'split_checks_enabled',
+  // Till behaviour shared by every terminal of the business (Meridian Settings).
+  'tipping_enabled', 'default_cash_float',
 ]);
 
 function isAllowedWildcardKey(key: string): boolean {

@@ -29,7 +29,7 @@ async function suite(store: any, label: string) {
   ok(allowed === 120 && limited === 10, `120 operator calls are allowed per minute across both instances, the rest refused (${allowed} allowed, ${limited} refused)`);
   ok((await request(a).get('/admin/v1/plans').set(auth)).status === 429, 'instance A refuses what instance B counted');
   ok((await request(a).get('/health')).status === 200, 'health checks are never rate limited');
-  const t = Date.now();
+  const t = Math.floor(Date.now() / 1000) * 1000 + 100; // 100 ms into a window, so the three hits cannot straddle two
   ok(await store.rateLimitHit('k-window', 1000, 2, t) && await store.rateLimitHit('k-window', 1000, 2, t + 10) && !(await store.rateLimitHit('k-window', 1000, 2, t + 20)), 'a window allows exactly its limit');
   ok(await store.rateLimitHit('k-window', 1000, 2, t + 2500), 'and a new window starts clean');
   let enrolled429 = 0;

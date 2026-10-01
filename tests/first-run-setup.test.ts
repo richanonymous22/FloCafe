@@ -93,13 +93,13 @@ assert.equal(getCurrentSchemaVersion(), MIGRATIONS[MIGRATIONS.length - 1].versio
   assert.match(setting('cloud_pos_hash') || '', /^pos_[a-f0-9]{40}$/, 'fresh install has a POS hash');
   assert.ok((setting('cloud_device_secret') || '').length >= 32, 'fresh install has a local cloud secret');
   assert.equal(count('cloud_sync_outbox'), 0, 'fresh install starts with an empty cloud outbox');
-  assert.equal(count('country_packs'), 1, 'fresh install registers only the generic tax pack');
+  assert.equal(count('country_packs'), 2, 'fresh install registers exactly the bundled packs: the generic no-tax pack and the UK VAT pack');
   assert.deepEqual(
     getDatabase().prepare(
       'SELECT id, country, status FROM country_packs ORDER BY id'
     ).all(),
-    [{ id: 'local-generic', country: '*', status: 'active' }],
-    'fresh setup does not preinstall a country-specific tax pack',
+    [{ id: 'local-generic', country: '*', status: 'active' }, { id: 'meridian-gb-vat', country: 'GB', status: 'active' }],
+    'fresh setup preinstalls only the bundled packs: generic (any country) and the UK VAT pack (used only when the store country is GB)',
   );
   console.log('   ✓ fresh database has schema/default settings only and awaits setup');
 

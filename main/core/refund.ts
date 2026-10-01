@@ -25,6 +25,7 @@
  * Everything runs in one transaction; any failure rolls the whole refund back.
  */
 import { getDatabase, now, withTxn } from '../db';
+import { minorUnitExponent, toMinor } from './money';
 import { recordAuditEvent } from './audit';
 import { getCurrentLocationId } from './location';
 import { recordCashRefundForPayment } from './cash';
@@ -33,7 +34,10 @@ import { PaymentError, PaymentRecord, RefundRecord, refundPayment } from './paym
 
 export interface RefundBillItemInput {
   orderItemId: number | string;
+  /** Units of this line coming back. */
   quantity: number;
+  /** Put the units back in stock (default true). Money-only returns (damaged goods) pass false. */
+  restock?: boolean;
 }
 
 export interface RefundBillInput {
@@ -41,8 +45,13 @@ export interface RefundBillInput {
   /** Minor units. Omit to refund everything still refundable on the bill. */
   amountMinor?: number | null;
   reason: string;
-  /** Lines physically returned to stock. Omit for a money-only refund. */
+  /** Lines coming back. Omit for a money-only refund. */
   items?: RefundBillItemInput[] | null;
+  /**
+   * Size the refund from `items` (their share of what the customer actually paid, after any
+   * discount) instead of `amountMinor`. Not available on split checks.
+   */
+  amountFromItems?: boolean;
   /** The user who approved the refund (the caller, or the manager whose PIN was entered). */
   approvedByUserId: string;
   /** The authenticated user who asked for it. */
@@ -58,6 +67,7 @@ export interface RefundBillResult {
   fully_refunded: boolean;
   refundable_remaining_minor: number;
   restocked: { order_item_id: number; quantity: number }[];
+  lines: { order_item_id: number; quantity: number; amount_minor: number; restocked: boolean }[];
   cash_drawer_recorded: boolean;
   loyalty_points_reversed: number;
   wallet_points_returned: number;
@@ -71,6 +81,45 @@ const WALLET_POINTS_PER_MINOR = 1;
 
 function refundableOf(p: PaymentRecord): number {
   return Math.max(0, p.amount_minor - p.refunded_minor);
+}
+
+const GONE_LINE_STATUSES = ['cancelled', 'voided', 'void_adjustment'];
+
+export interface RefundableLine {
+  order_item_id: number;
+  name: string;
+  quantity: number;
+  refunded_quantity: number;
+  refundable_quantity: number;
+  /** What one returned unit is worth: its share of the bill total, after discount, tax and rounding. */
+  unit_refund_minor: number;
+}
+
+/**
+ * The lines of a bill's order with how many units have already come back, and what a returned
+ * unit refunds. A line's value is its share of the amount the customer actually paid
+ * (`bills.total`), so an order-level discount or payable rounding is carried through.
+ */
+export function listRefundableLines(billId: number | string): RefundableLine[] {
+  const db = getDatabase();
+  const bill = db.prepare('SELECT id, order_id, total FROM bills WHERE id = ?').get(billId) as { id: number; order_id: number; total: number } | undefined;
+  if (!bill) return [];
+  const exponent = minorUnitExponent((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value);
+  const lines = (db.prepare(
+    `SELECT id, product_name, quantity, total FROM order_items WHERE order_id = ? AND status NOT IN (${GONE_LINE_STATUSES.map(() => '?').join(',')}) ORDER BY id`,
+  ).all(bill.order_id, ...GONE_LINE_STATUSES)) as { id: number; product_name: string; quantity: number; total: number }[];
+  const billMinor = toMinor(bill.total || 0, exponent);
+  const sumMinor = lines.reduce((s, l) => s + toMinor(l.total || 0, exponent), 0);
+  const returned = new Map<number, number>();
+  for (const r of db.prepare('SELECT order_item_id, SUM(quantity) AS q FROM refund_lines WHERE bill_id = ? GROUP BY order_item_id').all(bill.id) as { order_item_id: number; q: number }[]) {
+    returned.set(r.order_item_id, r.q);
+  }
+  return lines.map((l) => {
+    const got = returned.get(l.id) || 0;
+    const qty = Number(l.quantity) || 0;
+    const unit = sumMinor > 0 && qty > 0 ? Math.round((billMinor * toMinor(l.total || 0, exponent)) / (qty * sumMinor)) : 0;
+    return { order_item_id: l.id, name: l.product_name, quantity: qty, refunded_quantity: got, refundable_quantity: Math.max(0, qty - got), unit_refund_minor: unit };
+  });
 }
 
 export function listBillPayments(billId: number | string): PaymentRecord[] {
@@ -94,7 +143,44 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
     const totalRefundable = payments.reduce((sum, p) => sum + refundableOf(p), 0);
     if (totalRefundable <= 0) throw new PaymentError('Nothing left to refund on this bill', 400);
 
-    let amount = input.amountMinor ?? totalRefundable;
+    // Lines coming back: validated against what was sold and what already came back.
+    const refundable = listRefundableLines(bill.id);
+    const lineOf = new Map(refundable.map((l) => [l.order_item_id, l]));
+    const wanted: { orderItemId: number; quantity: number; restock: boolean }[] = [];
+    for (const item of input.items || []) {
+      const orderItemId = Number(item.orderItemId);
+      if (!Number.isInteger(orderItemId) || orderItemId <= 0) throw new PaymentError('Invalid order item in refund', 400);
+      if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new PaymentError('Returned quantity must be a positive whole number', 400);
+      const line = lineOf.get(orderItemId);
+      if (!line) throw new PaymentError(`Order item ${orderItemId} is not part of this bill`, 400);
+      if (item.quantity > line.refundable_quantity) {
+        throw new PaymentError(`Only ${line.refundable_quantity} of ${line.name} can still be returned`, 400);
+      }
+      if (wanted.some((w) => w.orderItemId === orderItemId)) throw new PaymentError(`Order item ${orderItemId} appears twice in the refund`, 400);
+      wanted.push({ orderItemId, quantity: item.quantity, restock: item.restock !== false });
+    }
+
+    let amount: number;
+    const lineAmounts = new Map<number, number>();
+    if (input.amountFromItems) {
+      if (!wanted.length) throw new PaymentError('Choose at least one item to refund', 400);
+      if (db.prepare('SELECT 1 FROM bills WHERE order_id = ? AND split_group_id IS NOT NULL LIMIT 1').get(bill.order_id)) {
+        throw new PaymentError('Item refunds are not available on a split check. Refund an amount instead.', 400);
+      }
+      amount = 0;
+      for (const w of wanted) {
+        const share = lineOf.get(w.orderItemId)!.unit_refund_minor * w.quantity;
+        lineAmounts.set(w.orderItemId, share);
+        amount += share;
+      }
+      // Returning every remaining unit of every line refunds exactly what is left
+      // (per-unit rounding can otherwise strand a minor unit on the bill).
+      const allBack = refundable.every((l) => l.refundable_quantity === 0 || (wanted.find((w) => w.orderItemId === l.order_item_id)?.quantity === l.refundable_quantity));
+      if (allBack && Math.abs(totalRefundable - amount) <= refundable.length) amount = totalRefundable;
+      if (amount > totalRefundable) amount = totalRefundable;
+    } else {
+      amount = input.amountMinor ?? totalRefundable;
+    }
     if (!Number.isInteger(amount) || amount <= 0) {
       throw new PaymentError('Refund amount must be greater than zero', 400);
     }
@@ -102,21 +188,14 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       throw new PaymentError(`Refund amount exceeds the unrefunded balance (${totalRefundable} minor units remaining)`, 400);
     }
 
-    // Validate and size the stock return BEFORE any money moves.
+    // Size the stock return BEFORE any money moves. Only lines that actually moved
+    // tracked stock can return stock, and never more than is still returnable — a
+    // repeat restock is silently a no-op rather than a second credit.
     const restockPlan: { orderItemId: number; quantity: number }[] = [];
-    for (const item of input.items || []) {
-      const orderItemId = Number(item.orderItemId);
-      if (!Number.isInteger(orderItemId) || orderItemId <= 0) throw new PaymentError('Invalid order item in refund', 400);
-      if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new PaymentError('Returned quantity must be a positive whole number', 400);
-      const line = db.prepare('SELECT id, quantity, order_id FROM order_items WHERE id = ?').get(orderItemId) as
-        { id: number; quantity: number; order_id: number } | undefined;
-      if (!line || line.order_id !== bill.order_id) throw new PaymentError(`Order item ${orderItemId} is not part of this bill`, 400);
-      if (item.quantity > line.quantity) throw new PaymentError(`Returned quantity exceeds the quantity sold for item ${orderItemId}`, 400);
-      // Only lines that actually moved tracked stock can return stock, and never
-      // more than is still returnable — a repeat restock is silently a no-op
-      // rather than a second credit.
-      const quantity = Math.min(item.quantity, getOrderItemReturnState(orderItemId).returnable);
-      if (quantity > 0) restockPlan.push({ orderItemId, quantity });
+    for (const w of wanted) {
+      if (!w.restock) continue;
+      const quantity = Math.min(w.quantity, getOrderItemReturnState(w.orderItemId).returnable);
+      if (quantity > 0) restockPlan.push({ orderItemId: w.orderItemId, quantity });
     }
 
     const refunds: RefundRecord[] = [];
@@ -145,6 +224,17 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       remaining -= take;
       if (payment.method === 'cash') cashRefundMinor += take;
       if (payment.method === 'wallet') walletRefundMinor += take;
+    }
+
+    const recordedLines: RefundBillResult['lines'] = [];
+    if (wanted.length && refunds.length) {
+      const insert = db.prepare('INSERT INTO refund_lines (refund_id, bill_id, order_item_id, quantity, amount_minor, restocked, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const w of wanted) {
+        const stocked = restocked.find((r) => r.order_item_id === w.orderItemId)?.quantity ?? 0;
+        const lineAmount = lineAmounts.get(w.orderItemId) ?? 0;
+        insert.run(refunds[0].id, bill.id, w.orderItemId, w.quantity, lineAmount, stocked > 0 ? 1 : 0, now());
+        recordedLines.push({ order_item_id: w.orderItemId, quantity: w.quantity, amount_minor: lineAmount, restocked: stocked > 0 });
+      }
     }
 
     const location = getCurrentLocationId();
@@ -191,7 +281,7 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       metadata: {
         bill_id: bill.id, order_id: bill.order_id, amount_minor: amount, reason,
         requested_by: input.requestedByUserId, approved_by: input.approvedByUserId,
-        refund_ids: refunds.map((r) => r.id), restocked, cash_drawer_recorded: cashDrawerRecorded,
+        refund_ids: refunds.map((r) => r.id), restocked, lines: recordedLines, amount_from_items: !!input.amountFromItems, cash_drawer_recorded: cashDrawerRecorded,
         loyalty_points_reversed: loyaltyPointsReversed, wallet_points_returned: walletPointsReturned,
         fully_refunded: refundableAfter === 0,
       },
@@ -200,7 +290,7 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
     return {
       bill_id: bill.id, amount_minor: amount, currency, refunds, payments: finalPayments,
       fully_refunded: refundableAfter === 0, refundable_remaining_minor: refundableAfter,
-      restocked, cash_drawer_recorded: cashDrawerRecorded,
+      restocked, lines: recordedLines, cash_drawer_recorded: cashDrawerRecorded,
       loyalty_points_reversed: loyaltyPointsReversed, wallet_points_returned: walletPointsReturned,
       idempotentReplay: false,
     };

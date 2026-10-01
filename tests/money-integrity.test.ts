@@ -20,7 +20,7 @@ Module._load = function (request: string, parent: unknown, isMain: boolean) {
 };
 
 const { initTestDb, getResults, closeDatabase, assert, assertEqual } = require('./helpers/test-setup');
-const { initDatabase, getDatabase, now } = require('../main/db');
+const { initDatabase, getDatabase, now, MIGRATIONS } = require('../main/db');
 const { createSale } = require('../main/core/sale');
 const {
   MONEY_COLUMNS, quantiseMoney, sumMoney, minorSql, installMoneyGuards, dropMoneyGuards,
@@ -124,7 +124,7 @@ async function main() {
   closeDatabase();
   initDatabase();
   const db2 = getDatabase();
-  assertEqual(db2.pragma('user_version', { simple: true }), 97, 'database is at v97');
+  assertEqual(db2.pragma('user_version', { simple: true }), MIGRATIONS[MIGRATIONS.length - 1].version, 'database is migrated to the latest version (v97 ran on the way)');
   assertEqual(priceOf(db2, 'p-old'), 0.3, 'pre-existing residue was repaired by the migration');
   assertEqual((db2.prepare('SELECT COUNT(*) AS n FROM products').get() as any).n, rowsBefore, 'no rows lost');
   assertEqual(scanMoneyIntegrity(db2).length, 0, 'scan clean after upgrade');

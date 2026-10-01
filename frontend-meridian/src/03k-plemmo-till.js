@@ -46,10 +46,15 @@
   // Refund a bill. `key` makes a retry of the SAME refund replay instead of
   // refunding twice. `overridePin` is a manager/owner PIN when the signed-in
   // user cannot refund on their own; the backend validates it.
+  // What can still come back from a bill: per-line refundable quantities and unit values
+  // (server-computed from what the customer actually paid), plus the refund history.
+  function refundInfo(billId) { return api().get('/bills/' + enc(billId) + '/refunds'); }
+
   function refundBill(billId, opts) {
     opts = opts || {};
     const body = { reason: opts.reason };
-    if (opts.items && opts.items.length) body.items = opts.items.map((i) => ({ order_item_id: i.id, quantity: i.qty }));
+    if (opts.items && opts.items.length) body.items = opts.items.map((i) => ({ order_item_id: i.id, quantity: i.qty, restock: i.restock !== false }));
+    if (opts.amountFromItems) body.amount_from_items = true;
     if (opts.amount != null) body.amount = opts.amount;
     if (opts.overridePin) body.override_pin = String(opts.overridePin);
     return api().post('/bills/' + enc(billId) + '/refund', body, { idempotent: true, idempotencyKey: opts.key });
@@ -288,7 +293,7 @@
 
   window.PlemmoTill = {
     errorMessage: errorMessage, isNetworkError: isNetworkError, parseDbTime: parseDbTime,
-    refundBill: refundBill, cancelOrder: cancelOrder, cancelItem: cancelItem, applyDiscount: applyDiscount, fetchOrder: fetchOrder,
+    refundBill: refundBill, refundInfo: refundInfo, cancelOrder: cancelOrder, cancelItem: cancelItem, applyDiscount: applyDiscount, fetchOrder: fetchOrder,
     printBill: printBill,
     sanitizeCart: sanitizeCart, held: held, newId: newId,
     masterPinStatus: masterPinStatus, createBackup: createBackup,

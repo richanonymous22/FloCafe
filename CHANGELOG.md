@@ -14,10 +14,15 @@ All notable changes to Flo Cafe are documented here. Dates are release dates, no
 - Sales-side money is now exact: totals are summed in integer minor units, and migration v97 installs database triggers that keep every stored money value a whole number of minor units for every writer (see `docs/MONEY_MODEL.md`). Existing rows with float residue are repaired in place; nothing is removed.
 - Security hygiene: refund, held-cart and orders routes use `express-rate-limit`; `npm audit` is clean; the production cloud server refuses to start with dev enrolment enabled.
 
+- Discounts at the till are now applied by the backend. Meridian creates the order, applies the discount (the server decides who may, and asks for a manager PIN when needed), generates the bill, and only then takes payment, so the pay screen charges the **backend's** total. An abandoned checkout voids the order it created so stock is never left reserved. Previously a discounted sale was charged at the local total while the backend bill was undiscounted.
+- Removing an item the kitchen already has now happens on the server (`PATCH /api/orders/:orderId/items/:itemId/cancel`): cashiers/waiters can do it with a manager PIN, an item not yet started returns stock through the ledger, an item in progress is voided without restocking, and order history no longer counts cancelled/voided lines as sold items.
+- Partial refunds: refund by item (`amount_from_items`) with per-line returned-quantity tracking (migration v98 `refund_lines`), a money-only option for damaged goods, and a "Whole order / Choose items" refund screen in Meridian.
+
 ### Added
 - Price override: `price_override` on an order line, permission-gated (`sales.price_override`, or a manager PIN), audited, catalogue price preserved on the line (`original_unit_price`), master product price never changed.
 - Barcode scanning in the register (keyboard-wedge scanners) via `GET /api/retail/lookup`.
 - Migration v96 (additive): `order_items.original_unit_price / price_override_reason / price_override_by`, and the `held_carts` table.
+- Migration v97 (money guards, data-preserving) and v98 (additive `refund_lines`).
 
 ## [3.1.0] - 2026-09-25
 

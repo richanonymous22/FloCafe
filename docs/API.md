@@ -408,6 +408,20 @@ Update item status (KDS workflow).
 
 ---
 
+### PATCH `/api/orders/:orderId/items/:itemId/cancel`
+Remove one line from an order. An owner/manager removes it outright; a cashier or waiter must send a manager/owner `override_pin` (waiters only on their own orders). The approver is resolved from the PIN on the server and audited (`sale.item_voided`, with `requested_by` and `approved_by`).
+
+**Request:** `{ "override_pin": "2222", "reason": "Customer changed their mind" }`
+
+- A line the kitchen has **not started** is cancelled and goes back to stock through the inventory ledger (`item_cancel` return).
+- A line **already preparing/ready** is voided: the original line is kept, a negative `void_adjustment` line is added so the bill nets out, and stock is **not** returned (the food was made).
+- Removing the last active line cancels the order (stock is returned once, never twice).
+- Order totals, discount, tax and an unpaid bill are recomputed in exact minor units.
+
+**Errors:** `403` approval required (`requiresApproval: true`) or invalid PIN · `404` order/item not found · `409` the item is already removed · `429` too many PIN attempts.
+
+---
+
 ## Order Discounts
 
 ### PATCH `/api/orders/:id/discount`
@@ -428,7 +442,8 @@ Apply order-level discount.
 - `discount_type`: must be `"percentage"` or `"amount"`
 - `discount_value`: must be positive; cannot exceed store limits (`discount_max_percentage`, `discount_max_amount`)
 - `discount_mode` setting is checked — if `'flat'`, percentage discounts are rejected; if `'percentage'`, flat discounts are rejected
-- If `discount_requires_approval` is true, `override_pin` (manager/owner PIN) is required
+- **Who may discount:** an owner/manager outright (permission `sales.discount`); a cashier or waiter only with a manager/owner `override_pin` — the approving user is whoever the PIN belongs to and is recorded in the `sale.discount_applied` audit event beside the requester. If `discount_requires_approval` is true, a PIN is required from everyone, managers included. Removing a discount (`discount_value: 0`) needs no approval.
+- Tax and the bill are recomputed in exact minor units; an unpaid bill is kept in step
 - Order must exist and not be completed/cancelled
 
 **Error (400):**
@@ -514,10 +529,12 @@ Refund all or part of a paid bill. Owners/managers refund directly; a cashier mu
 
 **Response (200):** `bill_id`, `amount_minor`, `refunds[]`, `payments[]`, `fully_refunded`, `refundable_remaining_minor`, `restocked[]`, `cash_drawer_recorded`, `loyalty_points_reversed`, `wallet_points_returned`, `idempotentReplay`.
 
+**Refunding by item.** Send `"amount_from_items": true` with `items` and the server sizes the refund from the returned lines: each unit is worth its share of what the customer actually paid (`bills.total`, so an order discount and payable rounding are carried through), and returning every remaining unit refunds exactly what is left, to the minor unit. Each item may carry `"restock": false` for a money-only return (damaged goods). The quantity per line is capped at what was sold minus what has already come back (tracked in `refund_lines`). Item refunds are refused on split checks — refund an amount instead. Without `amount_from_items`, `items` only decides which lines go back to stock and `amount` (or "everything left") decides the money.
+
 **Errors:** `400` invalid amount/items, amount above the unrefunded balance, or nothing left to refund · `403` approval required (`requiresApproval: true`) or invalid manager PIN · `404` bill not found · `409` idempotency-key reuse · `429` too many PIN attempts.
 
 ### GET `/api/bills/:id/refunds`
-Refund history for a bill and what is still refundable (`refunds`, `payments`, `paid_minor`, `refunded_minor`, `refundable_minor`).
+Refund history for a bill and what is still refundable (`refunds`, `payments`, `paid_minor`, `refunded_minor`, `refundable_minor`, `exponent`, `currency`) plus `items[]` — for each active line `order_item_id`, `name`, `quantity`, `refunded_quantity`, `refundable_quantity` and `unit_refund_minor` (what one returned unit refunds). This is what the till's partial-refund screen shows.
 
 ---
 

@@ -5357,6 +5357,32 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       installMoneyGuards(db);
     },
   },
+  {
+    version: 98,
+    name: 'refund_lines',
+    up: () => {
+      // PARTIAL REFUNDS. A refund row records money; it cannot say which lines came
+      // back, so a second "return 1 of 3" could not know 1 was already returned (and an
+      // untracked product leaves no stock movement to count). One additive row per
+      // returned line keeps the per-line returned quantity the refund screen and the
+      // refund service cap against. Nothing existing is altered.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS refund_lines (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          refund_id     TEXT NOT NULL,
+          bill_id       INTEGER NOT NULL,
+          order_item_id INTEGER NOT NULL,
+          quantity      INTEGER NOT NULL,
+          amount_minor  INTEGER NOT NULL DEFAULT 0,
+          restocked     INTEGER NOT NULL DEFAULT 0,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (refund_id) REFERENCES refunds(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_refund_lines_bill ON refund_lines(bill_id);
+        CREATE INDEX IF NOT EXISTS idx_refund_lines_item ON refund_lines(order_item_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

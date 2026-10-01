@@ -28,7 +28,7 @@ import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
 import { recordAppliedPaymentLine, PaymentError } from '../core/payment';
 import { ApprovalError, resolveApprover } from '../core/approval';
-import { refundBill, listBillPayments } from '../core/refund';
+import { refundBill, listBillPayments, listRefundableLines } from '../core/refund';
 import { minorUnitExponent, toMinor, fromMinor } from '../core/money';
 import { InventoryError } from '../core/inventory';
 import { recordCashSaleForPayment } from '../core/cash';
@@ -883,10 +883,10 @@ router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cas
     if (!bill) return res.status(404).json({ error: 'Bill not found' });
 
     const reason = typeof body.reason === 'string' ? body.reason : '';
-    let itemsInput: { orderItemId: number; quantity: number }[] | undefined;
+    let itemsInput: { orderItemId: number; quantity: number; restock?: boolean }[] | undefined;
     if (body.items !== undefined && body.items !== null) {
       if (!Array.isArray(body.items)) return res.status(400).json({ error: 'items must be an array' });
-      itemsInput = body.items.map((i: any) => ({ orderItemId: Number(i?.order_item_id), quantity: Number(i?.quantity) }));
+      itemsInput = body.items.map((i: any) => ({ orderItemId: Number(i?.order_item_id), quantity: Number(i?.quantity), restock: i?.restock !== false }));
     }
     let amountMinor: number | undefined;
     if (body.amount !== undefined && body.amount !== null) {
@@ -899,7 +899,8 @@ router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cas
     const idemKey = paymentIdempotencyKey(req);
     const requestHash = createHash('sha256').update(canonicalizePaymentRequest({
       billId, amountMinor: amountMinor ?? null, reason: reason.trim(),
-      items: (itemsInput || []).map((i) => [i.orderItemId, i.quantity]),
+      items: (itemsInput || []).map((i) => [i.orderItemId, i.quantity, i.restock === false ? 0 : 1]),
+      fromItems: body.amount_from_items === true,
     })).digest('hex');
 
     if (idemKey) {
@@ -920,7 +921,7 @@ router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cas
 
     const result = withTxn(() => {
       const refunded = refundBill({
-        billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null,
+        billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null, amountFromItems: body.amount_from_items === true,
         approvedByUserId: approver.userId, requestedByUserId: user.userId,
       });
       if (idemKey) {
@@ -958,6 +959,9 @@ router.get('/:id/refunds', refundRateLimit, requireRole('owner', 'manager', 'cas
       refunded_minor: live.reduce((s, p) => s + p.refunded_minor, 0),
       refundable_minor: refundable,
       refundable_amount: fromMinor(refundable, exponent),
+      items: listRefundableLines(req.params.id as string),
+      exponent,
+      currency: payments[0]?.currency ?? (getSettingValue('currency') || 'GBP').toUpperCase(),
     });
   } catch (error: any) {
     console.error('[API] Bill refunds read failed:', error);

@@ -1126,15 +1126,22 @@ A.drOpenOrder=d=>{const o=orderOf(d.id);closeAll();loadOrderToCart(o);go('pos');
 // record against the ORIGINAL payment, stock back through the ledger, drawer and
 // loyalty effects, audit. Meridian then re-reads the order — it never flips the
 // status itself, and a failed refund leaves everything as it was.
-async function refundOrderOnPlemmo(o,by,reason,restock){
+// Refund on the till server. `plan` = {reason, restock, mode:'whole'|'items', lines:[{id,qty}], info}.
+// Whole order: everything still refundable, returning only the quantities that have not already
+// come back. Items: the value of the chosen lines (the server works it out from what the customer
+// actually paid). Every retry of the same refund reuses its idempotency key.
+async function refundOrderOnPlemmo(o,by,plan){
   const ids=billIdsOf(o);
-  o._rfKey=o._rfKey||PlemmoAPI.idempotencyKey();           // same key on a retry of this refund
-  const items=restock?(o.items||[]).filter(l=>l.itemId).map(l=>({id:l.itemId,qty:l.qty})):[];
-  let done=0;
+  o._rfKey=o._rfKey||PlemmoAPI.idempotencyKey();
+  let items=[],amountFromItems=false;
+  if(plan.mode==='items'){amountFromItems=true;items=plan.lines.map(l=>({id:l.id,qty:l.qty,restock:plan.restock}));}
+  else if(plan.restock&&plan.info&&plan.info.items)items=plan.info.items.filter(l=>l.refundable_quantity>0).map(l=>({id:l.order_item_id,qty:l.refundable_quantity,restock:true}));
+  let done=0,lastRes=null;
   try{
     for(let i=0;i<ids.length;i++){
-      await PlemmoTill.refundBill(ids[i],{reason,items:i===0?items:[],overridePin:by.pin,key:o._rfKey+':'+ids[i]});
+      lastRes=await PlemmoTill.refundBill(ids[i],{reason:plan.reason,items:i===0?items:[],amountFromItems:i===0&&amountFromItems,overridePin:by.pin,key:o._rfKey+':'+ids[i]});
       done++;
+      if(amountFromItems)break;
     }
   }catch(e){
     toast(`Order ${o.no} was not refunded${done?' in full':''}: ${tillError(e,'the till server refused it')}`,'warn');
@@ -1145,25 +1152,67 @@ async function refundOrderOnPlemmo(o,by,reason,restock){
   await refreshOrderFromPlemmo(o);
   refreshCatalogueSoon();
   closeAll();if(U.view==='orders'||U.view==='home')renderView();renderRail();
-  toast(`Order ${o.no} refunded`);
+  const part=lastRes&&lastRes.fully_refunded===false;
+  toast(part?`Refunded ${money((lastRes.amount_minor||0)/Math.pow(10,(plan.info&&plan.info.exponent!=null)?plan.info.exponent:2))} from order ${o.no}`:`Order ${o.no} refunded`);
   return true;
+}
+// The refund dialog. In "choose items" mode the cashier sets how many of each line come back;
+// the amount shown is the server's own per-unit value, so what is displayed is what is refunded.
+let RF=null;
+function rfAmountMinor(){return RF.mode==='whole'?RF.info.refundable_minor:RF.info.items.reduce((s,l)=>s+(RF.qty[l.order_item_id]||0)*l.unit_refund_minor,0);}
+function rfMoney(minor){return money(minor/Math.pow(10,RF.info.exponent!=null?RF.info.exponent:2));}
+function renderRefundDlg(){
+  const i=RF.info,canItems=RF.canItems,rows=i.items.filter(l=>l.refundable_quantity>0);
+  const amt=rfAmountMinor();
+  const list=RF.mode==='items'?`<div class="rf-lines mt">${rows.map(l=>`<div class="rf-line"><div><b>${esc(l.name)}</b><small class="muted">${l.refunded_quantity?`${l.refunded_quantity} already returned · `:''}${rfMoney(l.unit_refund_minor)} each</small></div>
+      <div class="k-step"><button data-act="rfQty" data-id="${l.order_item_id}" data-d="-1" aria-label="One fewer ${esc(l.name)}" ${(RF.qty[l.order_item_id]||0)<=0?'disabled':''}>${ic('minus',16)}</button><b class="num">${RF.qty[l.order_item_id]||0} / ${l.refundable_quantity}</b><button data-act="rfQty" data-id="${l.order_item_id}" data-d="1" aria-label="One more ${esc(l.name)}" ${(RF.qty[l.order_item_id]||0)>=l.refundable_quantity?'disabled':''}>${ic('plus',16)}</button></div></div>`).join('')}</div>`:'';
+  $('#rfBody').innerHTML=`${canItems?`<div class="seg"><button class="${RF.mode==='whole'?'on':''}" data-act="rfMode" data-m="whole">Whole order</button><button class="${RF.mode==='items'?'on':''}" data-act="rfMode" data-m="items">Choose items</button></div>`:''}
+    <p class="muted mt">${RF.mode==='whole'?`Everything still refundable (${rfMoney(i.refundable_minor)}) goes back the way it was paid.`:'Pick how many of each item are coming back. The money goes back the way it was paid.'}${RF.o.tip?' Tips are not refunded.':''}</p>
+    ${list}
+    <label class="field mt"><span>Reason</span><select class="input" id="rfR">${['Customer changed their mind','Wrong item','Quality problem','Charged twice','Other'].map(r=>`<option ${RF.reason===r?'selected':''}>${r}</option>`).join('')}</select></label>
+    <label class="switch mt"><input type="checkbox" id="rfS" ${RF.restock?'checked':''}><span class="tr"></span><span>Put the items back in stock</span></label>
+    <div class="change-line mt"><span>Refund</span><span class="num">${rfMoney(amt)}</span></div>`;
+  const go=$('#rfGo');if(go){go.disabled=amt<=0;go.textContent=`Refund ${rfMoney(amt)}`;}
+}
+const rfSync=()=>{if(!RF)return;const r=$('#rfR'),s=$('#rfS');if(r)RF.reason=r.value;if(s)RF.restock=s.checked;};
+A.rfMode=d=>{rfSync();RF.mode=d.m;renderRefundDlg();};
+A.rfQty=d=>{rfSync();const l=RF.info.items.find(x=>String(x.order_item_id)===String(d.id));if(!l)return;const n=Math.max(0,Math.min(l.refundable_quantity,(RF.qty[l.order_item_id]||0)+(+d.d)));RF.qty[l.order_item_id]=n;renderRefundDlg();};
+async function refundDialogRemote(o){
+  const ids=billIdsOf(o);
+  let info;
+  try{info=await PlemmoTill.refundInfo(ids[0]);}
+  catch(e){toast(`Could not read the refund details: ${tillError(e,'the till server did not respond')}`,'warn');return null;}
+  if(!(info.refundable_minor>0)){toast('Nothing left to refund on this sale.','warn');await refreshOrderFromPlemmo(o);renderView();return null;}
+  RF={o:o,info:info,mode:'whole',qty:{},reason:'Customer changed their mind',restock:true,canItems:ids.length===1&&info.items.some(l=>l.refundable_quantity>0)};
+  const R=RF;
+  const ok=await new Promise(res=>{let done=false;
+    const L=modal({title:'Refund order '+esc(o.no),cls:'narrow',body:`<div id="rfBody"></div>`,
+      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-danger-solid" id="rfGo">Refund</button>`,onClose:()=>{if(!done)res(false);}});
+    renderRefundDlg();
+    L.el.querySelector('#rfGo').onclick=()=>{rfSync();done=true;L.close();res(true);};
+  });
+  RF=null;
+  if(!ok)return null;
+  const lines=Object.keys(R.qty).filter(k=>R.qty[k]>0).map(k=>({id:Number(k),qty:R.qty[k]}));
+  if(R.mode==='items'&&!lines.length)return null;
+  return {reason:R.reason,restock:R.restock,mode:R.mode,lines:lines,info:info};
 }
 A.refund=async d=>{
   const o=orderOf(d.id);if(!o||o.status!=='paid')return;
   const remote=live();
   if(remote&&!billIdsOf(o).length){toast('This sale only exists on this device — it never reached the till server — so it can’t be refunded here.','warn');return;}
   const by=await(remote?approveServer:approve)('refunds',`Refunding order ${o.no}`);if(!by)return;
+  if(remote){const plan=await refundDialogRemote(o);if(plan)await refundOrderOnPlemmo(o,by,plan);return;}
   let reason='Customer changed their mind',restock=true;
-  const due=remote?r2(o.total-(o.refundedAmt||0)):o.total+(o.tip||0);
+  const due=o.total+(o.tip||0);
   const ok=await new Promise(res=>{let done=false;
-    const L=modal({title:`Refund ${money(due)}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.${remote&&o.tip?' Tips are not refunded.':''}</p>
+    const L=modal({title:`Refund ${money(due)}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.</p>
       <label class="field mt"><span>Reason</span><select class="input" id="rfR">${['Customer changed their mind','Wrong item','Quality problem','Charged twice','Other'].map(r=>`<option>${r}</option>`).join('')}</select></label>
       <label class="switch mt"><input type="checkbox" id="rfS" checked><span class="tr"></span><span>Put the items back in stock</span></label>`,
      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-danger-solid" id="rfGo">Refund order</button>`,onClose:()=>{if(!done)res(false);}});
     L.el.querySelector('#rfGo').onclick=()=>{reason=L.el.querySelector('#rfR').value;restock=L.el.querySelector('#rfS').checked;done=true;L.close();res(true);};
   });
   if(!ok)return;
-  if(remote){await refundOrderOnPlemmo(o,by,reason,restock);return;}
   o.status='refunded';o.refund={ts:Date.now(),by:by.id,reason,restock};
   if(restock)o.items.forEach(l=>{const p=prod(l.pid);if(p&&p.stock!=null){p.stock+=l.qty;S.stockLog.push({id:uid('sl'),ts:Date.now(),pid:p.id,name:p.name,change:l.qty,kind:'return',reason:'Refund of order '+o.no,by:by.id,after:p.stock});}});
   if(o.custId){const cu=cust(o.custId);if(cu){cu.points=Math.max(0,cu.points-(o.pts||0));cu.spend=r2(Math.max(0,cu.spend-o.total));cu.visits=Math.max(0,cu.visits-1);}}

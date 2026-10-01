@@ -41,14 +41,38 @@ function setSetting(key: string, value: string | null): void {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, value, now());
 }
 
-/** Validates the cloud address and returns its origin (path, query and credentials are dropped). */
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+/** The cloud origins this build may connect to: the policy's cloud, the environment's, and any listed explicitly. */
+export function allowedCloudOrigins(): string[] {
+  const list = [getLicensePolicy().cloudUrl, process.env.PLEMMO_SYNC_URL || '', ...(process.env.PLEMMO_CLOUD_ALLOWED_ORIGINS || '').split(',')];
+  const out: string[] = [];
+  for (const raw of list.map((x) => x.trim()).filter(Boolean)) { try { out.push(new URL(raw).origin); } catch { /* ignore an unusable entry */ } }
+  return out;
+}
+
+/**
+ * Checks the cloud address from an activation code and returns the origin to connect to. The address is
+ * never used as given: it must be https (plain http only for this machine), carry no credentials, and be
+ * one the build allows — the pinned cloud of a release build, a configured origin, or (development builds
+ * that pin nothing) this machine. The returned string is taken from the trusted list, so a code can never
+ * point the till at an arbitrary host (it cannot be used to make the till probe a network).
+ */
 export function checkCloudUrl(url: string): string {
   let u: URL;
   try { u = new URL(url); } catch { throw new ActivationError('The cloud address in this code is not valid.', 'bad_cloud_url'); }
-  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname) || u.hostname.endsWith('.local');
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) throw new ActivationError('The cloud address must use https.', 'insecure_cloud_url');
+  const loopback = LOOPBACK_HOSTS.find((h) => h === u.hostname || (u.hostname === '::1' && h === '[::1]'));
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) throw new ActivationError('The cloud address must use https.', 'insecure_cloud_url');
   if (u.username || u.password) throw new ActivationError('The cloud address must not contain a user name or password.', 'bad_cloud_url');
-  return u.origin;
+  const allowed = allowedCloudOrigins();
+  const hit = allowed.find((a) => a === u.origin);
+  if (hit) return hit;
+  if (allowed.length === 0 && loopback) {
+    const port = Number(u.port);
+    const scheme = u.protocol === 'https:' ? 'https' : 'http';
+    return `${scheme}://${loopback}${Number.isInteger(port) && port > 0 ? ':' + port : ''}`;
+  }
+  throw new ActivationError('This activation code points at a cloud this build is not set up to use. Ask for a new code.', 'cloud_not_allowed');
 }
 
 // Every table whose rows carry the organisation id (found by schema inspection; a test keeps this list honest).

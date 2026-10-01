@@ -115,6 +115,15 @@ async function run() {
     const insecure = Buffer.from('http://example.com').toString('base64url') + '~' + issued.body.token;
     const refusedHttp = await as(T.own, 'post', '/api/activation', { code: insecure });
     ok(refusedHttp.status === 400 && refusedHttp.body.code === 'insecure_cloud_url', 'a code pointing at a plain-http public address is refused');
+    const stranger = Buffer.from('https://cloud.not-ours.example').toString('base64url') + '~' + issued.body.token;
+    const notAllowed = await as(T.own, 'post', '/api/activation', { code: stranger });
+    ok(notAllowed.status === 400 && notAllowed.body.code === 'cloud_not_allowed', 'a code naming a cloud this build does not use is refused before any connection is made');
+    const { checkCloudUrl, allowedCloudOrigins } = require('../main/core/activation');
+    fs.writeFileSync(policyFile, JSON.stringify({ requireActivation: true, cloudUrl: 'https://cloud.plemmo.example', publicKeys: { k1: pem(keyA, 'spki') } })); resetLicensePolicyCache();
+    ok(checkCloudUrl('https://cloud.plemmo.example/anything?x=1') === 'https://cloud.plemmo.example' && allowedCloudOrigins().length === 1, 'a release build that pins its cloud accepts that origin (path and query dropped)');
+    let pinned = ''; try { checkCloudUrl(cloudUrl); } catch (e: any) { pinned = e.code; }
+    ok(pinned === 'cloud_not_allowed', 'and refuses every other address, including this machine');
+    writePolicy({ k1: pem(keyA, 'spki') }); resetLicensePolicyCache();
     const wrongToken = Buffer.from(cloudUrl).toString('base64url') + '~plemmo_act_' + 'x'.repeat(32);
     const bad = await as(T.own, 'post', '/api/activation', { code: wrongToken });
     ok(bad.status === 400 && bad.body.code === 'invalid_token' && getSettingValue('cloud_sync_url') === null, 'an unknown token is refused and nothing is saved');

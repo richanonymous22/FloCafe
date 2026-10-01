@@ -270,3 +270,37 @@ A.poReceive=()=>{
     }catch(e){toast(stErr(e,'The goods were not received'),'warn',{ms:5200});}
   };
 };
+
+/* ---------- Options (sizes, colours …) of an item ---------- */
+function variantStockCell(p){const n=p.variants.length,tot=sum(p.variants,v=>v.stock||0);return`<b class="num">${stQty(tot)}</b> <span class="muted">across ${n} option${n===1?'':'s'}</span>`;}
+A.varEdit=async d=>{
+  const p=prod(d.id);if(!p)return;
+  let list;
+  try{list=((await PlemmoAPI.get('/retail/variants?product_id='+encodeURIComponent(p.id))).variants||[]).filter(v=>v.is_active!==0);}
+  catch(e){toast(stErr(e,'The options could not be read'),'warn');return;}
+  const inp=(cls,val,w,ph,type)=>`<input class="input ${cls}" ${type?`type="${type}"`:''} style="width:${w}px" value="${stEsc(val==null?'':val)}" placeholder="${ph||''}">`;
+  const rows=list.map(v=>{const live=(p.variants||[]).find(x=>x.id===v.id);return`<tr data-v="${stEsc(v.id)}"><td>${inp('vn',v.name,110,'Name')}</td><td>${inp('vp',v.price,80,'Price','number')}</td><td>${inp('vc',v.cost,70,'Cost','number')}</td><td>${inp('vs',v.sku,90,'SKU')}</td><td>${inp('vb',v.barcode,120,'Barcode')}</td><td class="num">${live&&live.stock!=null?stQty(live.stock):''}</td><td class="r" style="white-space:nowrap"><button class="btn btn-sm" data-s>Save</button> <button class="btn btn-sm btn-ghost" data-r>Remove</button></td></tr>`;}).join('');
+  const L=modal({title:`Options: ${esc(p.name)}`,sub:'Sizes, colours or anything with its own price, barcode and stock',cls:'rc-modal',body:`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Price</th><th>Cost</th><th>SKU</th><th>Barcode</th><th>Stock</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="muted">No options yet. An item with options is sold as one of them.</td></tr>'}</tbody></table></div>
+    <h4 style="margin:16px 0 8px">Add an option</h4><div class="row" style="gap:8px;flex-wrap:wrap" id="vnew">${inp('vn',"",110,'Name')}${inp('vp',p.price,80,'Price','number')}${inp('vc',p.cost||0,70,'Cost','number')}${inp('vs',"",90,'SKU')}${inp('vb',"",120,'Barcode')}${inp('vq',0,80,'Opening stock','number')}<button class="btn btn-primary" id="vadd">Add option</button></div>
+    <p class="hint">Stock of each option is counted and corrected with Stocktake or Import stock. Opening stock is recorded in the stock history.</p>`,foot:`<span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+  const reload=async()=>{try{await PlemmoCatalogue.load(S);}catch(e){/* shown next load */}L.close();renderView();A.varEdit({id:p.id});};
+  const val=(el,c)=>(el.querySelector('.'+c)||{}).value||'';
+  L.el.addEventListener('click',async e=>{
+    const tr=e.target.closest('tr[data-v]');
+    if(tr&&e.target.closest('[data-s]')){
+      try{await PlemmoAPI.request('/retail/variants/'+encodeURIComponent(tr.dataset.v),{method:'PUT',body:{name:val(tr,'vn').trim(),price:Number(val(tr,'vp')),cost:Number(val(tr,'vc'))||0,sku:val(tr,'vs').trim()||null,barcode:val(tr,'vb').trim()||null},idempotent:false});toast('Option saved');await reload();}
+      catch(er){toast(stErr(er,'The option was not saved'),'warn');}
+    }else if(tr&&e.target.closest('[data-r]')){
+      if(!await confirmBox({title:'Remove this option?',text:'It can no longer be sold. Past sales keep it.',ok:'Remove',danger:true}))return;
+      try{await PlemmoAPI.del('/retail/variants/'+encodeURIComponent(tr.dataset.v),{idempotent:false});toast('Option removed');await reload();}catch(er){toast(stErr(er,'It could not be removed'),'warn');}
+    }else if(e.target.closest('#vadd')){
+      const n=L.el.querySelector('#vnew');const name=val(n,'vn').trim(),price=Number(val(n,'vp')),qty=Math.round(Number(val(n,'vq'))||0);
+      if(!name||!(price>=0)||val(n,'vp')===''){toast('Give the option a name and a price','warn');return;}
+      try{
+        const r=await PlemmoAPI.post('/retail/variants',{product_id:p.id,name,price,cost:Number(val(n,'vc'))||0,sku:val(n,'vs').trim()||null,barcode:val(n,'vb').trim()||null},{idempotent:false});
+        if(qty>0)await PlemmoAPI.post('/inventory/adjust',{product_id:p.id,variant_id:r.variant.id,quantity_delta:qty,movement_type:'receipt',reason:'Opening stock'},{idempotent:false});
+        toast(`${name} added`);await reload();
+      }catch(er){toast(stErr(er,'The option was not added'),'warn');}
+    }
+  });
+};

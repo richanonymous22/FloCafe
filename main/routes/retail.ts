@@ -7,6 +7,8 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { getDatabase } from '../db';
+import { getBalance } from '../core/inventory';
 import { requireRole } from '../middleware/security';
 import { requireFeature } from '../middleware/feature-access';
 import { requireLocationAccess } from '../middleware/location-access';
@@ -25,6 +27,15 @@ function statusFor(error: any): number {
 }
 
 router.get('/variants', requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  // `all=1`: every active variant with its stock on hand, so a till can offer the options of a product.
+  if (req.query.all === '1') {
+    const rows = getDatabase().prepare(`
+      SELECT v.id, v.product_id, v.name, v.sku, v.barcode, v.price, v.cost, v.sort_order
+      FROM product_variants v JOIN products p ON p.id = v.product_id
+      WHERE v.is_active = 1 AND p.deleted_at IS NULL ORDER BY v.product_id, v.sort_order, v.created_at
+    `).all() as any[];
+    return res.json({ variants: rows.map((v) => ({ ...v, stock: getBalance(v.product_id, v.id) })) });
+  }
   const productId = String(req.query.product_id || '');
   if (!productId) {
     return res.status(400).json({ error: 'product_id is required' });

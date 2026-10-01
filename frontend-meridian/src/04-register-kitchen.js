@@ -56,12 +56,14 @@ function gridHTML(){
   }
   return list.map(p=>{
     const c=catOf(p.cat)||{color:'#888'},q=inCartQty(p.id);
-    const out=!p.available||(p.stock!=null&&p.stock<=0);
-    const low=p.stock!=null&&p.stock>0&&p.stock<=(p.low??5);
-    return`<button class="tile ${out?'off':''}" data-act="add" data-id="${p.id}" style="--c:${c.color}" ${out?'aria-disabled="true"':''} aria-label="${esc(p.name)}, ${money(p.price)}${q?`, ${q} in order`:''}">
+    const vs=p.variants&&p.variants.length;
+    const out=!p.available||(vs?p.variants.every(v=>v.stock!=null&&v.stock<=0):(p.stock!=null&&p.stock<=0));
+    const low=!vs&&p.stock!=null&&p.stock>0&&p.stock<=(p.low??5);
+    const lo=vs?Math.min(...p.variants.map(v=>v.price)):p.price,priceTxt=vs&&p.variants.some(v=>v.price!==lo)?'from '+money(lo):money(lo);
+    return`<button class="tile ${out?'off':''}" data-act="add" data-id="${p.id}" style="--c:${c.color}" ${out?'aria-disabled="true"':''} aria-label="${esc(p.name)}, ${priceTxt}${q?`, ${q} in order`:''}">
       <span class="tile-em" aria-hidden="true">${p.emoji||'•'}</span>
       <span class="tile-name">${esc(p.name)}</span>
-      <span class="tile-price num">${money(p.price)}${low?`<span class="tile-stock">${p.stock} left</span>`:''}</span>
+      <span class="tile-price num">${priceTxt}${low?`<span class="tile-stock">${p.stock} left</span>`:''}</span>
       ${q&&!out?`<span class="tile-q num">${q}</span>`:''}
     </button>`;}).join('');
 }
@@ -160,9 +162,24 @@ async function refreshHeld(){
   if(U.view==='pos'){const sp=$('#posStrip');if(sp)sp.innerHTML=posStripHTML();}
 }
 
+function inCartVariantQty(pid,vid){return sum(U.cart.items.filter(l=>l.pid===pid&&l.vid===vid),l=>l.qty);}
+// A product with options (sizes, colours …) is sold as one of them: the cashier picks, each has its own price and stock.
+function addVariant(p,v){
+  if(v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0){toast(`No ${p.name} (${v.name}) left in stock`,'warn');return;}
+  const key=p.id+'|v:'+v.id;
+  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!l.override);
+  if(ex){ex.qty+=1;U.newLine=null;}
+  else{const l={key,pid:p.id,vid:v.id,name:`${p.name} (${v.name})`,price:v.price,cost:v.cost,qty:1,mods:[],note:'',uid:uid('l'),sent:false};U.cart.items.push(l);U.newLine=l.uid;}
+  U.selLine=null;refreshPos({scrollEnd:true});
+}
+function openVariants(p){
+  const L=modal({title:esc(p.name),sub:'Choose an option',cls:'narrow',body:`<div class="vgrid" style="display:grid;gap:8px">${p.variants.map(v=>{const out=v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0;return`<button class="btn" style="justify-content:space-between;padding:14px 16px" data-vid="${esc(v.id)}" ${out?'disabled':''}><span>${esc(v.name)}${v.stock!=null?`<small class="muted" style="margin-left:8px">${out?'out of stock':v.stock+' left'}</small>`:''}</span><b class="num">${money(v.price)}</b></button>`;}).join('')}</div>`,foot:`<button class="btn" data-act="closeTop">Cancel</button>`});
+  L.el.addEventListener('click',e=>{const b=e.target.closest('[data-vid]');if(!b||b.disabled)return;const v=p.variants.find(x=>x.id===b.dataset.vid);if(!v)return;L.close();addVariant(p,v);});
+}
 function addProduct(pid){
   const p=prod(pid);if(!p)return;
   if(!p.available){toast(`${p.name} is marked sold out`,'warn');return;}
+  if(p.variants&&p.variants.length){openVariants(p);return;}
   if(p.stock!=null&&p.stock-inCartQty(pid)<=0){toast(`No ${p.name} left in stock`,'warn');return;}
   if(p.mods&&p.mods.length){openMods(p);return;}
   addLine(p,[],1,'');
@@ -191,9 +208,14 @@ function noteScan(code,ok,info){U.lastScan={code,ok,name:info&&info.name,message
 async function handleScan(code){
   try{
     const r=await PlemmoTill.lookupBarcode(code);
-    if(r.variant){noteScan(code,false,{message:'a product variant'});toast(`${r.product.name} has variants, which this till can’t sell yet`,'warn');return;}
     const p=r.product&&prod(r.product.id);
     if(!p){noteScan(code,false,{message:'not on this till’s menu'});toast(`${r.product?r.product.name:'That item'} isn’t on this till’s menu`,'warn');return;}
+    if(r.variant){
+      const v=(p.variants||[]).find(x=>x.id===r.variant.id);
+      if(!v){noteScan(code,false,{message:'option not loaded'});toast(`${p.name} (${r.variant.name||'option'}) isn’t on this till’s menu`,'warn');return;}
+      noteScan(code,true,{name:`${p.name} (${v.name})`});addVariant(p,v);return;
+    }
+    if(p.variants&&p.variants.length){noteScan(code,false,{message:'choose an option'});openVariants(p);return;}
     noteScan(code,true,{name:p.name});
     addProduct(p.id);
   }catch(e){
@@ -247,7 +269,7 @@ async function removeSentLine(l){
 A.lineQty=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
   const n=l.qty+(+d.d);
-  if(+d.d>0){const p=prod(l.pid);if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
+  if(+d.d>0){const p=prod(l.pid),v=l.vid&&p?(p.variants||[]).find(x=>x.id===l.vid):null;if(v){if(v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0){toast(`No more ${l.name} in stock`,'warn');return;}}else if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
   if(l.sent&&+d.d<0){
     if(onBackendOrder()){
       if(l.qty===1){await removeSentLine(l);return;}

@@ -504,7 +504,7 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
       original_unit_price, price_override_reason, price_override_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    orderId, lineUid, product.id, product.name, lineSku, unitPrice, quantity,
+    orderId, lineUid, product.id, variant && variant.name ? `${product.name} — ${variant.name}` : product.name, lineSku, unitPrice, quantity,
     itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
     taxResult.tax_type, itemDiscount, itemTotal,
     JSON.stringify(line.variant_selection || null),

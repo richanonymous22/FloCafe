@@ -25,6 +25,7 @@
   // to its authoritative addon id via the catalogue addon index.
   function cartLineToItem(line, addonIndex) {
     const item = { product_id: line.pid, quantity: line.qty };
+    if (line.vid) item.variant_id = line.vid;
     const mods = Array.isArray(line.mods) ? line.mods : [];
     const addons = [];
     mods.forEach((m) => {

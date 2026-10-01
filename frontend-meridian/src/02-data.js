@@ -33,7 +33,7 @@ const initials=n=>String(n||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).joi
 const first=n=>String(n||'').split(' ')[0];
 const isMac=/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent);
 function greeting(){const h=new Date().getHours();return h<12?'Good morning':h<18?'Good afternoon':'Good evening';}
-function setPath(o,p,v){const k=p.split('.');let x=o;for(let i=0;i<k.length-1;i++){x[k[i]]=x[k[i]]||{};x=x[k[i]];}x[k[k.length-1]]=v;}
+function setPath(o,p,v){const k=p.split('.');if(k.some(s=>s==='__proto__'||s==='constructor'||s==='prototype'))return;let x=o;for(let i=0;i<k.length-1;i++){x[k[i]]=x[k[i]]||{};x=x[k[i]];}x[k[k.length-1]]=v;}
 function getPath(o,p){return p.split('.').reduce((x,k)=>x==null?x:x[k],o);}
 
 /* ---------- Icons ---------- */

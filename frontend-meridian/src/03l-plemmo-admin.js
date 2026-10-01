@@ -104,12 +104,6 @@
   };
   function isShared(k) { return Object.prototype.hasOwnProperty.call(SHARED, k); }
 
-  function setPathDeep(obj, path, val) {
-    const parts = path.split('.'); let o = obj;
-    for (let i = 0; i < parts.length - 1; i++) { o[parts[i]] = o[parts[i]] || {}; o = o[parts[i]]; }
-    o[parts[parts.length - 1]] = val;
-  }
-
   // Save one shared setting. Resolves only when the server accepted it.
   function saveSetting(k, val, country) {
     const m = SHARED[k];
@@ -173,5 +167,5 @@
   }
 
   window.PlemmoAdmin = { products: products, taxCategories: taxCategories, categories: categories, optionGroups: optionGroups, errorMessage: errorMessage,
-    settings: { isShared: isShared, save: saveSetting, load: loadSettings, apply: applySettings, setPath: setPathDeep } };
+    settings: { isShared: isShared, save: saveSetting, load: loadSettings, apply: applySettings } };
 })();

@@ -140,7 +140,7 @@ async function run() {
 
     console.log('\n1. the reader is not faked');
     await openPay(2);
-    const text = () => (C.doc.getElementById('payBody').textContent || '');
+    const text = () => { const b = C.doc.querySelectorAll('#payBody'); return (b.length ? b[b.length - 1].textContent : '') || ''; };
     ok(!/Visa ending|battery|Connected/i.test(text()), 'no fake "Visa ending", "battery" or "Connected" claims on the card pane');
     ok(/not talk to the terminal|unverified/i.test(text()), 'the pane says the payment is recorded as unverified');
 

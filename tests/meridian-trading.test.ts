@@ -149,6 +149,8 @@ async function run() {
     ok(/VAT 20%/.test(text()) && /VAT collected£1\.66/.test(text()), 'VAT by rate is the sum of what each receipt charged: £1.33 + £0.33 = £1.66 (rounded per sale, as on the receipts)');
     ok(/Not closed\. This is a read-only look/.test(text()), 'it says it is only a look');
     ok(!!O.doc.querySelector('[data-act="zClose"]'), 'an owner is offered "Close the day"');
+    ok(/1\. Count and close the cash drawer/.test(text()) && /2\. Close the day/.test(text()) && /3\. Back up the database/.test(text()), 'the end-of-day checklist lists drawer, Z and backup in order');
+    ok(!!O.doc.querySelector('[data-act="backup"]'), 'an owner is offered "Back up now"');
 
     console.log('\n2. closing the day makes a numbered, sealed Z');
     O.click('zClose');
@@ -160,6 +162,7 @@ async function run() {
     ok(zrow && zrow.number === 1 && JSON.parse(zrow.snapshot_json).sales.gross_minor === 1000, 'Z 1 is in the database with gross 10.00');
     ok(/Closed .* UTC · [0-9a-f]{12}/.test(text()), 'the screen shows when it was closed and the first characters of its seal');
     ok(/All totals agree/.test(text()), 'and that every cross-check passed');
+    ok(!!O.doc.querySelector('.modal [data-act="backup"]') && /Back up the database before you leave/.test(O.toasts()), 'after the Z the owner is prompted to back up');
 
     console.log('\n3. it cannot be run again');
     await waitFor(() => !O.doc.querySelector('#cfOk'), 3000, 'dialog gone').catch(() => {});

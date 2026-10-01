@@ -404,15 +404,24 @@ async function showTradingReport(){
   catch(e){toast(`The report could not be read: ${window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it'}`,'warn');return;}
   U.trade={r:x,z:null};
   const canZ=can('reports');
-  modal({title:'Trading so far',sub:'X report',cls:'rc-modal',body:tradingReceiptHTML(x,null),
+  const open=!!(x.checks&&x.checks.open_cash_session),owner=(me()&&me().plemmoRole)==='owner',lb=U.lastBackup;
+  const step=(ok,t,sub,btn)=>`<div class="row" style="gap:10px;align-items:flex-start;padding:6px 0"><span class="badge ${ok?'ok':'warn'}" aria-hidden="true">${ok?'Done':'To do'}</span><div style="flex:1;min-width:0"><b>${t}</b><div class="muted" style="font-size:12.5px">${sub}</div></div>${btn||''}</div>`;
+  const steps=canZ?`<div class="panel" style="margin-bottom:12px"><div class="panel-b">
+    ${step(!open,'1. Count and close the cash drawer',open?'The drawer is still open, so the cash figures are not final. The day cannot be closed until it is counted.':'No drawer is open.',open?`<button class="btn btn-sm" data-act="eodDrawer">Go to cash drawer</button>`:'')}
+    ${step(false,'2. Close the day','Creates the numbered Z report below. It cannot be changed or run again.','')}
+    ${step(!!(lb&&lb.at>=dayStart(0)),'3. Back up the database',lb&&lb.at>=dayStart(0)?`Backed up at ${fmtT(lb.at)}.`:(owner?'Make a safe copy of today’s data after the Z report.':'Only the owner can make a backup.'),owner&&!(lb&&lb.at>=dayStart(0))?`<button class="btn btn-sm" data-act="backup">Back up now</button>`:'')}
+   </div></div>`:'';
+  modal({title:'Trading so far',sub:'X report',cls:'rc-modal',body:steps+tradingReceiptHTML(x,null),
     foot:`<button class="btn" data-act="tradePrint" data-k="x">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="x">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>${canZ?`<button class="btn btn-primary" data-act="zClose">${ic('lock',16)} Close the day (Z report)</button>`:''}`});
 }
+A.eodDrawer=()=>{closeAll();go('cash');};
 A.zClose=async()=>{
   if(!await confirmBox({title:'Close the day?',text:'This ends today’s trading period and creates a numbered Z report. It is a permanent record and cannot be changed or run again. The cash drawer must be closed first.',ok:'Close the day',danger:true}))return;
   try{
     const z=(await PlemmoAPI.post('/reports/z',{},{idempotent:false})).report;
     closeAll();
-    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-id="${esc(z.id)}">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-id="${esc(z.id)}">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button>${(me()&&me().plemmoRole)==='owner'?`<button class="btn" data-act="backup">Back up now</button>`:''}<span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+    if((me()&&me().plemmoRole)==='owner')toast('The day is closed. Back up the database before you leave.','info',{ms:5200});
   }catch(e){
     const code=e&&e.data&&e.data.code,msg=window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it';
     toast(code==='cash_session_open'?'Close the cash drawer first (Cash screen), then run the Z report.':msg,'warn',{ms:5200});
@@ -423,7 +432,7 @@ A.zList=async()=>{
   try{list=(await PlemmoAPI.get('/reports/z')).reports;}
   catch(e){toast('The Z reports could not be read','warn');return;}
   closeAll();
-  modal({title:'Z reports',cls:'rc-modal',body:list.length?`<div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>No.</th><th>Closed</th><th class="r">Sales</th><th class="r">Net</th><th></th></tr></thead><tbody>${list.map(z=>`<tr><td>Z${String(z.number).padStart(4,'0')}</td><td>${esc(z.period_end)}</td><td class="r num">${z.transactions}</td><td class="r num">${tmoney(z.net_minor,z.exponent)}</td><td>${z.ok?'':'<span class="tag warn">check failed</span> '}<button class="btn btn-sm" data-act="zOpen" data-id="${esc(z.id)}">Open</button></td></tr>`).join('')}</tbody></table></div></div>`:'<p class="muted">No Z reports yet. Close the day to create the first one.</p>',foot:'<button class="btn" data-act="closeTop">Close</button>'});
+  modal({title:'Z reports',cls:'rc-modal',body:list.length?`<div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>No.</th><th>Closed</th><th class="r">Sales</th><th class="r">Net</th><th></th></tr></thead><tbody>${list.map(z=>`<tr><td>Z${String(z.number).padStart(4,'0')}</td><td>${esc(z.period_end)}</td><td class="r num">${z.transactions}</td><td class="r num">${tmoney(z.net_minor,z.exponent)}</td><td>${z.ok?'':'<span class="badge warn">check failed</span> '}<button class="btn btn-sm" data-act="zOpen" data-id="${esc(z.id)}">Open</button></td></tr>`).join('')}</tbody></table></div></div>`:'<p class="muted">No Z reports yet. Close the day to create the first one.</p>',foot:'<button class="btn" data-act="closeTop">Close</button>'});
 };
 A.zOpen=async d=>{
   try{

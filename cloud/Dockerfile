@@ -20,6 +20,7 @@ COPY cloud/package.json cloud/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./dist/migrations
+COPY --from=build /app/panel ./dist/panel
 # Drop privileges.
 USER node
 EXPOSE 8080

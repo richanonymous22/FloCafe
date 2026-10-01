@@ -23,6 +23,8 @@ import { hashToken } from './enrollment';
 import { CloudMerchant, CloudPlan, MerchantStatus, generateMerchantCode, isPlausibleEmail, licenceFromPlan, makeActivationCode, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CloudConflict, CloudDevice, EnrollmentToken, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { getLicenseSigningKey, signLicense } from './license-signing';
@@ -237,6 +239,29 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', protocol: PLEMMO_PROTOCOL_VERSION });
   });
+  // ── Operator console (static files; every call it makes is the authenticated /admin/v1 API) ──────────────
+  // Served only when the operator API is switched on. No inline script or style, so a strict CSP applies.
+  const PANEL_FILES: Record<string, [string, string]> = {
+    '/operator': ['index.html', 'text/html; charset=utf-8'],
+    '/operator/panel.js': ['panel.js', 'text/javascript; charset=utf-8'],
+    '/operator/panel.css': ['panel.css', 'text/css; charset=utf-8'],
+  };
+  const panelCache = new Map<string, Buffer>();
+  for (const [route, [file, type]] of Object.entries(PANEL_FILES)) {
+    app.get(route, (_req: Request, res: Response) => {
+      if (!isAdminApiEnabled()) { res.status(404).end(); return; }
+      let body = panelCache.get(file);
+      if (!body) {
+        try { body = fs.readFileSync(path.join(__dirname, 'panel', file)); panelCache.set(file, body); }
+        catch { res.status(404).end(); return; }
+      }
+      res.set({
+        'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      });
+      res.send(body);
+    });
+  }
   // Readiness: the datastore is reachable. A trivial round-trip (returns null)
   // works identically over the SQLite dev store and the async Postgres store.
   app.get('/ready', async (_req: Request, res: Response) => {

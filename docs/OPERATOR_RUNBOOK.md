@@ -4,6 +4,15 @@ All calls go to the cloud service's operator API with `Authorization: Bearer $PL
 (unset token = the whole surface is closed). Examples use `$CLOUD` for the cloud base URL. Every change is
 written to the sync log (`plan_saved`, `merchant_created`, `merchant_suspend`, …).
 
+## The operator console
+Open `https://<cloud address>/operator` and enter the operator token. It lists and searches merchants, creates one
+(choose a plan, optional trial term), shows the licence and terminal health, issues an activation code (with a copy
+button), and suspends, reactivates, renews, changes plan or closes a merchant after a confirmation. Plans can be
+created, edited and retired. It is a thin page over the same `/admin/v1` calls described below: the token stays in
+that browser tab only (cleared on sign-out or when the tab closes), the page has no inline script, a strict
+content-security policy applies, and it does not exist (404) on a server with no operator token configured. Everything
+below can still be done with `curl`.
+
 Licences are always derived from a **plan**; you never hand-edit limits for one merchant except the term.
 
 ## Plans (data, not code)

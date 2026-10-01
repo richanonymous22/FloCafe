@@ -14,7 +14,7 @@ supports it.
 | Till interface ("Meridian") | `frontend-meridian/` | Vanilla JS concatenated by `build.sh` into `dist/meridian-pos.html`; the server is the source of truth |
 | Legacy interface | `frontend/` | Next.js static export; kept, not the main till UI |
 | Kitchen display | `main/` (KDS on :3002) | Standalone server |
-| Cloud service | `cloud/` | Express + PostgreSQL; operator API `/admin/v1/*`; device-signed sync; licence signing |
+| Cloud service | `cloud/` | Express + PostgreSQL; operator API `/admin/v1/*` and the operator console at `/operator` (`cloud/panel/`); device-signed sync; licence signing |
 | Release tooling | `scripts/prepare-release.cjs`, `.github/workflows/` | Pins licence public keys and the cloud URL into builds |
 
 Domain areas: money model (`docs/MONEY_MODEL.md`), payments and refunds (`main/core/payment.ts`, `refund.ts`), card
@@ -97,7 +97,7 @@ PLEMMO_CLOUD_DB_URL=postgres://... npm run test:pg-sync   # needs a PostgreSQL
    decide the rotation routine (`docs/OPERATOR_RUNBOOK.md`).
 5. **Real-device testing** of printers, scanners, drawers, tablets and the Windows installer; a **pilot merchant** (WP12).
 6. **Product decisions still open**: a Supervisor role (needs a `users` table rebuild migration), offers/promotions,
-   an operator web panel (the operator API exists; the panel does not), stock transfers screen, low-stock alert list,
+   stock transfers screen, low-stock alert list,
    product CSV import screen.
 
 ## 7. Known limits

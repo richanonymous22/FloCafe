@@ -163,8 +163,10 @@ jobs:
         # extension and default stage-packages (libnspr4, libnss3, libxss1,
         # libappindicator3-1, libsecret-1-0). SNAPCRAFT_BUILD_ENVIRONMENT=lxd
         # selects the LXD provider explicitly.
-        run: npm run build:frontend && npm run build && npx electron-builder --linux AppImage deb rpm snap --publish never
+        run: node scripts/prepare-release.cjs --platform linux && npm run build:frontend && npm run build:meridian && npm run build && npx electron-builder --linux AppImage deb rpm snap --publish never
         env:
+          PLEMMO_RELEASE_CLOUD_URL: ${{ vars.PLEMMO_RELEASE_CLOUD_URL }}
+          PLEMMO_LICENSE_PUBLIC_KEYS: ${{ vars.PLEMMO_LICENSE_PUBLIC_KEYS }}
           SNAPCRAFT_BUILD_ENVIRONMENT: lxd
 
       - name: Upload Linux assets to GitHub release
@@ -280,8 +282,10 @@ jobs:
         # `files` entries — so one process building both archs produces a single
         # correctly-merged latest-mac.yml instead of two per-arch ones stepping on
         # each other via --clobber.
-        run: npm run build:frontend && npm run build && npx electron-builder --mac --x64 --arm64 --publish never
+        run: node scripts/prepare-release.cjs --platform mac && npm run build:frontend && npm run build:meridian && npm run build && npx electron-builder --mac --x64 --arm64 --publish never
         env:
+          PLEMMO_RELEASE_CLOUD_URL: ${{ vars.PLEMMO_RELEASE_CLOUD_URL }}
+          PLEMMO_LICENSE_PUBLIC_KEYS: ${{ vars.PLEMMO_LICENSE_PUBLIC_KEYS }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
@@ -402,8 +406,10 @@ jobs:
           }
 
       - name: Build Windows
-        run: npm run build:frontend && npm run build && npx electron-builder --win --publish never
+        run: node scripts/prepare-release.cjs --platform win && npm run build:frontend && npm run build:meridian && npm run build && npx electron-builder --win --publish never
         env:
+          PLEMMO_RELEASE_CLOUD_URL: ${{ vars.PLEMMO_RELEASE_CLOUD_URL }}
+          PLEMMO_LICENSE_PUBLIC_KEYS: ${{ vars.PLEMMO_LICENSE_PUBLIC_KEYS }}
           CSC_LINK: ${{ secrets.WINDOWS_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTS_PASSWORD }}
           # Empty when the secrets above aren't set — electron-builder just

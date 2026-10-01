@@ -64,6 +64,9 @@ jobs:
         env:
           NEXT_TELEMETRY_DISABLED: 1
 
+      - name: Build the Meridian till interface
+        run: npm run build:meridian
+
       - name: Compile main process
         run: npm run build
 

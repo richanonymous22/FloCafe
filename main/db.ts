@@ -76,6 +76,7 @@ const DATABASE_MAINTENANCE_ROUTES = new Set([
   'POST /api/db/backup',
   'GET /api/db/download',
   'POST /api/db-tools/initialize',
+  'POST /api/updates/install', // takes the pre-update backup under the same lock
 ]);
 
 function isDatabaseMaintenanceRoute(req: Request): boolean {

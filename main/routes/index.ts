@@ -59,6 +59,7 @@ import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
 import { stocktakeRoutes } from './stocktakes';
 import { activationRoutes } from './activation';
+import { updateRoutes } from './updates';
 import { requireTradingLicence } from '../middleware/license-gate';
 import { supplierRoutes } from './suppliers';
 import { purchaseOrderRoutes } from './purchase-orders';
@@ -108,6 +109,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/stocktakes', stocktakeRoutes);
   app.use('/api/activation', activationRoutes);
+  app.use('/api/updates', updateRoutes);
   app.use('/api/suppliers', supplierRoutes);
   app.use('/api/purchase-orders', purchaseOrderRoutes);
   app.use('/api/transfers', transferRoutes);

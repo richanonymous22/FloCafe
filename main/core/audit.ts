@@ -69,6 +69,10 @@ export type AuditEventType =
   | 'stock.adjusted'
   | 'stock.received'
   | 'stock.counted'
+  // System
+  | 'system.update_started'
+  | 'system.update_verified'
+  | 'system.update_failed'
   // People and access
   | 'employee.created'
   | 'employee.updated'

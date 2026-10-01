@@ -88,3 +88,46 @@ function licenceHTML(){
     <label class="field"><span>Activation code</span><input class="input" id="licCode2" autocomplete="off" spellcheck="false"></label><p class="pl-err" id="licErr2" aria-live="polite"></p>
     <button class="btn btn-primary" data-act="licActivate">Activate</button>`:'<p class="muted">Only the account owner can activate this till.</p>'}</div></div>`:''}`;
 }
+
+/* ---------- Updates (Settings → Updates) ----------
+ * The till server decides when an update may be installed: never mid-sale, always after a verified backup. This
+ * screen shows what it says and lets the owner choose how updates happen. */
+U.upd=U.upd||{status:null,err:null,busy:false};
+async function updatesCheck(){
+  if(!window.PlemmoAPI||!PlemmoAPI.isAuthenticated())return;
+  try{U.upd.status=await PlemmoAPI.get('/updates/status');U.upd.err=null;}
+  catch(e){U.upd.err=(e&&e.data&&e.data.error)||'The update status could not be read.';}
+  if(U.view==='settings'&&U.set.tab==='updates')renderView();
+}
+function updatesHTML(){
+  const st=U.upd.status;
+  if(U.upd.err)return`<div class="panel"><div class="panel-b"><p class="muted">${licEsc(U.upd.err)}</p></div></div>`;
+  if(!st)return`<div class="panel"><div class="panel-b"><p class="muted">Reading update status…</p></div></div>`;
+  const owner=!!(me()&&me().plemmoRole==='owner'),mgr=owner||!!(me()&&me().plemmoRole==='manager');
+  const row=(t,sub,ctl)=>`<div class="set-row"><div class="sr-t"><b>${t}</b>${sub?`<small>${sub}</small>`:''}</div>${ctl||''}</div>`;
+  const s=st.settings;
+  const line=st.downloaded?`Version ${licEsc(st.downloaded)} is ready to install`:st.available?`Version ${licEsc(st.available)} is downloading`:st.checking?'Checking…':'You are up to date';
+  const hrs=(sel,k)=>`<select class="input" style="width:auto" data-ch="updHour" data-k="${k}" ${owner?'':'disabled'}>${[...Array(24)].map((_,h)=>`<option value="${h}" ${sel===h?'selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('')}</select>`;
+  return`<div class="panel"><div class="panel-b">
+   ${row('Version',`This till is running <b>${licEsc(st.current)}</b>. ${line}.${st.last_checked_at?` Last checked ${licWhen(st.last_checked_at)}.`:''}${st.last_error?` <span style="color:var(--bad-text)">${licEsc(st.last_error)}</span>`:''}`,mgr?`<button class="btn" data-act="updCheck">Check now</button>`:'')}
+   ${st.downloaded?row('Install',st.can_install_now?'Your data is backed up and checked first, then the till restarts into the new version.':`Not right now: ${licEsc(st.blockers.join('; '))}.`,mgr?`<span class="row" style="gap:8px"><button class="btn btn-primary" data-act="updInstall" ${st.can_install_now?'':'disabled'}>Install now</button><select class="input" style="width:auto" data-ch="updDefer"><option value="">Remind me later…</option><option value="60">in 1 hour</option><option value="240">in 4 hours</option><option value="1440">tomorrow</option></select></span>`:''):''}
+   ${st.deferred&&s.deferred_until?row('Reminder paused',`Until ${licWhen(s.deferred_until)}`,''):''}
+   ${row('How updates happen',s.mode==='ask'?'Updates are downloaded for you. Nothing installs until someone presses Install.':s.mode==='quiet_hours'?'Installed by itself in the quiet window below, and only when nothing is open. Each till waits a different few minutes so they never restart together.':'Never prompts or installs. Use "Check now" when you want to update.',`<select class="input" style="width:auto" data-ch="updMode" ${owner?'':'disabled'}>${[['ask','Ask me'],['quiet_hours','Install in quiet hours'],['manual','Only when I check']].map(([v,l])=>`<option value="${v}" ${s.mode===v?'selected':''}>${l}</option>`).join('')}</select>`)}
+   ${s.mode==='quiet_hours'?row('Quiet window','Closed for business and nobody is selling',`<span class="row" style="gap:6px">${hrs(s.window_start_hour,'window_start_hour')} to ${hrs(s.window_end_hour,'window_end_hour')}</span>`):''}
+  </div></div>
+  <section class="panel mt"><div class="panel-h"><h3>Update history</h3><span class="ph-sub">Every update keeps a backup taken just before it</span></div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>When</th><th>From</th><th>To</th><th>How</th><th>Result</th></tr></thead><tbody>
+   ${st.history.map(h=>`<tr><td>${licWhen(h.at)}</td><td class="num">${licEsc(h.from)}</td><td class="num">${licEsc(h.to)}</td><td>${h.automatic?'Automatic':'Manual'}</td><td><span class="badge ${h.status==='ok'?'ok':'warn'}">${h.status==='ok'?'Done':h.status==='installing'?'Installing':'Failed'}</span>${h.note?`<small class="muted" style="display:block">${licEsc(h.note)}</small>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">No updates yet.</td></tr>'}
+  </tbody></table></div></div></section>`;
+}
+A.updCheck=async()=>{try{await PlemmoAPI.post('/updates/check',{},{idempotent:false});}catch(e){toast((e&&e.data&&e.data.error)||'The check failed','warn');}await updatesCheck();};
+A.updInstall=async()=>{
+  if(U.upd.busy)return;
+  if(!await confirmBox({title:'Install the update now?',text:'The till makes a backup, then restarts. Sales are unavailable for a minute or two.',ok:'Install and restart'}))return;
+  U.upd.busy=true;
+  try{await PlemmoAPI.post('/updates/install',{},{idempotent:false});toast('Update starting. The till will restart.','ok',{ms:6000});}
+  catch(e){toast((e&&e.data&&e.data.error)||'The update could not be installed','warn',{ms:6000});}
+  finally{U.upd.busy=false;await updatesCheck();}
+};
+CH.updDefer=async v=>{if(!v)return;try{await PlemmoAPI.post('/updates/defer',{minutes:Number(v)},{idempotent:false});toast('We will remind you later','info');}catch(e){toast((e&&e.data&&e.data.error)||'That did not save','warn');}await updatesCheck();};
+CH.updMode=async v=>{try{await PlemmoAPI.request('/updates/settings',{method:'PUT',body:{mode:v},idempotent:false});}catch(e){toast((e&&e.data&&e.data.error)||'That did not save','warn');}await updatesCheck();};
+CH.updHour=async(v,el)=>{try{await PlemmoAPI.request('/updates/settings',{method:'PUT',body:{[el.dataset.k]:Number(v)},idempotent:false});}catch(e){toast((e&&e.data&&e.data.error)||'That did not save','warn');}await updatesCheck();};

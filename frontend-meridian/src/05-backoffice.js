@@ -514,7 +514,7 @@ A.zFor=d=>showZ(+d.t);
 /* =====================================================================
    SETTINGS
    ===================================================================== */
-const SET_TABS=[['business','Business','home'],['tax','Tax & receipts','receipt'],['features','Features','tables'],['loyalty','Loyalty','heart'],['kiosk','Kiosk','kiosk'],['look','Appearance','sun'],['devices','Devices','printer'],['data','Data','box'],['licence','Licence & cloud','lock']];
+const SET_TABS=[['business','Business','home'],['tax','Tax & receipts','receipt'],['features','Features','tables'],['loyalty','Loyalty','heart'],['kiosk','Kiosk','kiosk'],['look','Appearance','sun'],['devices','Devices','printer'],['data','Data','box'],['licence','Licence & cloud','lock'],['updates','Updates','download']];
 VIEWS.settings=()=>{
   const s=S.settings,t=U.set.tab;
   const row=(title,sub,ctrl)=>`<div class="set-row"><div class="sr-t"><b>${title}</b>${sub?`<small>${sub}</small>`:''}</div>${ctrl}</div>`;
@@ -561,6 +561,7 @@ VIEWS.settings=()=>{
   else if(t==='look')b=`<div class="panel"><div class="panel-b" style="display:grid;gap:22px"><div class="field"><span>Accent colour</span><div class="swatches">${Object.entries(ACCENTS).map(([k,a])=>`<button class="swatch ${s.accent===k?'on':''}" style="--sw:${a.c};--swi:${a.ink}" data-act="setAccent" data-v="${k}" aria-label="${a.name}" aria-pressed="${s.accent===k}">${s.accent===k?ic('check',20):''}</button>`).join('')}</div></div>
     <div class="field"><span>Appearance</span><div class="seg">${[['light','Light'],['dark','Dark'],['system','Match this device']].map(([k,l])=>`<button class="${s.theme===k?'on':''}" data-act="setTheme" data-v="${k}">${l}</button>`).join('')}</div></div></div></div>`;
   else if(t==='licence')b=licenceHTML();
+  else if(t==='updates')b=updatesHTML();
   else if(t==='devices')b=devicesHTML();
   else b=live()?dataHTML():`<div class="panel"><div class="panel-b">
     <div class="set-row"><div class="sr-t"><b>Download a backup</b><small>Everything in one JSON file: items, orders, customers and team</small></div><button class="btn" data-act="backup">${ic('download',16)} Download</button></div>
@@ -570,7 +571,7 @@ VIEWS.settings=()=>{
   return`<div class="page"><div class="page-head"><div><h2>Settings</h2><p class="sub">Changes save as you make them.</p></div></div>
    <div class="set-layout"><nav class="set-nav" aria-label="Settings sections">${SET_TABS.map(([k,l,i])=>`<button class="${t===k?'on':''}" data-act="setTab" data-t="${k}">${ic(i,18)}${l}</button>`).join('')}</nav><div class="set-sec">${b}</div></div></div>`;
 };
-A.setTab=d=>{U.set.tab=d.t;renderView();if(d.t==='devices')loadDevices();if(d.t==='licence')licenceCheck();};
+A.setTab=d=>{U.set.tab=d.t;renderView();if(d.t==='devices')loadDevices();if(d.t==='licence')licenceCheck();if(d.t==='updates')updatesCheck();};
 CH.set=async(v,el)=>{
   const k=el.dataset.k,t=el.dataset.t;let val=t==='bool'?el.checked:t==='num'?(+v||0):v;
   if(k==='name'&&!String(val).trim()){toast('Your business needs a name','warn');el.value=S.settings.name;return;}

@@ -7,7 +7,9 @@
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,8)+(Date.now()%1e6).toString(36);
+// Identifiers (cart lines, idempotency keys, import ids) come from the platform's secure random source.
+const rnd6=()=>{const a=new Uint32Array(2);crypto.getRandomValues(a);return (a[0].toString(36)+a[1].toString(36)).slice(0,6);};
+const uid=(p='id')=>p+'_'+rnd6()+(Date.now()%1e6).toString(36);
 const r2=n=>Math.round((Number(n)+Number.EPSILON)*100)/100;
 const sum=(a,f=x=>x)=>a.reduce((s,x)=>s+(Number(f(x))||0),0);
 const clamp=(n,a,b)=>Math.min(b,Math.max(a,n));

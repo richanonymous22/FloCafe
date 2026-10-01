@@ -78,7 +78,8 @@
     try {
       if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
     } catch (e) { /* fall through */ }
-    return 'idem-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    const a = new Uint32Array(2); window.crypto.getRandomValues(a);
+    return 'idem-' + Date.now().toString(36) + '-' + (a[0].toString(36) + a[1].toString(36)).slice(0, 10);
   }
 
   // ---- core request -------------------------------------------------------

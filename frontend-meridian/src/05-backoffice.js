@@ -271,7 +271,18 @@ function openCustDrawer(id){
 }
 A.custSale=d=>{closeAll();if(U.cart.items.length&&!U.cart.orderId)A.hold();U.cart=newCart();U.cart.custId=d.id;go('pos');};
 A.custEdit=d=>{closeAll();editCustomer(d.id);};
-A.custPts=async d=>{const c=cust(d.id);const v=await promptBox({title:'Adjust points',label:`${c.name} has ${c.points}. Add or remove (use a minus sign)`,type:'number',value:'',ok:'Adjust'});if(v===null||v==='')return;c.points=Math.max(0,c.points+Math.round(+v||0));save();closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);};
+A.custPts=async d=>{const c=cust(d.id);
+  if(adminLive()){
+    // The wallet is the server's ledger: a correction is a ledger entry with a reason, by a manager.
+    const v=await promptBox({title:'Adjust wallet points',label:`${c.name} has ${c.points} points (100 points = £1). Add or remove (use a minus sign)`,type:'number',value:'',ok:'Next'});if(v===null||v==='')return;
+    const pts=Math.round(+v||0);if(!pts){toast('Enter a number of points','warn');return;}
+    const why=await promptBox({title:'Reason',label:'Why is the wallet being changed?',value:'',placeholder:'For example, goodwill credit',ok:pts>0?'Add points':'Remove points'});if(why===null)return;
+    if(!String(why).trim()){toast('A reason is needed','warn');return;}
+    try{const r=await PlemmoAdmin.customers.adjustWallet(c.id,pts,String(why).trim());c.points=Number(r.balance)||0;}
+    catch(e){toast(`The wallet was not changed: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);return;
+  }
+  const v=await promptBox({title:'Adjust points',label:`${c.name} has ${c.points}. Add or remove (use a minus sign)`,type:'number',value:'',ok:'Adjust'});if(v===null||v==='')return;c.points=Math.max(0,c.points+Math.round(+v||0));save();closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);};
 function editCustomer(id,after){
   const c=id?cust(id):null;
   const L=modal({title:c?'Edit customer':'New customer',body:`<div class="fgrid"><label class="field span2"><span>Name</span><input class="input" id="cuN" value="${esc(c?c.name:'')}" autofocus autocomplete="off"></label><label class="field"><span>Mobile</span><input class="input num" id="cuP" type="tel" value="${esc(c?c.phone:'')}"></label><label class="field"><span>Email, for receipts</span><input class="input" id="cuE" type="email" value="${esc(c?c.email:'')}"></label><label class="field span2"><span>Notes</span><input class="input" id="cuNo" value="${esc(c?c.notes:'')}" placeholder="For example, prefers oat milk"></label></div>`,
@@ -320,6 +331,18 @@ VIEWS.team=()=>{
      <div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Team member</th>${days.map(d=>`<th class="r">${new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})}</th>`).join('')}<th class="r">Hours</th><th class="r">Rate</th><th class="r">Wages</th></tr></thead><tbody>
      ${rows.map(r=>`<tr><td><div class="it-cell"><span class="av" style="--c:${r.e.color}">${initials(r.e.name)}</span><b>${esc(r.e.name)}</b></div></td>${r.hs.map(h=>`<td class="r num ${h?'':'faint'}">${h?h.toFixed(1):'–'}</td>`).join('')}<td class="r num"><b>${r.tot.toFixed(1)}</b></td><td class="r num">${r.e.rate?money(r.e.rate):'<span class="faint">–</span>'}</td><td class="r num">${money(r.cost)}</td></tr>`).join('')}
      </tbody><tfoot><tr><td>Total</td>${days.map((d,i)=>`<td class="r num">${sum(rows,r=>r.hs[i]).toFixed(1)}</td>`).join('')}<td class="r num">${sum(rows,r=>r.tot).toFixed(1)}</td><td></td><td class="r num">${money(wages)}</td></tr></tfoot></table></div></div>`;
+  }else if(live()){
+    // The till server decides by role. These toggles used to change a local table the server never read,
+    // so connected tills describe the real, fixed rules instead.
+    const guide=[
+      ['Owner','Everything, including cloud and licence settings and deleting data.','',''],
+      ['Manager','Items and prices, reports, team, settings, closing the cash drawer, refunds, voids and discounts. Approves other people’s refunds, voids, discounts and price changes with their PIN.','',''],
+      ['Cashier','Sell and take payment, add and edit customers, open the cash drawer and record paid in/out, look up stock, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, close the drawer, manage the team.'],
+      ['Waiter','Take and edit their own orders, move an order to another table, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, manage the team.'],
+      ['Chef','Use the kitchen display.','','Anything at the till.'],
+    ];
+    body=`<p class="muted" style="margin-bottom:14px">Permissions follow the person’s role and are enforced by the till server, so they hold on every till. Choosing individual permissions per person is not available in this version.</p>
+     <div class="grid g-2">${guide.map(([r,can,pin,no])=>`<div class="panel"><div class="panel-b"><b>${r}</b><p style="margin:8px 0 0">${can}</p>${pin?`<p class="muted" style="margin:8px 0 0"><b>Needs a manager’s PIN:</b> ${pin}</p>`:''}${no?`<p class="muted" style="margin:8px 0 0"><b>Cannot:</b> ${no}</p>`:''}</div></div>`).join('')}</div>`;
   }else{
     const roles=['manager','staff'];
     body=`<p class="muted" style="margin-bottom:14px">Owners can always do everything. When someone lacks a permission, the till asks for a manager’s PIN instead of blocking them.</p>
@@ -336,8 +359,9 @@ A.tmClock=async d=>{const e=emp(d.id);const wasOn=onShift(e.id);
   // Plemmo's timeclock is self-service: the signed-in operator clocks through
   // the authoritative API. Clocking a different team member stays local (an
   // admin clock endpoint would be needed to make that authoritative too).
-  if(e.id===U.user&&typeof plemmoClockSelf==='function'&&window.PlemmoStaff&&PlemmoAPI.isAuthenticated()){
-    await plemmoClockSelf(!wasOn);toast(`${first(e.name)} clocked ${wasOn?'out':'in'}`);renderView();return;
+  if(typeof plemmoClockSelf==='function'&&window.PlemmoStaff&&PlemmoAPI.isAuthenticated()){
+    if(e.id!==U.user){toast('Each person clocks themselves in and out when they sign in. The till server keeps the timeclock.','warn',{ms:5200});return;}
+    const r=await plemmoClockSelf(!wasOn);if(r==='ok'){toast(`${first(e.name)} clocked ${wasOn?'out':'in'}`);renderView();}return;
   }
   if(wasOn){clockOut(e.id);toast(`${first(e.name)} clocked out`);}else{clockIn(e.id);toast(`${first(e.name)} clocked in`);}renderView();};
 CH.perm=(v,el)=>{const r=S.roles[el.dataset.r],p=el.dataset.p;if(el.checked){if(!r.perms.includes(p))r.perms.push(p);}else r.perms=r.perms.filter(x=>x!==p);save();toast(`${r.label}s ${el.checked?'can now':'can no longer'} ${permLabel(p).toLowerCase()}`);};

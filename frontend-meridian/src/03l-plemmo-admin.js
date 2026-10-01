@@ -80,6 +80,11 @@
     remove: function (id) { return api().del('/addon-groups/' + enc(id), { idempotent: false }); },
   };
 
+  const customers = {
+    // A manual wallet correction: a signed number of points and a reason; resolves { balance }.
+    adjustWallet: function (id, points, reason) { return api().post('/customers/' + enc(id) + '/wallet/adjust', { points: points, reason: reason }, { idempotent: false }); },
+  };
+
   /* ---------- Settings ----------
    * Two kinds. SHARED settings belong to the business and are saved on the till server, so every
    * terminal agrees (name, address, VAT number, tipping, kitchen display, loyalty, receipt text, …).
@@ -167,5 +172,6 @@
   }
 
   window.PlemmoAdmin = { products: products, taxCategories: taxCategories, categories: categories, optionGroups: optionGroups, errorMessage: errorMessage,
+    customers: customers,
     settings: { isShared: isShared, save: saveSetting, load: loadSettings, apply: applySettings } };
 })();

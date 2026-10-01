@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { getDatabase, now, getSettingValue } from '../db';
+import { getDatabase, now, getSettingValue, withTxn } from '../db';
+import { recordAuditEvent } from '../core/audit';
 import { requireRole } from '../middleware/security';
 import { parsePhoneE164, stripPhoneDigits } from '../lib/phone';
 import { snapshotCustomer } from '../core/sync/reference-entities';
@@ -203,6 +204,48 @@ router.get('/:id/wallet', requireRole('owner', 'manager', 'cashier', 'waiter'), 
   } catch (error: any) {
     console.error("[API] Internal error:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /:id/wallet/adjust — a manual correction to a customer's cashback wallet (goodwill credit,
+// fixing a mistake). Owner/manager only; a reason is required; the wallet can never go negative; the
+// change is a ledger entry (never an edit of the balance) and is audited with who and why.
+router.post('/:id/wallet/adjust', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const customerId = String(req.params.id);
+    const customer = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(customerId) as { id: string; name: string } | undefined;
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    const points = Number(req.body?.points);
+    if (!Number.isInteger(points) || points === 0 || Math.abs(points) > 1_000_000) {
+      return res.status(400).json({ error: 'points must be a whole number other than zero (at most 1,000,000)' });
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) return res.status(400).json({ error: 'A reason is required' });
+    if (reason.length > 200) return res.status(400).json({ error: 'The reason must be 200 characters or fewer' });
+    const balance = withTxn(() => {
+      const before = getWalletBalance(customerId);
+      if (points < 0 && -points > before) {
+        throw Object.assign(new Error(`The wallet only has ${before} points, so ${-points} cannot be taken off`), { statusCode: 400 });
+      }
+      const at = now();
+      db.prepare(`INSERT INTO loyalty_ledger (customer_id, bill_id, type, amount, description, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, ?)`)
+        .run(customerId, points > 0 ? 'credit' : 'debit', Math.abs(points), `Manual adjustment: ${reason}`, at, at);
+      return getWalletBalance(customerId);
+    });
+    const user = (req as any).user as { userId: string; role: string };
+    recordAuditEvent({
+      type: 'customer.wallet_adjusted',
+      actor: { userId: user.userId, role: user.role },
+      entity: { type: 'customer', id: customerId },
+      summary: `Wallet of ${customer.name} ${points > 0 ? 'credited' : 'debited'} ${Math.abs(points)} points: ${reason}`,
+      metadata: { customer_id: customerId, points, reason, balance_after: balance },
+    });
+    res.json({ balance });
+  } catch (error: any) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    console.error('[API] Wallet adjust failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

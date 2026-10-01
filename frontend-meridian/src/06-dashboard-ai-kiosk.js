@@ -664,10 +664,16 @@ async function plemmoClockSelf(wantIn){
   try{
     if(wantIn){const r=await PlemmoStaff.clockIn();const sh=r&&r.shift;if(sh&&!onShift(U.user))S.shifts.push({id:sh.id,emp:U.user,in:sh.clock_in?Date.parse(sh.clock_in):Date.now(),out:null});}
     else{await PlemmoStaff.clockOut();const s=onShift(U.user);if(s)s.out=Date.now();}
-    save();return true;
-  }catch(e){toast((e&&e.message)||'Could not update your shift on Plemmo','warn');return true;/* handled */}
+    save();return 'ok';
+  }catch(e){toast(`Your shift was not updated: ${(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):(e&&e.message))||'the till server refused it'}`,'warn');return 'failed';}
 }
-A.clockInMe=async()=>{const done=await plemmoClockSelf(true);if(!done)clockIn(U.user);toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();};
+// Returns false when there is no server to ask (offline/demo), 'ok' when the server accepted it, 'failed' when it refused.
+A.clockInMe=async()=>{
+  const r=await plemmoClockSelf(true);
+  if(r==='failed')return;
+  if(r===false)clockIn(U.user);
+  toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();
+};
 
 document.addEventListener('click',e=>{
   const rail=$('#rail');

@@ -369,7 +369,18 @@ A.cartMenu=(d,el)=>{
    ${c.items.length&&!c.orderId?`<button class="pop-i" data-act="hold">${ic('pause',18)} Hold for later</button>`:''}
    ${c.orderId?`<div class="pop-sep"></div><button class="pop-i danger" data-act="voidOpen">${ic('ban',18)} Void this table’s order</button>`:''}`);
 };
-A.changeTable=async()=>{const t=await pickTable(U.cart.table);if(!t)return;U.cart.table=t;U.cart.type='dine';if(U.cart.orderId){const o=orderOf(U.cart.orderId);if(o){o.table=t;save();}}renderView();toast(`Moved to table ${tableOf(t).name}`);};
+A.changeTable=async()=>{
+  const from=U.cart.table,t=await pickTable(from);if(!t)return;
+  const o=U.cart.orderId?orderOf(U.cart.orderId):null;
+  // An order the server holds is moved there (it checks the target is free and updates both tables);
+  // only a cart that has not been sent yet changes table on this screen alone.
+  if(o&&o.plemmoOrderId&&live()&&from){
+    try{await PlemmoAPI.post('/tables/'+encodeURIComponent(from)+'/move-order',{target_table_id:t,order_id:o.plemmoOrderId},{idempotent:false});}
+    catch(e){toast(`The order was not moved: ${(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):(e&&e.message))}`,'warn');return;}
+    try{if(window.PlemmoTables)await PlemmoTables.load(S);}catch(e){/* the floor plan refreshes on the next load */}
+  }
+  U.cart.table=t;U.cart.type='dine';if(o){o.table=t;save();}renderView();toast(`Moved to table ${tableOf(t).name}`);
+};
 A.voidOpen=async()=>{
   const o=orderOf(U.cart.orderId);if(!o)return;
   // An order the backend knows about is cancelled THERE (stock back, audit, KDS);
@@ -1078,7 +1089,29 @@ A.floorEdit=()=>{
 /* =====================================================================
    KITCHEN DISPLAY
    ===================================================================== */
+// Connected to a till server, orders go to the kitchen display STATION (a separate screen the server
+// runs and keeps in step), not to a board inside this app — so this screen says how to open it, with the
+// server's own address and QR code, rather than showing an empty board that nothing feeds.
+async function loadKdsInfo(){
+  try{U.kdsInfo=await PlemmoKDS.board();}
+  catch(e){U.kdsInfo={error:(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'The kitchen display is not available.'):'The kitchen display is not available.')};}
+  U.kdsInfoLoading=false;if(U.view==='kitchen')renderView();
+}
+function kitchenLiveHTML(){
+  const k=U.kdsInfo;
+  let inner;
+  if(!k)inner='<p class="muted">Looking up the kitchen display…</p>';
+  else if(k.error)inner=`<p class="muted">${esc(k.error)}</p><p class="muted">If the kitchen display is turned off, switch it on in Settings → Features.</p>`;
+  else inner=`<div class="row" style="gap:24px;align-items:flex-start;flex-wrap:wrap">${k.qr_data_url?`<img src="${esc(k.qr_data_url)}" alt="QR code for the kitchen display" width="180" height="180" style="border-radius:12px;background:#fff;padding:8px">`:''}
+    <div><p style="margin:0 0 6px"><b>On a tablet or screen in the kitchen, open:</b></p>
+    <p class="num" style="margin:0 0 4px;font-size:18px">${esc(k.ip_url||'')}</p>
+    ${k.mdns_url?`<p class="muted" style="margin:0">or ${esc(k.mdns_url)}</p>`:''}
+    <p class="muted" style="margin:14px 0 0;max-width:420px">Orders sent from any till appear there as tickets; the cook marks them preparing and ready. The tablet must be on the same network as this till.</p></div></div>`;
+  return`<div class="page"><div class="page-head"><div><h2>Kitchen display</h2><p class="sub">Tickets are shown on the kitchen screen, not in this app.</p></div><div class="ph-actions"><button class="btn" data-act="kdsInfoRefresh">${ic('refund',16)} Refresh</button></div></div><div class="panel"><div class="panel-b">${inner}</div></div></div>`;
+}
+A.kdsInfoRefresh=()=>{U.kdsInfo=null;U.kdsInfoLoading=false;renderView();};
 VIEWS.kitchen=()=>{
+  if(live()&&window.PlemmoKDS){if(!U.kdsInfo&&!U.kdsInfoLoading){U.kdsInfoLoading=true;setTimeout(loadKdsInfo,0);}return kitchenLiveHTML();}
   const act=S.tickets.filter(t=>t.status!=='done');
   const t0=dayStart(0),doneToday=S.tickets.filter(t=>t.status==='done'&&t.doneTs&&t.doneTs>=t0);
   const avg=doneToday.length?sum(doneToday,t=>t.doneTs-t.ts)/doneToday.length:0;

@@ -253,3 +253,11 @@ A systematic census of Meridian's handlers (every `A.*`/`IN.*`/`CH.*` that mutat
 **WP3d — Back-office on the backend (L, 3 sessions).** Order: (1) Items + Categories + Modifiers (retail-critical: barcode, VAT category, stock), (2) Settings (business, VAT, receipt, tipping, discount limits), (3) Staff/permissions (joins WP3c), (4) Customers (points adjust, edit), (5) Kitchen board + table move + clock-in. Each one: wire to the existing route, error handling from the server, no local write on failure, UI→HTTP→DB test, and removal of any control the backend cannot honour. Exit: re-run the census; zero handlers that change money, stock, prices or configuration without a backend call.
 
 **WP3d progress.** Done: Items / Categories / Option groups (`PlemmoAdmin`, `tests/meridian-items-admin.test.ts`, 22 checks). Also discovered and fixed on the way: no UK VAT pack existed (now bundled, v99, `tests/uk-vat.test.ts`); empty categories could not be deleted on the server. Settings done (shared vs this-till-only, `tests/meridian-settings.test.ts`, 21 checks). Remaining in WP3d: Staff & permissions (with WP3c), Customers (points adjust), Kitchen board, table move, clock-in.
+
+---
+
+## 9. Progress log (updated as work lands)
+
+**WP4 — done.** X/Z reports (immutable, sealed, printed, CSV), end-of-day checklist (drawer → Z → backup), period reports net of refunds (products, categories, staff, VAT, discounts, refunds, voids, CSV) and the Meridian Reports screen reading them. Tests: `trading-report` (64), `period-report` (47), `meridian-trading` (16), `meridian-reports-live` (14). Not built: profit/margin by day trend beyond the period series; XLSX/PDF export (CSV only, per D9 default).
+
+**WP5 — mostly done.** Stocktakes (migration v101), stock valuation, CSV stock import (checked then applied, exactly-once), live stock history from the ledger, suppliers and purchase orders on the backend, variants at the till (picker, scan, per-option stock, Items → Options editor). Tests: `stocktake` (65), `meridian-stock-tools` (20), `meridian-purchasing` (13), `meridian-variants` (14). Remaining: stock transfers screen (only meaningful with two or more locations), a dedicated low-stock alert list beyond the existing dashboard attention card, product CSV import wizard UI (the API exists in `menu-csv`), offers/promotions (WP5b, needs your go-ahead).

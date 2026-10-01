@@ -299,14 +299,14 @@ async function showTradingReport(){
   U.trade={r:x,z:null};
   const canZ=can('reports');
   modal({title:'Trading so far',sub:'X report',cls:'rc-modal',body:tradingReceiptHTML(x,null),
-    foot:`<button class="btn" data-act="tradePrint" data-k="x">${ic('printer',16)} Print</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>${canZ?`<button class="btn btn-primary" data-act="zClose">${ic('lock',16)} Close the day (Z report)</button>`:''}`});
+    foot:`<button class="btn" data-act="tradePrint" data-k="x">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="x">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>${canZ?`<button class="btn btn-primary" data-act="zClose">${ic('lock',16)} Close the day (Z report)</button>`:''}`});
 }
 A.zClose=async()=>{
   if(!await confirmBox({title:'Close the day?',text:'This ends today’s trading period and creates a numbered Z report. It is a permanent record and cannot be changed or run again. The cash drawer must be closed first.',ok:'Close the day',danger:true}))return;
   try{
     const z=(await PlemmoAPI.post('/reports/z',{},{idempotent:false})).report;
     closeAll();
-    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-id="${esc(z.id)}">${ic('printer',16)} Print</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-id="${esc(z.id)}">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
   }catch(e){
     const code=e&&e.data&&e.data.code,msg=window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it';
     toast(code==='cash_session_open'?'Close the cash drawer first (Cash screen), then run the Z report.':msg,'warn',{ms:5200});
@@ -323,7 +323,7 @@ A.zOpen=async d=>{
   try{
     const r=await PlemmoAPI.get('/reports/z/'+encodeURIComponent(d.id));const z=r.report;
     closeAll();
-    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:r.verified?'Stored report, seal checked':'WARNING: the stored report does not match its seal',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-re="1" data-id="${esc(z.id)}">${ic('printer',16)} Reprint</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>`});
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:r.verified?'Stored report, seal checked':'WARNING: the stored report does not match its seal',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-re="1" data-id="${esc(z.id)}">${ic('printer',16)} Reprint</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>`});
   }catch(e){toast('That Z report could not be opened','warn');}
 };
 // Print on the till's receipt printer. A report is only ever sent from the server's stored figures.
@@ -333,6 +333,13 @@ A.tradePrint=async d=>{
     else await PlemmoAPI.post('/reports/z/'+encodeURIComponent(d.id)+'/print',{reprint:d.re==='1'},{idempotent:false});
     toast('Sent to the printer');
   }catch(e){toast(`Not printed: ${typeof tillError==='function'?tillError(e,'the printer did not respond'):'the printer did not respond'}`,'warn',{ms:5200});}
+};
+// The server's own CSV of the report (exact amounts in major and minor units), for the accountant.
+A.tradeCsv=async d=>{
+  try{
+    const text=await PlemmoAPI.get(d.k==='x'?'/reports/x/csv':'/reports/z/'+encodeURIComponent(d.id)+'/csv');
+    offerDownload(d.k==='x'?`x-report-${new Date().toISOString().slice(0,10)}.csv`:`z-report-${String(d.n).padStart(4,'0')}.csv`,String(text));
+  }catch(e){toast('The CSV could not be created','warn');}
 };
 A.zCsv=d=>{const a=+d.t;offerDownload(`orders-${new Date(a).toISOString().slice(0,10)}.csv`,ordersCSV(S.orders.filter(o=>o.ts>=a&&o.ts<a+DAY&&o.status!=='open').sort((p,q)=>p.ts-q.ts)));};
 

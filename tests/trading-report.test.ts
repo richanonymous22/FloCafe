@@ -178,6 +178,15 @@ async function run() {
     const zNo = await as(T.mgr)(request(base).get('/api/reports/z/does-not-exist'));
     ok(zNo.status === 404, 'an unknown Z id is a 404');
 
+    console.log('\n6b. CSV export');
+    const csv = await as(T.mgr)(request(base).get(`/api/reports/z/${Z.id}/csv`));
+    ok(csv.status === 200 && /text\/csv/.test(csv.headers['content-type']) && /z-report-0001\.csv/.test(csv.headers['content-disposition']), 'the Z downloads as z-report-0001.csv');
+    ok(/Gross sales,73\.10,7310/.test(csv.text) && /VAT due,4\.00,400/.test(csv.text) && /Net sales,50\.60,5060/.test(csv.text), 'exact amounts in major and minor units (gross 73.10, VAT due 4.00, net 50.60)');
+    ok(/Report,Z 0001/.test(csv.text) && /VAT 20% VAT,6\.00,600/.test(csv.text), 'with the Z number and VAT by rate');
+    ok(/^Section,Label,Amount,Minor units/.test(csv.text), 'with a header row');
+    ok((await as(T.mgr)(request(base).get('/api/reports/x/csv'))).status === 200, 'the X report exports too');
+    ok((await as(T.cash)(request(base).get(`/api/reports/z/${Z.id}/csv`))).status === 403, 'a cashier cannot export');
+
     console.log('\n7. printing X and Z on the thermal printer');
     const net = require('node:net');
     const received: Buffer[] = [];

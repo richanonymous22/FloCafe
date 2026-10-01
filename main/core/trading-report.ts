@@ -317,3 +317,48 @@ export function verifyZReport(id: string): { ok: boolean; reason?: string } {
   return createHash('sha256').update(row.snapshot_json).digest('hex') === row.digest ? { ok: true } : { ok: false, reason: 'digest mismatch' };
 }
 
+
+/** A CSV cell that cannot be read as a spreadsheet formula and is quoted when needed. */
+function csvCell(value: string | number): string {
+  let v = String(value);
+  if (/^[=+\-@\t\r]/.test(v) && typeof value === 'string') v = "'" + v;
+  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/**
+ * The report as CSV for an accountant: one row per figure with its section, label, the exact amount in
+ * major units and in minor units. `number` is the Z number (omit for an X report).
+ */
+export function tradingReportToCsv(r: TradingSnapshot, number?: number): string {
+  const e = r.exponent;
+  const major = (m: number) => (m / Math.pow(10, e)).toFixed(e);
+  const rows: Array<[string, string, string | number, number | string]> = [];
+  const add = (section: string, label: string, minor: number) => rows.push([section, label, major(minor), minor]);
+  const cnt = (section: string, label: string, n: number) => rows.push([section, label, n, '']);
+  rows.push(['Report', r.kind === 'Z' ? `Z ${String(number ?? 0).padStart(4, '0')}` : 'X', '', '']);
+  rows.push(['Report', 'Period start (UTC)', r.period_start, '']);
+  rows.push(['Report', 'Period end (UTC)', r.period_end, '']);
+  rows.push(['Report', 'Currency', r.currency, '']);
+  cnt('Sales', 'Sales', r.transactions.count); cnt('Sales', 'Items sold', r.transactions.items_sold);
+  add('Sales', 'Average sale', r.transactions.average_minor); add('Sales', 'Gross sales', r.sales.gross_minor);
+  add('Sales', 'Refunds', r.sales.refunds_minor); add('Sales', 'Net sales', r.sales.net_minor);
+  add('Discounts', 'Discounts given', r.discounts.amount_minor);
+  for (const t of r.tenders) {
+    add('Tenders', `${t.method} taken`, t.taken_minor); add('Tenders', `${t.method} refunded`, t.refunded_minor);
+    add('Tenders', `${t.method} net`, t.net_minor); add('Tenders', `${t.method} tips`, t.tips_minor);
+    if (t.unverified_card_minor) add('Tenders', `${t.method} not confirmed by a card provider`, t.unverified_card_minor);
+  }
+  for (const v of r.vat) {
+    rows.push(['VAT', `${v.label} rate %`, v.rate_percent, '']);
+    add('VAT', `${v.label} gross`, v.gross_minor); add('VAT', `${v.label} net`, v.net_minor); add('VAT', `${v.label} VAT`, v.vat_minor);
+    add('VAT', `${v.label} credit note gross`, v.refund_gross_minor); add('VAT', `${v.label} credit note VAT`, v.refund_vat_minor);
+  }
+  add('VAT', 'VAT collected', r.vat_total.vat_minor); add('VAT', 'VAT credit notes', r.vat_total.refund_vat_minor); add('VAT', 'VAT due', r.vat_total.net_vat_minor);
+  cnt('Other', 'Voided orders', r.voids.orders); add('Other', 'Voided orders value', r.voids.orders_value_minor);
+  cnt('Other', 'Items removed after sending', r.voids.lines_removed); cnt('Other', 'Price changes', r.voids.price_overrides);
+  add('Cash', 'Opening float', r.cash.opening_float_minor); add('Cash', 'Cash sales', r.cash.sales_minor); add('Cash', 'Cash refunds', r.cash.refunds_minor);
+  add('Cash', 'Paid in', r.cash.pay_in_minor); add('Cash', 'Paid out', r.cash.pay_out_minor); add('Cash', 'Drops', r.cash.drops_minor);
+  if (r.cash.counted_minor != null) { add('Cash', 'Expected at close', r.cash.expected_minor_at_close ?? 0); add('Cash', 'Counted', r.cash.counted_minor); add('Cash', 'Difference', r.cash.variance_minor ?? 0); }
+  for (const [k, v] of Object.entries(r.checks)) rows.push(['Checks', k, String(v), '']);
+  return ['Section,Label,Amount,Minor units', ...rows.map((row) => row.map(csvCell).join(','))].join('\r\n') + '\r\n';
+}

@@ -5,7 +5,7 @@ import { getDatabase, getSettingValue, parseDbTimestamp, parseItemJson, utcDayBo
 import { requirePermission } from '../middleware/authorize';
 import { aggregateTaxComponents } from '../services/tax-components';
 import { fromMinor, minorUnitExponent } from '../core/money';
-import { ReportError, buildXReport, generateZReport, getZReport, listZReports, verifyZReport } from '../core/trading-report';
+import { ReportError, buildXReport, generateZReport, getZReport, listZReports, tradingReportToCsv, verifyZReport } from '../core/trading-report';
 import { getCurrentLocationId } from '../core/location';
 import { printTextLinesDetailed } from '../printers/thermal';
 import { formatTradingReport } from '../printers/report-format';
@@ -78,6 +78,24 @@ router.post('/z/:id/print', requirePermission('reports.view'), async (req: Reque
     const record = getZReport(String(req.params.id));
     if (!record) { res.status(404).json({ error: 'Z report not found' }); return; }
     await printReport(record.snapshot, record.number, record.generated_at, record.digest, req.body?.reprint === true, String((req as any).user.userId), res);
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/x/csv', requirePermission('reports.view'), (_req: Request, res: Response) => {
+  try {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="x-report.csv"');
+    res.send(tradingReportToCsv(buildXReport(getCurrentLocationId())));
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z/:id/csv', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) { res.status(404).json({ error: 'Z report not found' }); return; }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="z-report-${String(record.number).padStart(4, '0')}.csv"`);
+    res.send(tradingReportToCsv(record.snapshot, record.number));
   } catch (e) { reportFailure(e, res); }
 });
 

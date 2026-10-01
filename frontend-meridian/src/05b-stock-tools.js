@@ -25,6 +25,8 @@ function liveLogBody(){
 function stockToolsBody(tab){
   if(tab==='take')return stocktakeBody();
   if(tab==='value')return valueBody();
+  if(tab==='sup')return suppliersBody();
+  if(tab==='po')return purchasesBody();
   return importBody();
 }
 
@@ -91,10 +93,12 @@ AFTER.items=()=>{
   const t=U.items.tab;
   const f=$('#stScanForm');
   if(f){f.onsubmit=async ev=>{ev.preventDefault();const i=$('#stCode');const c=i?i.value:'';await stScan(c);const n=$('#stCode');if(n){n.value='';n.focus();}};const i=$('#stCode');if(i&&matchMedia('(pointer:fine)').matches)i.focus({preventScroll:true});}
-  if(!['log','take','value'].includes(t)||U.st[t+'Key'])return;
+  if(!['log','take','value','sup','po'].includes(t)||U.st[t+'Key'])return;
   U.st[t+'Key']=1;
   const done=()=>{if(U.view==='items')renderView();};
   if(t==='log')PlemmoAPI.get('/inventory/movements?limit=150').then(r=>{U.st.log=r.movements;done();}).catch(e=>{U.st.log=[];toast(stErr(e,'The stock ledger could not be read'),'warn');done();});
+  else if(t==='sup')PlemmoAPI.get('/suppliers').then(r=>{U.st.sup=r.suppliers;U.st.err=null;done();}).catch(e=>{U.st.err=stErr(e,'The suppliers could not be read');done();});
+  else if(t==='po')Promise.all([PlemmoAPI.get('/purchase-orders'),PlemmoAPI.get('/suppliers')]).then(async r=>{U.st.pos=r[0].purchaseOrders;U.st.sup=r[1].suppliers;if(U.st.poCur){try{U.st.poCur=(await PlemmoAPI.get('/purchase-orders/'+encodeURIComponent(U.st.poCur.id))).purchaseOrder;}catch(e){U.st.poCur=null;}}U.st.err=null;done();}).catch(e=>{U.st.err=stErr(e,'The purchases could not be read');done();});
   else if(t==='value')PlemmoAPI.get('/inventory/valuation').then(r=>{U.st.val=r.valuation;U.st.err=null;done();}).catch(e=>{U.st.err=stErr(e,'The stock value could not be read');done();});
   else PlemmoAPI.get('/stocktakes').then(r=>{U.st.list=r.stocktakes;U.st.err=null;done();}).catch(e=>{U.st.err=(e&&e.status===403)?'You don’t have permission to count stock.':stErr(e,'The stocktakes could not be read');done();});
 };
@@ -168,4 +172,101 @@ A.impApply=async()=>{
     if(window.PlemmoCatalogue&&PlemmoCatalogue.load)try{await PlemmoCatalogue.load(S);}catch(e){/* refreshed on next load */}
     U.st.logKey=0;renderRail();}
   renderView();
+};
+
+/* ---------- Suppliers ---------- */
+function suppliersBody(){
+  const s=U.st;
+  if(s.err)return`<div class="panel"><div class="panel-b"><div class="empty"><h3>Suppliers unavailable</h3><p>${stEsc(s.err)}</p><button class="btn" data-act="stRetrySup">Try again</button></div></div></div>`;
+  if(!s.sup)return`<div class="panel"><div class="panel-b"><p class="muted">Loading suppliers…</p></div></div>`;
+  return`<div class="row" style="margin-bottom:12px"><span class="spacer"></span><button class="btn btn-primary" data-act="supEdit">${ic('plus',16)} New supplier</button></div>
+   <div class="panel"><div class="tbl-wrap">${s.sup.length?`<table class="tbl"><thead><tr><th>Supplier</th><th>Contact</th><th>Phone</th><th>Email</th><th></th></tr></thead><tbody>${s.sup.map(x=>`<tr><td><b>${stEsc(x.name)}</b>${x.business_name?`<small style="display:block" class="muted">${stEsc(x.business_name)}</small>`:''}</td><td>${stEsc(x.contact_person||'')}</td><td>${stEsc(x.phone||'')}</td><td>${stEsc(x.email||'')}</td><td class="r"><button class="btn btn-sm" data-act="supEdit" data-id="${stEsc(x.id)}">Edit</button></td></tr>`).join('')}</tbody></table>`:`<div class="empty"><h3>No suppliers yet</h3><p>Add the people you buy stock from, then raise purchase orders to them.</p><button class="btn btn-primary" data-act="supEdit">${ic('plus',16)} New supplier</button></div>`}</div></div>`;
+}
+A.stRetrySup=()=>{U.st.err=null;U.st.sup=null;stReload('sup');};
+A.supEdit=d=>{
+  const cur=d.id?(U.st.sup||[]).find(x=>x.id===d.id):null;
+  const f=(id,label,val,ph)=>`<label class="field"><span>${label}</span><input class="input" id="${id}" value="${stEsc(val||'')}" placeholder="${ph||''}" maxlength="200"></label>`;
+  const L=modal({title:cur?'Edit supplier':'New supplier',cls:'narrow',body:`<div class="fgrid">${f('spName','Name *',cur&&cur.name)}${f('spBiz','Business name',cur&&cur.business_name)}${f('spPerson','Contact person',cur&&cur.contact_person)}${f('spPhone','Phone',cur&&cur.phone)}${f('spEmail','Email',cur&&cur.email)}${f('spVat','VAT number',cur&&cur.tax_registration_number)}</div>${f('spAddr','Address',cur&&cur.address)}`,
+    foot:`${cur?`<button class="btn btn-danger" id="spDel">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="spSave">Save</button>`});
+  const v=id=>(L.el.querySelector('#'+id)||{}).value||'';
+  L.el.querySelector('#spSave').onclick=async()=>{
+    const body={name:v('spName').trim(),business_name:v('spBiz'),contact_person:v('spPerson'),phone:v('spPhone'),email:v('spEmail'),tax_registration_number:v('spVat'),address:v('spAddr')};
+    if(!body.name){toast('Give the supplier a name','warn');return;}
+    try{if(cur)await PlemmoAPI.request('/suppliers/'+encodeURIComponent(cur.id),{method:'PUT',body,idempotent:false});else await PlemmoAPI.post('/suppliers',body,{idempotent:false});L.close();toast('Supplier saved');stReload('sup');}
+    catch(e){toast(stErr(e,'The supplier was not saved'),'warn');}
+  };
+  const del=L.el.querySelector('#spDel');
+  if(del)del.onclick=async()=>{if(!await confirmBox({title:'Delete this supplier?',text:'Their purchase orders are kept.',ok:'Delete',danger:true}))return;try{await PlemmoAPI.del('/suppliers/'+encodeURIComponent(cur.id),{idempotent:false});L.close();closeAll();toast('Supplier deleted');stReload('sup');}catch(e){toast(stErr(e,'It could not be deleted'),'warn');}};
+};
+
+/* ---------- Purchase orders ---------- */
+const poLabel={draft:'Draft',ordered:'Ordered',partially_received:'Part received',received:'Received',cancelled:'Cancelled'};
+const supName=id=>{const x=(U.st.sup||[]).find(y=>y.id===id);return x?x.name:'Unknown supplier';};
+const pName=id=>{const p=S.products.find(x=>x.id===id);return p?p.name:id;};
+const poOutstanding=po=>sum(po.items||[],i=>Math.max(0,i.quantity_ordered-i.quantity_received));
+function purchasesBody(){
+  const s=U.st;
+  if(s.err)return`<div class="panel"><div class="panel-b"><div class="empty"><h3>Purchases unavailable</h3><p>${stEsc(s.err)}</p><button class="btn" data-act="stRetryPo">Try again</button></div></div></div>`;
+  if(!s.pos)return`<div class="panel"><div class="panel-b"><p class="muted">Loading purchases…</p></div></div>`;
+  if(s.poCur)return poDetail(s.poCur);
+  return`<div class="row" style="margin-bottom:12px"><span class="spacer"></span><button class="btn btn-primary" data-act="poNew">${ic('plus',16)} New purchase order</button></div>
+   <div class="panel"><div class="tbl-wrap">${s.pos.length?`<table class="tbl"><thead><tr><th>Order</th><th>Supplier</th><th>Status</th><th>Expected</th><th class="r">Total</th><th></th></tr></thead><tbody>${s.pos.map(p=>`<tr><td><b>${stEsc(p.reference_number||p.id.slice(-6).toUpperCase())}</b><small class="muted" style="display:block">${stEsc(stWhen(p.created_at))}</small></td><td>${stEsc(supName(p.supplier_id))}</td><td><span class="badge ${p.status==='received'?'ok':p.status==='cancelled'?'':'warn'}">${poLabel[p.status]||p.status}</span></td><td>${stEsc(p.expected_date||'')}</td><td class="r num">${money(p.total)}</td><td class="r"><button class="btn btn-sm" data-act="poOpen" data-id="${stEsc(p.id)}">Open</button></td></tr>`).join('')}</tbody></table>`:`<div class="empty"><h3>No purchase orders yet</h3><p>Order stock from a supplier, then receive it here when it arrives. Receiving adds it to your stock.</p><button class="btn btn-primary" data-act="poNew">${ic('plus',16)} New purchase order</button></div>`}</div></div>`;
+}
+function poDetail(po){
+  const draft=po.status==='draft',recv=po.status==='ordered'||po.status==='partially_received';
+  return`<div class="row" style="margin-bottom:12px"><button class="btn btn-ghost" data-act="poBack">← All purchase orders</button><div style="flex:1;min-width:0"><b>${stEsc(po.reference_number||'Purchase order')}</b> <span class="badge ${po.status==='received'?'ok':'warn'}">${poLabel[po.status]||po.status}</span><div class="muted" style="font-size:12.5px">${stEsc(supName(po.supplier_id))}${po.expected_date?` · expected ${stEsc(po.expected_date)}`:''}</div></div></div>
+   <div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Item</th><th class="r">Ordered</th><th class="r">Received</th><th class="r">Unit cost</th><th class="r">Line total</th><th></th></tr></thead><tbody>
+    ${(po.items||[]).map(i=>`<tr><td><b>${stEsc(pName(i.product_id))}</b></td><td class="r num">${stQty(i.quantity_ordered)}</td><td class="r num">${stQty(i.quantity_received)}</td><td class="r num">${money(i.unit_cost)}</td><td class="r num">${money(i.line_total)}</td><td class="r">${draft?`<button class="btn btn-sm btn-ghost" data-act="poDelItem" data-id="${stEsc(i.id)}">Remove</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No items yet. Add what you are ordering.</td></tr>'}
+   </tbody><tfoot><tr><td colspan="4">Total${po.tax?` (incl. ${money(po.tax)} VAT)`:''}</td><td class="r num">${money(po.total)}</td><td></td></tr></tfoot></table></div></div>
+   <div class="row mt" style="gap:8px">${draft?`<button class="btn" data-act="poAddItem">${ic('plus',16)} Add an item</button>`:''}<span class="spacer"></span>
+    ${draft||recv?`<button class="btn" data-act="poCancel">Cancel order</button>`:''}
+    ${draft?`<button class="btn btn-primary" data-act="poOrder" ${(po.items||[]).length?'':'disabled'}>Mark as ordered</button>`:''}
+    ${recv?`<button class="btn btn-primary" data-act="poReceive">Receive goods</button>`:''}</div>`;
+}
+A.stRetryPo=()=>{U.st.err=null;U.st.pos=null;stReload('po');};
+A.poBack=()=>{U.st.poCur=null;stReload('po');};
+A.poOpen=async d=>{try{U.st.poCur=(await PlemmoAPI.get('/purchase-orders/'+encodeURIComponent(d.id))).purchaseOrder;renderView();}catch(e){toast(stErr(e,'The order could not be opened'),'warn');}};
+async function poRefresh(){U.st.poCur=(await PlemmoAPI.get('/purchase-orders/'+encodeURIComponent(U.st.poCur.id))).purchaseOrder;renderView();}
+A.poNew=()=>{
+  const sup=(U.st.sup||[]).filter(x=>x.is_active!==0);
+  if(!sup.length){toast('Add a supplier first (Suppliers tab)','warn');return;}
+  const L=modal({title:'New purchase order',cls:'narrow',body:`<div class="fgrid"><label class="field"><span>Supplier</span><select class="input" id="poSup">${sup.map(x=>`<option value="${stEsc(x.id)}">${stEsc(x.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Your reference</span><input class="input" id="poRef" maxlength="60" placeholder="For example, PO-1001"></label>
+    <label class="field"><span>Expected on</span><input class="input" id="poExp" type="date"></label></div>`,foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="poGo">Create</button>`});
+  L.el.querySelector('#poGo').onclick=async()=>{
+    try{const r=await PlemmoAPI.post('/purchase-orders',{supplier_id:L.el.querySelector('#poSup').value,reference_number:L.el.querySelector('#poRef').value.trim()||undefined,expected_date:L.el.querySelector('#poExp').value||undefined},{idempotent:false});L.close();U.st.poCur=(await PlemmoAPI.get('/purchase-orders/'+encodeURIComponent(r.purchaseOrder.id))).purchaseOrder;renderView();}
+    catch(e){toast(stErr(e,'The order could not be created'),'warn');}
+  };
+};
+A.poAddItem=()=>{
+  const prods=S.products.filter(p=>p.stock!=null);
+  if(!prods.length){toast('No items have stock tracking switched on','warn');return;}
+  const L=modal({title:'Add an item',cls:'narrow',body:`<div class="fgrid"><label class="field"><span>Item</span><select class="input" id="piP">${prods.map(p=>`<option value="${stEsc(p.id)}" data-cost="${p.cost||0}">${stEsc(p.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Quantity</span><input class="input" id="piQ" type="number" min="1" step="1" value="1"></label>
+    <label class="field"><span>Cost each</span><input class="input" id="piC" type="number" min="0" step="0.01" value="${prods[0].cost||0}"></label></div>`,foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="piGo">Add</button>`});
+  L.el.querySelector('#piP').onchange=e=>{L.el.querySelector('#piC').value=e.target.selectedOptions[0].dataset.cost;};
+  L.el.querySelector('#piGo').onclick=async()=>{
+    const q=Number(L.el.querySelector('#piQ').value),c=Number(L.el.querySelector('#piC').value);
+    if(!(q>0)||!(c>=0)){toast('Enter a quantity above zero and a cost','warn');return;}
+    try{await PlemmoAPI.post('/purchase-orders/'+encodeURIComponent(U.st.poCur.id)+'/items',{product_id:L.el.querySelector('#piP').value,quantity_ordered:q,unit_cost:c},{idempotent:false});L.close();await poRefresh();}
+    catch(e){toast(stErr(e,'The item was not added'),'warn');}
+  };
+};
+A.poDelItem=async d=>{try{await PlemmoAPI.del('/purchase-orders/'+encodeURIComponent(U.st.poCur.id)+'/items/'+encodeURIComponent(d.id),{idempotent:false});await poRefresh();}catch(e){toast(stErr(e,'It could not be removed'),'warn');}};
+A.poOrder=async()=>{if(!await confirmBox({title:'Mark as ordered?',text:'The order can no longer be edited. You can receive the goods when they arrive.',ok:'Mark as ordered'}))return;try{await PlemmoAPI.post('/purchase-orders/'+encodeURIComponent(U.st.poCur.id)+'/mark-ordered',{},{idempotent:false});toast('Order marked as ordered');await poRefresh();}catch(e){toast(stErr(e,'It could not be marked as ordered'),'warn');}};
+A.poCancel=async()=>{if(!await confirmBox({title:'Cancel this order?',text:'Anything already received stays in stock.',ok:'Cancel order',danger:true}))return;try{await PlemmoAPI.post('/purchase-orders/'+encodeURIComponent(U.st.poCur.id)+'/cancel',{},{idempotent:false});await poRefresh();}catch(e){toast(stErr(e,'It could not be cancelled'),'warn');}};
+A.poReceive=()=>{
+  const po=U.st.poCur,items=(po.items||[]).filter(i=>i.quantity_ordered-i.quantity_received>0);
+  const L=modal({title:'Receive goods',sub:'Enter what actually arrived. It is added to your stock.',body:`<table class="tbl"><thead><tr><th>Item</th><th class="r">Outstanding</th><th class="r">Arrived</th><th class="r">Cost each</th></tr></thead><tbody>${items.map(i=>`<tr data-i="${stEsc(i.id)}"><td>${stEsc(pName(i.product_id))}</td><td class="r num">${stQty(i.quantity_ordered-i.quantity_received)}</td><td class="r"><input class="input num" style="width:80px;text-align:right" type="number" min="0" step="1" data-q value="${i.quantity_ordered-i.quantity_received}"></td><td class="r"><input class="input num" style="width:90px;text-align:right" type="number" min="0" step="0.01" data-c value="${i.unit_cost}"></td></tr>`).join('')}</tbody></table>`,
+    foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="rcGo">Receive into stock</button>`});
+  L.el.querySelector('#rcGo').onclick=async()=>{
+    const lines=Array.from(L.el.querySelectorAll('tr[data-i]')).map(r=>({itemId:r.dataset.i,quantity:Number(r.querySelector('[data-q]').value),unitCost:Number(r.querySelector('[data-c]').value)})).filter(l=>l.quantity>0);
+    if(!lines.length){toast('Enter how many arrived','warn');return;}
+    try{
+      const key='rcv-'+uid('r');
+      await PlemmoAPI.post('/purchase-orders/'+encodeURIComponent(po.id)+'/receive',{items:lines,idempotency_key:key,request_hash:JSON.stringify(lines)},{idempotent:false});
+      L.close();if(window.PlemmoCatalogue&&PlemmoCatalogue.load)try{await PlemmoCatalogue.load(S);}catch(e){/* refreshed later */}
+      toast('Goods received into stock');renderRail();await poRefresh();
+    }catch(e){toast(stErr(e,'The goods were not received'),'warn',{ms:5200});}
+  };
 };

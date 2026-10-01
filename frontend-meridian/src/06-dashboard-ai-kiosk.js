@@ -212,7 +212,113 @@ VIEWS.reports=()=>{
     </tbody><tfoot><tr><td>Card ${money(X.card,0)}, cash ${money(X.cash,0)}</td><td class="r num">${money(X.card+X.cash)}</td></tr></tfoot></table></div></div></section>
    </div></div>`;
 };
-A.repRange=d=>{U.reports.range=d.r;renderView();};
+/* ---------- Reports from the till server ----------
+ * On a connected till the whole Reports screen is the server's period report: figures from the payments
+ * ledger, net of refunds, with VAT per rate, and the same CSVs an accountant would ask for. Nothing on it is
+ * recomputed in the browser from local orders. */
+const localReports=VIEWS.reports;
+VIEWS.reports=()=>live()?liveReports():localReports();
+const utcStamp=ms=>new Date(ms).toISOString().slice(0,19).replace('T',' ');
+const LR_TZ=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(e){return'UTC';}})();
+const lrKey=(ms,hourly)=>{const d=new Date(ms),p=n=>String(n).padStart(2,'0'),day=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;return hourly?`${day} ${p(d.getHours())}:00`:day;};
+const lrQuery=(a,b,hourly)=>`from=${encodeURIComponent(utcStamp(a-1000))}&to=${encodeURIComponent(utcStamp(b))}&tz=${encodeURIComponent(LR_TZ)}&bucket=${hourly?'hour':'day'}`;
+const lrTime=s=>fmtDT(Date.parse(String(s).replace(' ','T')+'Z'));
+let LR_BUSY=false;
+async function loadLiveReports(){
+  if(LR_BUSY)return;
+  const key=U.reports.range,R=rangeOf(key);LR_BUSY=true;U.reports.key=key;U.reports.err=null;
+  try{
+    const [cur,prev]=await Promise.all([
+      PlemmoAPI.get('/reports/period?'+lrQuery(R.a,R.b,R.hourly)),
+      PlemmoAPI.get('/reports/period?'+lrQuery(R.a-R.shift,R.b-R.shift,R.hourly)),
+    ]);
+    if(U.reports.range===key)U.reports.data={cur:cur.report,prev:prev.report,R};
+  }catch(e){if(U.reports.range===key)U.reports.err=(e&&e.status===403)?'You don’t have permission to see reports.':'The reports could not be read from the till server. '+((e&&e.message)||'');}
+  finally{LR_BUSY=false;}
+  if(U.view==='reports')renderView();
+}
+AFTER.reports=()=>{if(live()&&(U.reports.key!==U.reports.range||(!U.reports.data&&!U.reports.err)))loadLiveReports();};
+function liveReports(){
+  const R=rangeOf(U.reports.range),d=U.reports.data,tab=U.reports.tab||'discounts';
+  const head=`<div class="page-head"><div><h2>Reports</h2><p class="sub">${R.label}, compared with ${R.prev}. From the till server, after refunds.</p></div>
+    <div class="ph-actions"><div class="seg" role="tablist">${[['today','Today'],['yesterday','Yesterday'],['7d','7 days'],['30d','30 days']].map(([k,l])=>`<button class="${U.reports.range===k?'on':''}" data-act="repRange" data-r="${k}" role="tab" aria-selected="${U.reports.range===k}">${l}</button>`).join('')}</div>
+    <button class="btn btn-dark" data-act="eod">${ic('receipt',16)} End of day</button></div></div>`;
+  if(U.reports.err)return`<div class="page">${head}<div class="panel"><div class="panel-b"><div class="empty"><h3>Reports unavailable</h3><p>${esc(U.reports.err)}</p><button class="btn" data-act="repReload">Try again</button></div></div></div></div>`;
+  if(!d)return`<div class="page">${head}<div class="panel"><div class="panel-b"><p class="muted">Loading reports from the till…</p></div></div></div>`;
+  const C=d.cur,P=d.prev,sn=C.snapshot,e=sn.exponent,tm=m=>tmoney(m,e),major=m=>m/Math.pow(10,e);
+  const takings=sn.sales.net_minor,pTakings=P.snapshot.sales.net_minor;
+  const profit=C.products.reduce((s,p)=>s+p.profit_minor,0),pProfit=P.products.reduce((s,p)=>s+p.profit_minor,0);
+  const netAfter=C.products.reduce((s,p)=>s+p.net_after_refunds_minor,0);
+  const avg=sn.transactions.average_minor,pAvg=P.snapshot.transactions.average_minor;
+  const kpi=(l,v,dl,sub,spark)=>`<div><div class="k-l"><span>${l}</span>${dl}</div><div class="k-v num">${v}</div><div class="k-s">${sub}</div>${spark||''}</div>`;
+  // chart: every bucket in the range, the previous period lined up by shifting the clock
+  const hourly=R.hourly,bks=[];
+  if(hourly){for(let t=R.a;t<R.b;t+=HOUR)bks.push(t);}
+  else for(let i=0;i<R.days;i++)bks.push(R.a+i*DAY);
+  const cm=new Map(C.series.map(s=>[s.bucket,s])),pm=new Map(P.series.map(s=>[s.bucket,s]));
+  let first=0,last=bks.length-1;
+  if(hourly){
+    const act=bks.map((t,i)=>cm.has(lrKey(t,true))||pm.has(lrKey(t-R.shift,true))?i:-1).filter(i=>i>=0);
+    if(act.length){first=Math.max(0,act[0]-1);last=Math.min(bks.length-1,act[act.length-1]+1);}else{first=0;last=Math.min(bks.length-1,11);}
+  }
+  const view=bks.slice(first,last+1),now=Date.now();
+  const net=(m,t)=>((m.get(lrKey(t,hourly))||{}).net_minor||0);
+  const vals=view.map(t=>t>now?0:major(net(cm,t))),prevv=view.map(t=>major(net(pm,t-R.shift)));
+  const lbl=view.map(t=>hourly?String(new Date(t).getHours()).padStart(2,'0'):(R.days>7?String(new Date(t).getDate()):new Date(t).toLocaleDateString('en-GB',{weekday:'short'})));
+  const tips=view.map((t,i)=>`${hourly?lbl[i]+':00':fmtD(t)}\n${t>now?'Not yet':money(vals[i])+' after refunds, '+((cm.get(lrKey(t,hourly))||{}).sales||0)+' sales'}\nBefore: ${money(prevv[i])}`);
+  const curIdx=view.findIndex(t=>now>=t&&now<t+(hourly?HOUR:DAY));
+  const palette=['var(--accent)','var(--info)','var(--ok)','#b0701f','#7b5ea7','#2f8f9d','#c2576b'];
+  const cats=C.categories.filter(c=>c.net_after_refunds_minor>0).map((c,i)=>({label:c.category,value:c.net_after_refunds_minor,color:palette[i%palette.length]}));
+  const catTot=sum(cats,c=>c.value)||1;
+  const mixParts=sn.tenders.filter(t=>t.net_minor>0).map((t,i)=>[t.method[0].toUpperCase()+t.method.slice(1),t.net_minor,palette[i%palette.length]]);
+  const mixTot=sum(mixParts,p=>p[1])||1;
+  const unver=sum(sn.tenders,t=>t.unverified_card_minor||0);
+  const topP=C.products.slice(0,10);
+  const csvBtn=s=>`<button class="btn btn-sm" data-act="repCsv" data-s="${s}">${ic('download',14)} CSV</button>`;
+  const events=tab==='refunds'?C.refunds.map(r=>`<tr><td class="num">${esc(lrTime(r.at))}</td><td>${esc(r.bill_number)}</td><td class="r num">${tm(r.amount_minor)}</td><td>${esc(r.method)}</td><td>${esc(r.staff)}</td><td>${esc(r.reason||'')}</td></tr>`)
+    :tab==='voids'?C.voids.map(v=>`<tr><td class="num">${esc(lrTime(v.at))}</td><td>${v.kind==='order'?'Order cancelled':'Item removed'}</td><td>${esc(v.description)}</td><td class="r num">${v.amount_minor==null?'':tm(v.amount_minor)}</td><td>${esc(v.staff)}</td><td>${esc(v.reason||'')}</td></tr>`)
+    :C.discounts.map(x=>`<tr><td class="num">${esc(lrTime(x.at))}</td><td>${esc(x.order_number||'')}</td><td class="r num">${tm(x.amount_minor)}</td><td>${esc(x.staff)}</td><td>${esc(x.approved_by||'')}</td><td>${esc(x.reason||'')}</td></tr>`);
+  const evHead=tab==='refunds'?'<th>Time</th><th>Bill</th><th class="r">Refunded</th><th>Back to</th><th>By</th><th>Reason</th>':tab==='voids'?'<th>Time</th><th>What</th><th>Detail</th><th class="r">Value</th><th>By</th><th>Reason</th>':'<th>Time</th><th>Order</th><th class="r">Discount</th><th>Given by</th><th>Approved by</th><th>Reason</th>';
+  const vt=sn.vat_total,tn=esc(S.settings.taxName);
+  return`<div class="page">${head}
+   <div class="strip" style="--n:4">
+    ${kpi('Takings after refunds',tm(takings),deltaHTML(takings,pTakings),`${tm(sn.sales.gross_minor)} sold, ${tm(sn.sales.refunds_minor)} refunded`,sparkHTML(vals))}
+    ${kpi('Sales',sn.transactions.count.toLocaleString('en-GB'),deltaHTML(sn.transactions.count,P.snapshot.transactions.count),`${sn.transactions.items_sold.toLocaleString('en-GB')} items sold`,'')}
+    ${kpi('Average sale',tm(avg),deltaHTML(avg,pAvg),`${(sn.transactions.items_sold/Math.max(1,sn.transactions.count)).toFixed(1)} items per sale`,'')}
+    ${kpi('Gross profit',tm(profit),deltaHTML(profit,pProfit),netAfter>0?`${(profit/netAfter*100).toFixed(1)}% margin after cost, excl. ${tn}`:'No sales yet','')}
+   </div>
+   <div class="grid g-73 mt">
+    <section class="panel"><div class="panel-h"><h3>Takings ${hourly?'by hour':'by day'}</h3><div class="chart-key"><span><i></i>${R.label}</span><span><i class="prev"></i>${R.prev.replace(/^the /,'').replace(/^./,c=>c.toUpperCase())}</span></div></div><div class="panel-b">${barsHTML({vals,prev:prevv,labels:lbl,tips,h:200,now:curIdx,every:Math.max(1,Math.ceil(view.length/12))})}</div></section>
+    <section class="panel"><div class="panel-h"><h3>Sales by category</h3></div><div class="panel-b">${cats.length?`<div class="donut-wrap">${donutHTML(cats)}<div class="leg">${cats.map(c=>`<div><i style="background:${c.color}"></i><span>${esc(c.label)}</span><em class="num">${Math.round(c.value/catTot*100)}%</em></div>`).join('')}</div></div>`:'<p class="muted">No sales in this period.</p>'}</div></section>
+   </div>
+   <div class="grid g2 mt">
+    <section class="panel"><div class="panel-h"><h3>How people paid</h3></div><div class="panel-b">
+     ${mixParts.length?`<div class="mixrow"><div class="stackbar">${mixParts.map(p=>`<i style="width:${p[1]/mixTot*100}%;background:${p[2]}" data-tip="${esc(p[0])}: ${tm(p[1])}"></i>`).join('')}</div></div>`:'<p class="muted">No takings in this period.</p>'}
+     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tender</th><th class="r">Taken</th><th class="r">Refunded</th><th class="r">Net</th><th class="r">Tips</th></tr></thead><tbody>${sn.tenders.map(t=>`<tr><td>${esc(t.method)}</td><td class="r num">${tm(t.taken_minor)}</td><td class="r num">${tm(t.refunded_minor)}</td><td class="r num">${tm(t.net_minor)}</td><td class="r num">${tm(t.tips_minor)}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">Nothing taken</td></tr>'}</tbody></table></div>
+     ${unver?`<p class="hint" style="margin-top:8px">${tm(unver)} of the card takings was recorded by staff, not confirmed by a card provider.</p>`:''}
+    </div></section>
+    <section class="panel"><div class="panel-h"><h3>${tn} summary</h3><span class="ph-sub">Per rate, after credit notes</span>${csvBtn('vat')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Rate</th><th class="r">Gross</th><th class="r">Net</th><th class="r">${tn}</th><th class="r">Credit notes</th><th class="r">Due</th></tr></thead><tbody>
+     ${sn.vat.map(v=>`<tr><td>${esc(v.label)}</td><td class="r num">${tm(v.gross_minor)}</td><td class="r num">${tm(v.net_minor)}</td><td class="r num">${tm(v.vat_minor)}</td><td class="r num">${tm(v.refund_vat_minor)}</td><td class="r num">${tm(v.vat_minor-v.refund_vat_minor)}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No sales</td></tr>'}
+    </tbody><tfoot><tr><td>Total</td><td class="r num">${tm(sum(sn.vat,v=>v.gross_minor))}</td><td class="r num">${tm(sum(sn.vat,v=>v.net_minor))}</td><td class="r num">${tm(vt.vat_minor)}</td><td class="r num">${tm(vt.refund_vat_minor)}</td><td class="r num">${tm(vt.net_vat_minor)}</td></tr></tfoot></table></div></div></section>
+   </div>
+   <section class="panel mt"><div class="panel-h"><h3>Top items</h3><span class="ph-sub">By sales after refunds, margin after cost</span>${csvBtn('products')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Category</th><th class="r">Sold</th><th class="r">Returned</th><th class="r">Net sales</th><th class="r">Profit</th><th class="r">Margin</th></tr></thead><tbody>
+    ${topP.map((x,i)=>`<tr><td class="num faint">${i+1}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.category)}</td><td class="r num">${x.units_sold}</td><td class="r num">${x.units_returned||''}</td><td class="r num">${tm(x.net_after_refunds_minor)}</td><td class="r num">${tm(x.profit_minor)}</td><td class="r num">${x.margin_percent==null?'–':x.margin_percent.toFixed(1)+'%'}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No sales in this period</td></tr>'}
+   </tbody></table></div></div></section>
+   <div class="grid g2 mt">
+    <section class="panel"><div class="panel-h"><h3>Categories</h3>${csvBtn('categories')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Category</th><th class="r">Units</th><th class="r">Net sales</th><th class="r">Profit</th></tr></thead><tbody>${C.categories.map(c=>`<tr><td>${esc(c.category)}</td><td class="r num">${c.units}</td><td class="r num">${tm(c.net_after_refunds_minor)}</td><td class="r num">${tm(c.profit_minor)}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">No sales</td></tr>'}</tbody></table></div></div></section>
+    <section class="panel"><div class="panel-h"><h3>Team</h3>${csvBtn('staff')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th class="r">Sales</th><th class="r">Takings</th><th class="r">Discounts</th><th class="r">Refunds</th><th class="r">Items removed</th></tr></thead><tbody>${C.staff.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td class="r num">${s.sales}</td><td class="r num">${tm(s.gross_minor)}</td><td class="r num">${tm(s.discounts_minor)}</td><td class="r num">${s.refunds?s.refunds+' ('+tm(s.refunds_minor)+')':''}</td><td class="r num">${s.lines_removed||''}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No activity</td></tr>'}</tbody></table></div></div></section>
+   </div>
+   <section class="panel mt"><div class="panel-h"><div class="seg" role="tablist">${[['discounts','Discounts ('+C.discounts.length+')'],['refunds','Refunds ('+C.refunds.length+')'],['voids','Voids ('+C.voids.length+')']].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="repTab" data-t="${k}" role="tab" aria-selected="${tab===k}">${l}</button>`).join('')}</div><span class="spacer"></span>${csvBtn(tab)}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr>${evHead}</tr></thead><tbody>${events.join('')||'<tr><td colspan="6" class="muted">Nothing in this period</td></tr>'}</tbody></table></div></div></section>
+  </div>`;
+}
+A.repReload=()=>{U.reports.key=null;U.reports.err=null;U.reports.data=null;renderView();};
+A.repTab=d=>{U.reports.tab=d.t;renderView();};
+A.repCsv=async d=>{
+  const R=rangeOf(U.reports.range);
+  try{const text=await PlemmoAPI.get('/reports/period/csv?section='+encodeURIComponent(d.s)+'&'+lrQuery(R.a,R.b,R.hourly));offerDownload(`${d.s}-${lrKey(R.a,false)}_${lrKey(R.b-1,false)}.csv`,text);}
+  catch(e){toast('The CSV could not be downloaded','warn');}
+};
+A.repRange=d=>{U.reports.range=d.r;U.reports.data=null;U.reports.err=null;renderView();};
 A.repExport=d=>{
   const R=rangeOf(U.reports.range),tag=U.reports.range+'-'+new Date().toISOString().slice(0,10);
   if(d.k==='orders'){const os=S.orders.filter(o=>o.ts>=R.a&&o.ts<R.b&&o.status!=='open').sort((a,b)=>a.ts-b.ts);offerDownload(`orders-${tag}.csv`,ordersCSV(os));}

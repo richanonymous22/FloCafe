@@ -55,3 +55,14 @@ in two periods or in neither.
 refund, a refund by item, a void, drawer pay in/out, a short drawer count) and checks every figure to the penny against
 expectations worked out independently, the VAT by rate and net of credit notes, the checks, immutability, numbering, and
 that the next period starts exactly where the last ended.
+
+## Period reports and CSV
+
+`GET /api/reports/period` answers the same questions for any date range (the Reports screen's Today /
+Yesterday / 7 / 30 days). A bill belongs to the range in which it became fully paid and a refund to the
+range in which it was made, exactly as for a Z report, so the two never disagree about which day a figure
+belongs to. Products, categories and staff are NET OF REFUNDS: a returned line comes off its product (a
+whole-bill refund is shared over the bill's lines by value), the VAT share comes off net sales, and cost
+comes back only for stock that went back on the shelf. The response includes checks that products and staff
+add up to the bills. Each section downloads as CSV (`/period/csv?section=`), and X/Z reports as
+`/x/csv` and `/z/:id/csv`. Tests: `npm run test:period-report`, `npm run test:meridian-reports-live`.

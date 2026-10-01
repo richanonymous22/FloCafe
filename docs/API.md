@@ -733,13 +733,20 @@ Daily/monthly sales report.
 
 ---
 
-### GET `/api/reports/x-report`
-X Report (current shift).
+### GET `/api/reports/x`
+X report: a read-only look at the open trading period (permission `reports.view`). See `docs/TRADING_REPORTS.md`.
 
----
+### POST `/api/reports/z`
+Close the trading period and store an immutable, numbered Z report (permission `reports.z`). `409 cash_session_open` while a drawer is open; `409 nothing_to_report` when nothing happened since the last Z.
 
-### GET `/api/reports/z-report`
-Z Report (close shift).
+### GET `/api/reports/z` · `/api/reports/z/:id`
+List Z reports / read one (with `verified`, the seal check). CSV: `GET /api/reports/x/csv`, `GET /api/reports/z/:id/csv`. Print: `POST /api/reports/x/print`, `POST /api/reports/z/:id/print` (`{ "reprint": true }`).
+
+### GET `/api/reports/period?from=&to=&tz=&bucket=`
+Report for any date range, net of refunds. `from` is exclusive and `to` inclusive, both UTC `YYYY-MM-DD HH:MM:SS`; `tz` is an IANA zone for the series (unknown zones fall back to UTC); `bucket` is `day` (default) or `hour`. Returns the same `snapshot` as the X report plus `products` (units, gross, VAT, net, refunded, cost, profit, margin), `categories`, `staff` (sales, discounts given, refunds processed, items removed), `discounts`, `refunds`, `voids`, `series` and `checks`. All money is integer minor units. Permission `reports.view`.
+
+### GET `/api/reports/period/csv?section=&from=&to=`
+The same data as CSV. `section` is one of `summary`, `vat`, `products`, `categories`, `staff`, `discounts`, `refunds`, `voids`. Cells that could be read as a spreadsheet formula are neutralised.
 
 ---
 

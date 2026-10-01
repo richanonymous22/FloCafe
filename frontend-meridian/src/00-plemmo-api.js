@@ -122,6 +122,7 @@
             var err = new Error(msg);
             err.status = res.status;
             err.data = data;
+            if (res.status === 402 && data && data.code === 'license_blocked' && typeof window !== 'undefined') { try { window.dispatchEvent(new Event('plemmo-licence-blocked')); } catch (e2) { /* no window events */ } }
             throw err;
           }
           return data;

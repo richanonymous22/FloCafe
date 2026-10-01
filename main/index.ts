@@ -16,6 +16,7 @@ import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
 import { isAllowedLocalWindowUrl, isSafeExternalUrl } from './security/url-allowlist';
 import { getBrand } from './brand';
+import { startSyncService, stopSyncService } from './services/sync-service';
 
 // ── GPU compatibility ────────────────────────────────────────────────────────
 // On Windows, some systems hit "GPU process exited unexpectedly" (exit code
@@ -579,6 +580,7 @@ async function initialize(): Promise<void> {
     await startServer();
 
     cloudSync.start();
+    startSyncService(); // cloud sync + licence refresh for an activated device (no-op until activated)
     telemetry.start();
     googleDrive.start();
 
@@ -702,6 +704,7 @@ function runCleanup(): void {
 
   // Tear down services — each wrapped so one failure doesn't block others
   try { cloudSync.stop(); } catch (e) { console.error('[Flo] cloudSync.stop error:', e); }
+  try { void stopSyncService(); } catch (e) { console.error('[Flo] syncService.stop error:', e); }
   try { telemetry.stop(); } catch (e) { console.error('[Flo] telemetry.stop error:', e); }
   try { googleDrive.stop(); } catch (e) { console.error('[Flo] googleDrive.stop error:', e); }
   try { stopMdns(); } catch (e) { console.error('[Flo] stopMdns error:', e); }

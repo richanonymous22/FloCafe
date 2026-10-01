@@ -80,6 +80,8 @@ export type AuditEventType =
   | 'cash.movement'
   // Device and platform
   | 'device.registered'
+  | 'device.activated'
+  | 'license.refreshed'
   | 'device.revoked'
   | 'settings.changed'
   | 'database.maintenance'

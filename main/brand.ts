@@ -57,11 +57,21 @@ function candidatePaths(): string[] {
   return paths;
 }
 
+/** A plausible e-mail address, checked in linear time (no backtracking regular expression). */
+function isPlausibleEmail(s: string): boolean {
+  if (s.length > 254 || /\s/.test(s)) return false;
+  const at = s.indexOf('@');
+  if (at < 1 || at !== s.lastIndexOf('@')) return false;
+  const domain = s.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  return dot > 0 && dot < domain.length - 1;
+}
+
 function clean(key: keyof Brand, value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const v = value.trim().slice(0, 200);
   if (URL_KEYS.includes(key)) return v === '' || /^https:\/\//i.test(v) ? v : null; // https only; never a script: or http: link
-  if (key === 'supportEmail') return v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : null;
+  if (key === 'supportEmail') return v === '' || isPlausibleEmail(v) ? v : null;
   if (key === 'markLetter') return v ? Array.from(v)[0] : null;
   if ((key === 'productName' || key === 'shortName') && !v) return null;
   return v;

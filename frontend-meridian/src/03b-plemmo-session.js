@@ -377,6 +377,7 @@ function pollPlemmoSync() {
 
 function startPlemmoStatus() {
   updatePlemmoStatus();
+  if (typeof licenceCheck === 'function') licenceCheck();
   PlemmoAPI.onConnectivity(() => updatePlemmoStatus());
   if (PlemmoSession._pollTimer) clearInterval(PlemmoSession._pollTimer);
   pollPlemmoSync();

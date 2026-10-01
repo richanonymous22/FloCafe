@@ -58,6 +58,8 @@ import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
 import { stocktakeRoutes } from './stocktakes';
+import { activationRoutes } from './activation';
+import { requireTradingLicence } from '../middleware/license-gate';
 import { supplierRoutes } from './suppliers';
 import { purchaseOrderRoutes } from './purchase-orders';
 import { transferRoutes } from './transfers';
@@ -91,11 +93,21 @@ export function registerRoutes(app: Express): void {
   // time an app is built, including once per test file.
   registerHospitalityHooks();
 
+  // Trading gate: creating a sale, extending it and taking payment need a licence in force (see
+  // middleware/license-gate.ts). Registered first so it runs before the route handlers; reading, reports,
+  // refunds, voids and backups are deliberately not gated.
+  app.post('/api/orders', requireTradingLicence);
+  app.post('/api/orders/:id/items', requireTradingLicence);
+  app.post('/api/bills/generate', requireTradingLicence);
+  app.post('/api/bills/:id/payments', requireTradingLicence);
+  app.post('/api/retail/checkout', requireTradingLicence);
+
   // Auth routes
   app.use('/api/auth', authRoutes);
   app.use('/api/retail', retailRoutes);
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/stocktakes', stocktakeRoutes);
+  app.use('/api/activation', activationRoutes);
   app.use('/api/suppliers', supplierRoutes);
   app.use('/api/purchase-orders', purchaseOrderRoutes);
   app.use('/api/transfers', transferRoutes);

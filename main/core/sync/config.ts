@@ -25,10 +25,25 @@ export interface SyncCloudConfig {
   disabledReason?: string;
 }
 
+/**
+ * The cloud address an ACTIVATED device was given (saved by `activateDevice`), used when the environment
+ * names none. A merchant's till has no environment variables; the address lives in its settings instead.
+ */
+export function activatedCloudUrl(): string {
+  try {
+    // required lazily: this module is loaded by code that runs before the database exists
+    const { getSettingValue } = require('../../db') as typeof import('../../db');
+    return (getSettingValue('cloud_sync_url') || '').trim().replace(/\/+$/, '');
+  } catch { return ''; }
+}
+
 export function getSyncEnvironment(env: NodeJS.ProcessEnv = process.env): SyncEnvironment {
   const raw = (env.PLEMMO_SYNC_ENV || '').trim().toLowerCase();
   if (raw === 'production' || raw === 'staging') return raw;
-  return 'development';
+  if (raw === 'development') return 'development';
+  // Not stated: a device activated against a real https cloud is production (OS-encrypted device key,
+  // TLS required); anything else is development.
+  return looksLikeProductionUrl(env === process.env ? activatedCloudUrl() : '') ? 'production' : 'development';
 }
 
 function looksLikeProductionUrl(url: string): boolean {
@@ -43,7 +58,7 @@ function looksLikeProductionUrl(url: string): boolean {
 }
 
 export function getSyncCloudConfig(env: NodeJS.ProcessEnv = process.env): SyncCloudConfig {
-  const baseUrl = (env.PLEMMO_SYNC_URL || '').trim().replace(/\/+$/, '');
+  const baseUrl = (env.PLEMMO_SYNC_URL || '').trim().replace(/\/+$/, '') || (env === process.env ? activatedCloudUrl() : '');
   const environment = getSyncEnvironment(env);
 
   if (baseUrl.length === 0) {

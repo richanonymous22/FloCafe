@@ -109,3 +109,24 @@ export function licenceFromPlan(plan: CloudPlan, organizationUid: string, nowIso
     signature: null,
   };
 }
+
+/**
+ * What the operator hands the merchant: the activation token, with the cloud address folded in when the
+ * deployment knows its public URL (`PLEMMO_CLOUD_PUBLIC_URL`), so the terminal needs only this one string.
+ * Format `<base64url(url)>~<token>`; a bare token still works on a build that knows its cloud address.
+ * (`main/core/activation.ts` parses it; the two are kept in step by tests.)
+ */
+export function makeActivationCode(cloudUrl: string | undefined, token: string): string {
+  const url = (cloudUrl || '').trim().replace(/\/+$/, '');
+  return url ? `${Buffer.from(url, 'utf8').toString('base64url')}~${token}` : token;
+}
+
+/** A plausible e-mail address, checked in linear time (no backtracking regular expression). */
+export function isPlausibleEmail(s: string): boolean {
+  if (s.length > 254 || /\s/.test(s)) return false;
+  const at = s.indexOf('@');
+  if (at < 1 || at !== s.lastIndexOf('@')) return false;
+  const domain = s.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  return dot > 0 && dot < domain.length - 1;
+}

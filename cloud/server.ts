@@ -20,6 +20,7 @@
  */
 
 import { hashToken } from './enrollment';
+import { isPlausibleEmail, makeActivationCode } from './commercial';
 import { CloudMerchant, MerchantStatus, generateMerchantCode, licenceFromPlan, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
@@ -425,7 +426,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     if (license) {
       const signingKey = getLicenseSigningKey();
       if (signingKey) {
-        res.json({ license: { ...license, signature: signLicense(signingKey, license) } });
+        res.json({ license: { ...license, signature: signLicense(signingKey, license), key_id: process.env.PLEMMO_LICENSE_SIGNING_KEY_ID || 'k1' } });
         return;
       }
     }
@@ -539,7 +540,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
       ttlMs,
     });
     await store.logSync('activation_token_issued', { organizationUid: b.organization_uid }, new Date().toISOString());
-    res.status(201).json({ token, organization_uid: b.organization_uid });
+    res.status(201).json({ token, organization_uid: b.organization_uid, activation_code: makeActivationCode(process.env.PLEMMO_CLOUD_PUBLIC_URL, token) });
   });
 
   // Operational health for an organization (device counts, last sync, deficits)
@@ -584,7 +585,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     const name = typeof b.name === 'string' ? b.name.trim() : '';
     if (!name || name.length > 120) return res.status(400).json({ error: 'name is required (120 characters at most)' });
     const email = typeof b.contact_email === 'string' && b.contact_email.trim() ? b.contact_email.trim().slice(0, 200) : null;
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'contact_email is not a valid address' });
+    if (email && !isPlausibleEmail(email)) return res.status(400).json({ error: 'contact_email is not a valid address' });
     const plan = typeof b.plan_id === 'string' ? await store.getPlan(b.plan_id) : null;
     if (!plan || !plan.is_active) return res.status(400).json({ error: 'plan_id must name an active plan' });
     const termDays = b.term_days == null ? undefined : Number(b.term_days);
@@ -619,7 +620,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fields: Partial<CloudMerchant> = {};
     if (typeof b.name === 'string') { const n = b.name.trim(); if (!n || n.length > 120) return res.status(400).json({ error: 'name must be 1–120 characters' }); fields.name = n; }
-    if (typeof b.contact_email === 'string') { const e = b.contact_email.trim(); if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return res.status(400).json({ error: 'contact_email is not a valid address' }); fields.contact_email = e || null; }
+    if (typeof b.contact_email === 'string') { const e = b.contact_email.trim(); if (e && !isPlausibleEmail(e)) return res.status(400).json({ error: 'contact_email is not a valid address' }); fields.contact_email = e || null; }
     if (typeof b.notes === 'string') fields.notes = b.notes.slice(0, 500);
     const nowIso = new Date().toISOString();
     const updated = await store.updateMerchant(m.merchant_code, fields, nowIso);
@@ -692,7 +693,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
       registerUid: typeof b.register_uid === 'string' ? b.register_uid : null, ttlMs,
     });
     await store.logSync('activation_token_issued', { organizationUid: m.organization_uid, message: m.merchant_code }, new Date().toISOString());
-    res.status(201).json({ token, merchant_code: m.merchant_code });
+    res.status(201).json({ token, merchant_code: m.merchant_code, activation_code: makeActivationCode(process.env.PLEMMO_CLOUD_PUBLIC_URL, token) });
   });
 
   return app;

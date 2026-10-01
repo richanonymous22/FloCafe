@@ -27,7 +27,7 @@ case, spaces and O/0, I/L/1 mix-ups are tolerated) and its organisation id, with
 ```sh
 curl -X POST $CLOUD/admin/v1/merchants/MRC-XXXX-XXXX/activation-tokens -H "Authorization: Bearer $T" -d '{}'
 ```
-The token is shown once, is single-use and expires in 24 h (`ttl_seconds` to change). The merchant enters it on
+The response carries an **`activation_code`** (`<cloud address>~<token>`, when the cloud knows its public address via `PLEMMO_CLOUD_PUBLIC_URL`): that single string is what the merchant types on the till (Settings → Licence & cloud, or the activation screen). The token is shown once, is single-use and expires in 24 h (`ttl_seconds` to change). The merchant enters it on
 the terminal's "Activate this device" screen. Enrolment is refused — without using up the token — when the
 licence is suspended or revoked, or the plan's device limit is reached.
 
@@ -48,3 +48,18 @@ A terminal fetches its licence signed with the cloud's licence key and verifies 
 pinned in the app; an unverifiable licence is ignored in favour of the cached one, and the cached one keeps the
 shop trading through the plan's grace days after expiry. Suspension and revocation take effect at the next
 successful check (so a shop that is offline keeps trading until it reconnects and the grace period ends).
+
+## Release builds: the licence policy and signing keys
+A release build ships `license-policy.json` next to the app (never in the source tree):
+```json
+{ "requireActivation": true, "publicKeys": { "k1": "-----BEGIN PUBLIC KEY-----…" }, "cloudUrl": "https://…" }
+```
+`requireActivation` makes an unactivated till refuse to take sales. `publicKeys` pins the licence-signing keys
+the build trusts; the cloud signs with `PLEMMO_LICENSE_SIGNING_KEY` and names it with
+`PLEMMO_LICENSE_SIGNING_KEY_ID` (default `k1`). **Rotating a key:** release a build that pins both the old and
+the new public key, wait until tills have updated, then switch the cloud to the new private key and id. A licence
+signed by an unpinned key is refused and the till keeps its last good licence. The private key lives only in the
+cloud's secret store, never in a browser or a repository.
+
+A device removed from the account (revoked in the cloud) keeps trading until it next checks its licence while
+online, then pauses sales; its records stay viewable.

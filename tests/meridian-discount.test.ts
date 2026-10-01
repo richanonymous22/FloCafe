@@ -157,7 +157,7 @@ async function run() {
     await openPay(O);
     const o1 = lastOrder();
     ok(o1.discount_amount === 0.4 && o1.discount_type === 'percentage' && o1.discount_value === 10 && o1.total === 3.6, 'backend order: 10% off 4.00 = 0.40 discount, total 3.60');
-    ok(/3\.60/.test(O.doc.getElementById('payBody').textContent || ''), 'the pay screen shows the backend total 3.60');
+    ok(/3\.60/.test([...O.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 'the pay screen shows the backend total 3.60');
     const bill1 = db.prepare(`SELECT * FROM bills WHERE order_id=?`).get(o1.id) as any;
     ok(bill1.total === 3.6 && bill1.discount_amount === 0.4, 'the backend bill carries the discount (3.60)');
     await cardPay(O, 'D-1');

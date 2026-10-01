@@ -152,10 +152,10 @@ async function run() {
     console.log('\n2. pay the whole sale from the wallet');
     await openPay();
     ok(!!C.doc.querySelector('[data-act="payMethod"][data-m="wallet"]'), 'a Wallet method is offered because the customer has a balance');
-    ok(!/earns .* points/i.test(C.doc.getElementById('payBody').textContent || ''), 'no made-up "earns N points" estimate on the pay screen');
+    ok(!/earns .* points/i.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 'no made-up "earns N points" estimate on the pay screen');
     C.click('payMethod', { m: 'wallet' });
     await waitFor(() => !!C.doc.querySelector('[data-act="payWallet"]'), 3000, 'wallet pane');
-    ok(/5\.00/.test(C.doc.getElementById('payBody').textContent || '') && /Use .*4\.00 from the wallet/.test(C.doc.getElementById('payBody').textContent || ''), 'shows the 5.00 balance and offers to use 4.00');
+    ok(/5\.00/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || '') && /Use .*4\.00 from the wallet/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 'shows the 5.00 balance and offers to use 4.00');
     C.click('payWallet');
     await waitFor(() => (db.prepare(`SELECT COUNT(*) n FROM payments WHERE method='wallet'`).get() as any).n === 1, 8000, 'wallet payment row');
     await waitFor(() => cart().items.length === 0, 6000, 'sale finished');
@@ -167,6 +167,7 @@ async function run() {
     ok(o.payments.length === 1 && o.payments[0].m === 'wallet', 'the order is mapped with a wallet tender, not mislabelled as card');
 
     C.win.eval('closeAll()'); // the first sale's receipt
+    await waitFor(() => C.doc.querySelectorAll('.modal').length === 0, 4000, 'earlier dialogs gone');
     console.log('\n3. wallet + card split, cashback reported by the server');
     C.click('add', { id: 'p-bagel' }); C.click('add', { id: 'p-bagel' }); C.click('add', { id: 'p-bagel' }); // 12.00
     addCust();
@@ -174,9 +175,9 @@ async function run() {
     await openPay();
     C.click('payMethod', { m: 'wallet' });
     await waitFor(() => !!C.doc.querySelector('[data-act="payWallet"]'), 3000, 'wallet pane 2');
-    ok(/Use .*1\.00 from the wallet/.test(C.doc.getElementById('payBody').textContent || ''), 'only the remaining 1.00 balance is offered');
+    ok(/Use .*1\.00 from the wallet/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 'only the remaining 1.00 balance is offered');
     C.click('payWallet');
-    await waitFor(() => /Left to pay/.test(C.doc.getElementById('payBody').textContent || '') && /11\.00/.test(C.doc.getElementById('payBody').textContent || ''), 4000, 'remaining 11.00');
+    await waitFor(() => /Left to pay/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || '') && /11\.00/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 4000, 'remaining 11.00');
     C.click('payMethod', { m: 'card' });
     await waitFor(() => !!C.doc.querySelector('[data-act="payCard"]'), 3000, 'card pane');
     C.click('payCard');
@@ -211,7 +212,7 @@ async function run() {
     await waitFor(() => /wallet payment was refused/i.test(C.toasts()), 8000, 'refusal toast');
     ok(/Insufficient wallet balance/i.test(C.toasts()), 'the server\'s reason is shown');
     ok((db.prepare(`SELECT COUNT(*) n FROM payments`).get() as any).n === before, 'no payment was recorded');
-    await waitFor(() => !/Payment taken/.test(C.doc.getElementById('payBody').textContent || ''), 4000, 'not stuck on Save the sale');
+    await waitFor(() => !/Payment taken/.test([...C.doc.querySelectorAll('#payBody')].pop()!.textContent || ''), 4000, 'not stuck on Save the sale');
     ok(!!C.doc.querySelector('[data-act="payMethod"]'), 'the cashier is back at the choice of tenders (the wallet line was removed)');
     C.dom.window.close();
 

@@ -43,6 +43,13 @@ IN.itQ=debounce(v=>{U.items.q=v;const pos=$('[data-in="itQ"]').selectionStart;re
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 CH.itCat=v=>{U.items.cat=v;renderView();};
 const adminLive=()=>!!(window.PlemmoAdmin&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated());
+// The quantity on hand is the ledger's; the cached number can be a sale or two behind. Read it
+// from the server before showing or correcting it. Falls back to the cached value if unreachable.
+async function liveStock(p){
+  if(!p||p.stock==null||!window.PlemmoInventory)return p?p.stock:null;
+  try{const r=await PlemmoInventory.balance(p.id);if(r&&typeof r.balance==='number'){p.stock=r.balance;return r.balance;}}catch(e){/* use the cached figure */}
+  return p.stock;
+}
 // After the server accepted a catalogue change, take its version of the catalogue back.
 async function reloadCatalogue(){try{await PlemmoCatalogue.load(S);}catch(e){/* keep the last copy; the change itself is already saved on the server */}}
 CH.itAvail=async(v,el)=>{
@@ -60,7 +67,7 @@ let IT=null;
 async function editItem(id){
   const p=id?prod(id):null;
   IT={id,emoji:p?p.emoji:'🍽️',allergens:new Set(p?p.allergens:[]),mods:new Set(p?p.mods:[]),track:p?p.stock!=null:false,live:adminLive(),tax:null};
-  if(IT.live){try{IT.tax=await PlemmoAdmin.taxCategories();}catch(e){IT.tax=null;}}
+  if(IT.live){try{IT.tax=await PlemmoAdmin.taxCategories();}catch(e){IT.tax=null;}await liveStock(p);}
   const cats=S.categories;
   const L=modal({title:p?esc(p.name):'New item',cls:'wide',body:`<div class="fgrid">
     <label class="field span2"><span>Name</span><input class="input" id="itN" value="${esc(p?p.name:'')}" placeholder="For example, Oat Flat White" autofocus></label>
@@ -104,7 +111,8 @@ A.itSave=async()=>{
       if(prev){
         saved=await PlemmoAdmin.products.update(prev.id,f);
         // A different quantity is a stock adjustment on the ledger, with a reason — never a silent overwrite.
-        if(IT.track&&prev.stock!=null&&stockNow!==prev.stock&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,prev.stock,'Edited on the item');
+        const cur=prev.stock!=null?await liveStock(prev):null;
+        if(IT.track&&cur!=null&&stockNow!==cur&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,cur,'Edited on the item');
         else if(IT.track&&prev.stock==null&&stockNow>0&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,0,'Stock tracking switched on');
       }else saved=await PlemmoAdmin.products.create(f);
       await reloadCatalogue();

@@ -158,9 +158,12 @@ async function run() {
     ok(JSON.stringify(lk).includes('Pen Set'), 'scanning its barcode finds it');
 
     console.log('\n3. edit: price changes on the server, a different stock quantity is a ledger adjustment');
+    // the earlier test sale took one unit, so the cached count (6) is a unit behind the ledger (5)
+    ok(O.M().S.products.find((p: any) => p.id === pen.id).stock === 6, 'the register\'s cached stock is stale (6) after the sale');
     await openItem(pen.id);
-    setVal('itP', '12.00'); setVal('itS', String(O.M().S.products.find((p: any) => p.id === pen.id).stock + 4));
-    const stockBefore = O.M().S.products.find((p: any) => p.id === pen.id).stock;
+    ok((O.doc.getElementById('itS') as any).value === '5', 'the form shows the LEDGER quantity (5), read from the server when it opened');
+    const stockBefore = 5;
+    setVal('itP', '12.00'); setVal('itS', String(stockBefore + 4));
     O.click('itSave');
     await waitFor(() => prodRow('Pen Set').price === 12, 8000, 'price updated');
     await waitFor(() => (db.prepare(`SELECT quantity FROM inventory_balances WHERE product_id=?`).get(pen.id) as any)?.quantity === stockBefore + 4, 8000, 'ledger balance');

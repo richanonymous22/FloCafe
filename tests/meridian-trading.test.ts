@@ -110,9 +110,12 @@ async function run() {
     const clickEl = (sel: string) => { const el = doc.querySelector(sel); if (!el) throw new Error(`no element ${sel}`); (el as any).click(); };
     const toasts = () => (doc.getElementById('toasts').textContent || '');
     const clearToasts = () => { doc.getElementById('toasts').innerHTML = ''; };
+    // Type a PIN into a FRESH keypad (no digits entered yet): a previous PIN dialog may still be closing.
+    const freshPad = () => Array.from(doc.querySelectorAll('.modal')).find((m: any) => m.querySelector('[data-pad]') && !m.querySelector('.pin-dots i.f')) as any;
     const pin = async (digits: string) => {
-      await waitFor(() => !!doc.querySelector('.modal [data-pad]'), 4000, 'PIN keypad');
-      for (const d of digits) clickEl(`.modal [data-key="${d}"]`);
+      await waitFor(() => !!freshPad(), 8000, 'PIN keypad');
+      const pad = freshPad();
+      for (const d of digits) { const key = pad.querySelector(`[data-key="${d}"]`) as any; if (!key) throw new Error(`no key ${d}`); key.click(); }
     };
     const api = (p: string, o?: any) => win.PlemmoAPI.request(p, o);
     return { dom, win, doc, M, click, clickEl, toasts, clearToasts, pin, api, tok: () => win.PlemmoAPI.getToken() as string };

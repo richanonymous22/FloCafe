@@ -6,6 +6,7 @@ import { requirePermission } from '../middleware/authorize';
 import { aggregateTaxComponents } from '../services/tax-components';
 import { fromMinor, minorUnitExponent } from '../core/money';
 import { ReportError, buildXReport, generateZReport, getZReport, listZReports, tradingReportToCsv, verifyZReport } from '../core/trading-report';
+import { PERIOD_SECTIONS, buildPeriodReport, periodSectionToCsv, type PeriodSection } from '../core/period-report';
 import { getCurrentLocationId } from '../core/location';
 import { printTextLinesDetailed } from '../printers/thermal';
 import { formatTradingReport } from '../printers/report-format';
@@ -96,6 +97,27 @@ router.get('/z/:id/csv', requirePermission('reports.view'), (req: Request, res: 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="z-report-${String(record.number).padStart(4, '0')}.csv"`);
     res.send(tradingReportToCsv(record.snapshot, record.number));
+  } catch (e) { reportFailure(e, res); }
+});
+
+// ── Period reports: any date range, net of refunds (products, categories, staff, VAT, discounts, refunds, voids).
+// `from` is exclusive and `to` inclusive, both UTC `YYYY-MM-DD HH:MM:SS`; `tz` buckets the series.
+function periodFromQuery(req: Request) {
+  return buildPeriodReport(getCurrentLocationId(), String(req.query.from || ''), String(req.query.to || ''), {
+    tz: req.query.tz ? String(req.query.tz) : undefined, bucket: req.query.bucket === 'hour' ? 'hour' : 'day',
+  });
+}
+router.get('/period', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try { res.json({ report: periodFromQuery(req) }); } catch (e) { reportFailure(e, res); }
+});
+router.get('/period/csv', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const section = String(req.query.section || 'summary') as PeriodSection;
+    if (!PERIOD_SECTIONS.includes(section)) { res.status(400).json({ error: `section must be one of ${PERIOD_SECTIONS.join(', ')}` }); return; }
+    const report = periodFromQuery(req);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${section}-${report.from.slice(0, 10)}_${report.to.slice(0, 10)}.csv"`);
+    res.send(periodSectionToCsv(report, section));
   } catch (e) { reportFailure(e, res); }
 });
 

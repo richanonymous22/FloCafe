@@ -119,7 +119,7 @@ VIEWS.home=()=>{
 };
 const insHTML=x=>`<div class="ins-card ${x.k}"><span class="ins-ic">${ic(x.icon,18)}</span><div><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div></div>`;
 A.goLow=()=>{U.items.tab='items';U.items.cat='low';go('items');};
-A.eod=()=>showZ(dayStart(0));
+A.eod=()=>live()?showTradingReport():showZ(dayStart(0));
 
 /* =====================================================================
    REPORTS
@@ -256,6 +256,76 @@ function showZ(day){
   </div>`;
   modal({title:isToday?'Day so far':'End of day',sub:fmtDL(day),cls:'rc-modal',body,foot:`<button class="btn" data-act="printRc">${ic('printer',18)} Print</button><button class="btn" data-act="zCsv" data-t="${day}">${ic('download',18)} Orders CSV</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
 }
+/* ---------- Trading reports from the till server (X / Z) ----------
+ * Connected tills show the SERVER's X and Z reports: figures from the payments ledger, sealed and numbered
+ * when the day is closed, and never regenerated. The old client-side "Z" (below, offline only) was computed
+ * per calendar day from this device's copy, with one flat tax rate, and could be re-run with different numbers.
+ */
+const tmoney=(minor,exp)=>money((minor||0)/Math.pow(10,exp==null?2:exp));
+function tradingReceiptHTML(r,z){
+  const s=S.settings,e=r.exponent,m=v=>tmoney(v,e);
+  const kv=(k,v,cls='')=>`<div class="kv ${cls}"><span>${k}</span><span>${v}</span></div>`;
+  const title=z?`Z REPORT ${String(z.number).padStart(4,'0')}`:'X REPORT, TRADING SO FAR';
+  const failed=Object.entries(r.checks).filter(([k,v])=>k!=='open_cash_session'&&v!==true).map(([k])=>k.replace(/_/g,' '));
+  const unver=r.tenders.reduce((n,t)=>n+(t.unverified_card_minor||0),0);
+  return`<div class="paper receipt rc-print">
+   <div class="p-h"><b>${esc(s.name)}</b>${s.address?`<span class="pm">${esc(s.address)}</span>`:''}${s.vatNo?`<span class="pm">${esc(s.taxName)} no. ${esc(s.vatNo)}</span>`:''}</div>
+   <div class="rule"></div>
+   <div class="p-h"><b>${title}</b><span class="pm">${esc(r.period_start)} to ${esc(r.period_end)} (UTC)</span></div>
+   <div class="rule"></div><div class="p-sec">SALES</div>
+   ${kv('Sales',r.transactions.count)}${kv('Items sold',r.transactions.items_sold)}${kv('Average sale',m(r.transactions.average_minor))}
+   ${kv('Gross sales',m(r.sales.gross_minor),'b')}${kv(`Refunds (${r.refunds.count})`,'−'+m(r.sales.refunds_minor))}${kv('Net sales',m(r.sales.net_minor),'b')}
+   ${r.discounts.count?kv(`Discounts given (${r.discounts.count})`,m(r.discounts.amount_minor),'pm'):''}
+   <div class="rule"></div><div class="p-sec">TAKINGS BY TENDER</div>
+   ${r.tenders.map(t=>kv(esc(t.method[0].toUpperCase()+t.method.slice(1))+(t.payments?` (${t.payments})`:''),m(t.taken_minor))+(t.refunded_minor?kv('  refunded','−'+m(t.refunded_minor),'pm'):'')+(t.tips_minor?kv('  tips',m(t.tips_minor),'pm'):'')).join('')||'<div class="pm">No takings</div>'}
+   ${unver?`<div class="pm" style="margin-top:6px">${m(unver)} of card takings were taken on a separate terminal and are not confirmed by a card provider.</div>`:''}
+   ${r.vat.length?`<div class="rule"></div><div class="p-sec">${esc(s.taxName)} BY RATE</div>
+   ${r.vat.map(v=>kv(esc(v.label)+` · gross ${m(v.gross_minor)}`,`${m(v.vat_minor)}`)+(v.refund_gross_minor?kv('  credit notes',`−${m(v.refund_vat_minor)}`,'pm'):'')).join('')}
+   ${kv(`${esc(s.taxName)} collected`,m(r.vat_total.vat_minor))}${kv('Credit notes','−'+m(r.vat_total.refund_vat_minor))}${kv(`${esc(s.taxName)} due`,m(r.vat_total.net_vat_minor),'b')}`:''}
+   <div class="rule"></div><div class="p-sec">OTHER</div>
+   ${kv('Voided orders',`${r.voids.orders} (${m(r.voids.orders_value_minor)})`)}${kv('Items removed after sending',r.voids.lines_removed)}${kv('Price changes',r.voids.price_overrides)}
+   <div class="rule"></div><div class="p-sec">CASH DRAWER</div>
+   ${kv('Float',m(r.cash.opening_float_minor))}${kv('Cash sales',m(r.cash.sales_minor))}${kv('Cash refunds','−'+m(r.cash.refunds_minor))}${kv('Paid in',m(r.cash.pay_in_minor))}${kv('Paid out','−'+m(r.cash.pay_out_minor))}
+   ${r.cash.sessions_closed?kv('Expected',m(r.cash.expected_minor_at_close))+kv('Counted',m(r.cash.counted_minor))+kv('Difference',(r.cash.variance_minor>0?'+':'')+m(r.cash.variance_minor),r.cash.variance_minor?'b':''):(r.checks.open_cash_session?'<div class="pm">The drawer is still open.</div>':'')}
+   <div class="rule"></div>
+   ${failed.length?`<div class="pm" style="color:var(--bad,#c0392b)"><b>Check failed:</b> ${esc(failed.join(', '))}. Do not rely on these figures until this is looked into.</div>`:'<div class="pm">All totals agree (takings, tax, drawer).</div>'}
+   <div class="p-h pm">${z?`Closed ${esc(z.generated_at)} UTC · ${esc(z.digest.slice(0,12))}`:'Not closed. This is a read-only look.'}</div>
+  </div>`;
+}
+async function showTradingReport(){
+  let x;
+  try{x=(await PlemmoAPI.get('/reports/x')).report;}
+  catch(e){toast(`The report could not be read: ${window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it'}`,'warn');return;}
+  U.trade={r:x,z:null};
+  const canZ=can('reports');
+  modal({title:'Trading so far',sub:'X report',cls:'rc-modal',body:tradingReceiptHTML(x,null),
+    foot:`<button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>${canZ?`<button class="btn btn-primary" data-act="zClose">${ic('lock',16)} Close the day (Z report)</button>`:''}`});
+}
+A.zClose=async()=>{
+  if(!await confirmBox({title:'Close the day?',text:'This ends today’s trading period and creates a numbered Z report. It is a permanent record and cannot be changed or run again. The cash drawer must be closed first.',ok:'Close the day',danger:true}))return;
+  try{
+    const z=(await PlemmoAPI.post('/reports/z',{},{idempotent:false})).report;
+    closeAll();
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+  }catch(e){
+    const code=e&&e.data&&e.data.code,msg=window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it';
+    toast(code==='cash_session_open'?'Close the cash drawer first (Cash screen), then run the Z report.':msg,'warn',{ms:5200});
+  }
+};
+A.zList=async()=>{
+  let list;
+  try{list=(await PlemmoAPI.get('/reports/z')).reports;}
+  catch(e){toast('The Z reports could not be read','warn');return;}
+  closeAll();
+  modal({title:'Z reports',cls:'rc-modal',body:list.length?`<div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>No.</th><th>Closed</th><th class="r">Sales</th><th class="r">Net</th><th></th></tr></thead><tbody>${list.map(z=>`<tr><td>Z${String(z.number).padStart(4,'0')}</td><td>${esc(z.period_end)}</td><td class="r num">${z.transactions}</td><td class="r num">${tmoney(z.net_minor,z.exponent)}</td><td>${z.ok?'':'<span class="tag warn">check failed</span> '}<button class="btn btn-sm" data-act="zOpen" data-id="${esc(z.id)}">Open</button></td></tr>`).join('')}</tbody></table></div></div>`:'<p class="muted">No Z reports yet. Close the day to create the first one.</p>',foot:'<button class="btn" data-act="closeTop">Close</button>'});
+};
+A.zOpen=async d=>{
+  try{
+    const r=await PlemmoAPI.get('/reports/z/'+encodeURIComponent(d.id));const z=r.report;
+    closeAll();
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:r.verified?'Stored report, seal checked':'WARNING: the stored report does not match its seal',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>`});
+  }catch(e){toast('That Z report could not be opened','warn');}
+};
 A.zCsv=d=>{const a=+d.t;offerDownload(`orders-${new Date(a).toISOString().slice(0,10)}.csv`,ordersCSV(S.orders.filter(o=>o.ts>=a&&o.ts<a+DAY&&o.status!=='open').sort((p,q)=>p.ts-q.ts)));};
 
 /* =====================================================================

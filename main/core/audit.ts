@@ -58,6 +58,7 @@ export type AuditEventType =
   | 'payment.voided'
   | 'receipt.delivered'
   | 'customer.wallet_adjusted'
+  | 'report.z_generated'
   | 'ai.query'
   // Catalogue
   | 'product.created'

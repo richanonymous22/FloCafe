@@ -1,15 +1,62 @@
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import Decimal from 'decimal.js';
 import { getDatabase, getSettingValue, parseDbTimestamp, parseItemJson, utcDayBounds, utcTodayDate } from '../db';
 import { requirePermission } from '../middleware/authorize';
 import { aggregateTaxComponents } from '../services/tax-components';
 import { fromMinor, minorUnitExponent } from '../core/money';
+import { ReportError, buildXReport, generateZReport, getZReport, listZReports, verifyZReport } from '../core/trading-report';
+import { getCurrentLocationId } from '../core/location';
 
 function fromMinorAmount(amountMinor: number, currency: string): number {
   return fromMinor(amountMinor, minorUnitExponent(currency));
 }
 
 const router = Router();
+
+// Reports read the whole ledger and Z reports write to it; keep a generous per-client ceiling.
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
+
+function reportFailure(error: any, res: Response): void {
+  if (error instanceof ReportError) {
+    res.status(error.statusCode).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    return;
+  }
+  console.error('[API] Trading report failed:', error);
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+// ── X / Z trading reports ────────────────────────────────────────────────────
+// X: read-only look at the open trading period. Z: closes it, stores an immutable numbered snapshot.
+router.get('/x', requirePermission('reports.view'), (_req: Request, res: Response) => {
+  try { res.json({ report: buildXReport(getCurrentLocationId()) }); } catch (e) { reportFailure(e, res); }
+});
+
+router.post('/z', requirePermission('reports.z'), (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as { userId: string };
+    const record = generateZReport({ locationId: getCurrentLocationId(), actorUserId: user.userId, allowEmpty: req.body?.allow_empty === true });
+    res.status(201).json({ report: record });
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try { res.json({ reports: listZReports(getCurrentLocationId(), Number(req.query.limit) || 60) }); } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z/:id', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) return res.status(404).json({ error: 'Z report not found' });
+    res.json({ report: record, verified: verifyZReport(record.id).ok });
+  } catch (e) { reportFailure(e, res); }
+});
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 

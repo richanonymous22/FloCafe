@@ -26,6 +26,7 @@
  */
 import { getDatabase, now, withTxn } from '../db';
 import { minorUnitExponent, toMinor } from './money';
+import { allocate, refundBuckets } from './vat-buckets';
 import { recordAuditEvent } from './audit';
 import { getCurrentLocationId } from './location';
 import { recordCashRefundForPayment } from './cash';
@@ -224,6 +225,27 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       remaining -= take;
       if (payment.method === 'cash') cashRefundMinor += take;
       if (payment.method === 'wallet') walletRefundMinor += take;
+    }
+
+    // The refund's VAT, recorded with each refund row so the Z report can show VAT net of credit notes
+    // without guessing: returned lines carry their own rate and VAT; an amount refund is spread over the
+    // bill's rates in proportion. The operation is split across the tender rows by amount.
+    {
+      const fullBill = db.prepare('SELECT * FROM bills WHERE id = ?').get(bill.id) as any;
+      const exp = minorUnitExponent((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value);
+      const buckets = refundBuckets(db, fullBill, exp, {
+        amountMinor: amount,
+        lines: wanted.map((w) => ({ orderItemId: w.orderItemId, quantity: w.quantity, amountMinor: lineAmounts.get(w.orderItemId) ?? 0 })),
+      });
+      const weights = refunds.map((r) => r.amount_minor);
+      const perRow: { label: string; rate: number; gross_minor: number; vat_minor: number }[][] = refunds.map(() => []);
+      for (const k of buckets) {
+        const g = allocate(k.gross, weights);
+        const v = allocate(k.vat, weights);
+        refunds.forEach((_, i) => { if (g[i] || v[i]) perRow[i].push({ label: k.label, rate: k.rate, gross_minor: g[i], vat_minor: v[i] }); });
+      }
+      const setMeta = db.prepare('UPDATE refunds SET metadata = ? WHERE id = ?');
+      refunds.forEach((r, i) => setMeta.run(JSON.stringify({ vat: perRow[i] }), r.id));
     }
 
     const recordedLines: RefundBillResult['lines'] = [];

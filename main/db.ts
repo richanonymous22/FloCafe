@@ -5403,6 +5403,36 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       seedBundledCountryPacks();
     },
   },
+  {
+    version: 100,
+    name: 'z_reports',
+    up: () => {
+      // Z REPORTS. One immutable, sequentially numbered row per closed trading period and location. The
+      // snapshot is the exact figures at the moment the period closed; the triggers refuse any UPDATE or
+      // DELETE so a Z can never be regenerated with different numbers. Additive: nothing existing changes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS z_reports (
+          id            TEXT PRIMARY KEY,
+          location_key  TEXT NOT NULL,
+          location_id   TEXT,
+          number        INTEGER NOT NULL,
+          period_start  TEXT NOT NULL,
+          period_end    TEXT NOT NULL,
+          currency      TEXT NOT NULL,
+          generated_by  TEXT,
+          generated_at  TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          digest        TEXT NOT NULL,
+          UNIQUE (location_key, number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_z_reports_loc_end ON z_reports(location_key, period_end);
+        CREATE TRIGGER IF NOT EXISTS trg_z_reports_no_update BEFORE UPDATE ON z_reports
+        BEGIN SELECT RAISE(ABORT, 'z_reports are immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS trg_z_reports_no_delete BEFORE DELETE ON z_reports
+        BEGIN SELECT RAISE(ABORT, 'z_reports are immutable'); END;
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

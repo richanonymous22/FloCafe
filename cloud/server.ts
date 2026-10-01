@@ -246,15 +246,15 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     '/operator/panel.js': ['panel.js', 'text/javascript; charset=utf-8'],
     '/operator/panel.css': ['panel.css', 'text/css; charset=utf-8'],
   };
-  const panelCache = new Map<string, Buffer>();
+  // The files are read once when the server is built, so a request does no file access of its own.
+  const panelBodies = new Map<string, Buffer>();
+  for (const [file] of Object.values(PANEL_FILES)) {
+    try { panelBodies.set(file, fs.readFileSync(path.join(__dirname, 'panel', file))); } catch { /* not shipped: the routes answer 404 */ }
+  }
   for (const [route, [file, type]] of Object.entries(PANEL_FILES)) {
     app.get(route, (_req: Request, res: Response) => {
-      if (!isAdminApiEnabled()) { res.status(404).end(); return; }
-      let body = panelCache.get(file);
-      if (!body) {
-        try { body = fs.readFileSync(path.join(__dirname, 'panel', file)); panelCache.set(file, body); }
-        catch { res.status(404).end(); return; }
-      }
+      const body = panelBodies.get(file);
+      if (!isAdminApiEnabled() || !body) { res.status(404).end(); return; }
       res.set({
         'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
         'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",

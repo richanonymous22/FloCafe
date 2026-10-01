@@ -20,10 +20,10 @@
  */
 
 import { hashToken } from './enrollment';
-import { isPlausibleEmail, makeActivationCode } from './commercial';
-import { CloudMerchant, MerchantStatus, generateMerchantCode, licenceFromPlan, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
+import { CloudMerchant, CloudPlan, MerchantStatus, generateMerchantCode, isPlausibleEmail, licenceFromPlan, makeActivationCode, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
+import { randomBytes } from 'crypto';
+import { CloudConflict, CloudDevice, EnrollmentToken, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { getLicenseSigningKey, signLicense } from './license-signing';
 import { enrollWithToken, issueEnrollmentToken, EnrollStore, EnrollmentError } from './enrollment';
@@ -51,6 +51,18 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   listDeficits(organizationUid: string): CloudInventoryDeficit[] | Promise<CloudInventoryDeficit[]>;
   getLicense(organizationUid: string): CloudLicense | null | Promise<CloudLicense | null>;
   upsertLicense(license: CloudLicense, at: string): void | Promise<void>;
+  peekEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null | Promise<EnrollmentToken | null>;
+  // Commercial layer: plans and merchants.
+  listPlans(): CloudPlan[] | Promise<CloudPlan[]>;
+  getPlan(planId: string): CloudPlan | null | Promise<CloudPlan | null>;
+  upsertPlan(plan: CloudPlan, at: string): void | Promise<void>;
+  createMerchant(merchant: CloudMerchant): void | Promise<void>;
+  getMerchant(merchantCode: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  getMerchantByOrganization(organizationUid: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  listMerchants(search?: string): CloudMerchant[] | Promise<CloudMerchant[]>;
+  updateMerchant(merchantCode: string, fields: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  /** Shared fixed-window rate limit: true when this hit is allowed. Shared across instances (database-backed). */
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean | Promise<boolean>;
 }
 
 /**
@@ -76,6 +88,8 @@ export const PLEMMO_PROTOCOL_VERSION = '1';
 const MAX_BATCH = 500;
 const BODY_LIMIT = '1mb';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const ADMIN_RATE_LIMIT_MAX = 120; // operator calls per client address per minute, shared across instances
+const ENROLL_RATE_LIMIT_MAX = 20; // activation attempts per client address per minute, shared across instances
 const RATE_LIMIT_MAX = 240; // per device per minute — generous for batching, curbs storms
 
 interface UploadEvent {
@@ -156,6 +170,14 @@ function createRateLimiter(windowMs: number, max: number) {
 export interface CreateCloudServerOptions {
   /** Enables POST /sync/v1/dev/enroll. DEV/TEST ONLY — must be false in production. */
   enableDevEnroll?: boolean;
+  /** One JSON log line per request (method, path without query, status, duration, request id). Never bodies, headers or tokens. */
+  requestLog?: boolean | ((line: Record<string, unknown>) => void);
+}
+
+/** The lowest client protocol this deployment still serves (an operator raises it to retire old clients). */
+function minClientProtocol(): number {
+  const n = Number(process.env.PLEMMO_MIN_CLIENT_PROTOCOL);
+  return Number.isInteger(n) && n >= 1 ? n : 1;
 }
 
 export function createCloudServer(store: ServerCloudStore, options: CreateCloudServerOptions = {}): Express {
@@ -178,6 +200,35 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
   // Stamp the protocol version on every response (COMMERCIALIZATION Part H).
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Plemmo-Protocol', PLEMMO_PROTOCOL_VERSION);
+    next();
+  });
+
+  // Behind a proxy or PaaS load balancer every request comes from the proxy's address; trust the stated number
+  // of hops so per-client rate limits and logs see the real client. 0 (default) = connect directly.
+  const hops = Number(process.env.PLEMMO_TRUST_PROXY_HOPS);
+  if (Number.isInteger(hops) && hops > 0) app.set('trust proxy', hops);
+
+  // Structured request log: one JSON line each, with a request id the client also receives.
+  if (options.requestLog) {
+    const sink = typeof options.requestLog === 'function' ? options.requestLog : (line: Record<string, unknown>) => console.log(JSON.stringify(line));
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const started = Date.now();
+      const id = `req_${randomBytes(6).toString('hex')}`;
+      res.setHeader('X-Request-Id', id);
+      res.on('finish', () => sink({ ts: new Date().toISOString(), level: res.statusCode >= 500 ? 'error' : 'info', msg: 'request', id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - started, device: req.header('x-plemmo-device') || undefined }));
+      next();
+    });
+  }
+
+  // Client compatibility: a client older than the deployment's minimum protocol is told to update rather than
+  // being served something it cannot parse. A client that sends no version is treated as protocol 1.
+  app.use('/sync/v1', (req: Request, res: Response, next: NextFunction) => {
+    const sent = Number(req.header('x-plemmo-protocol') || 1);
+    const min = minClientProtocol();
+    if (Number.isFinite(sent) && sent < min) {
+      res.status(426).json({ error: 'client_upgrade_required', min_protocol: min, protocol: PLEMMO_PROTOCOL_VERSION });
+      return;
+    }
     next();
   });
 
@@ -240,6 +291,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
 
   // ── PRODUCTION enrollment via one-time activation token (Part F) ─────────
   app.post('/sync/v1/enroll', async (req: Request, res: Response) => {
+    if (!(await store.rateLimitHit(`enroll:${req.ip ?? 'anon'}`, RATE_LIMIT_WINDOW_MS, ENROLL_RATE_LIMIT_MAX, Date.now()))) return res.status(429).json({ error: 'rate limited' });
     const { token, device_uid, public_key } = req.body ?? {};
     try {
       // The licence decides whether another device may join: refuse BEFORE the token is consumed, so a
@@ -444,8 +496,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
    *  caller may proceed, or false after having written the error response. */
   async function requireOperator(req: Request, res: Response): Promise<boolean> {
     const nowIso = new Date().toISOString();
-    const rlKey = `admin:${req.ip ?? 'anon'}`;
-    if (!rateLimited(rlKey, Date.now())) {
+    if (!(await store.rateLimitHit(`admin:${req.ip ?? 'anon'}`, RATE_LIMIT_WINDOW_MS, ADMIN_RATE_LIMIT_MAX, Date.now()))) {
       res.status(429).json({ error: 'rate limited' });
       return false;
     }
@@ -495,7 +546,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
   // Read an organization's current (stored, unsigned) license.
   app.get('/admin/v1/licenses/:org', async (req: Request, res: Response) => {
     if (!(await requireOperator(req, res))) return;
-    const license = await store.getLicense(req.params.org);
+    const license = await store.getLicense(String(req.params.org));
     if (!license) return res.status(404).json({ error: 'not_found' });
     res.json({ license });
   });
@@ -507,7 +558,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     if (!(await requireOperator(req, res))) return;
     const status = (req.body ?? {}).status as CloudLicense['status'];
     if (!LICENSE_STATUSES.has(status)) return res.status(400).json({ error: 'invalid status' });
-    const existing = await store.getLicense(req.params.org);
+    const existing = await store.getLicense(String(req.params.org));
     if (!existing) return res.status(404).json({ error: 'not_found' });
     const nowIso = new Date().toISOString();
     const updated: CloudLicense = {
@@ -517,7 +568,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
       signature: null,
     };
     await store.upsertLicense(updated, nowIso);
-    await store.logSync('license_status_changed', { organizationUid: req.params.org, message: status }, nowIso);
+    await store.logSync('license_status_changed', { organizationUid: String(req.params.org), message: status }, nowIso);
     res.json({ license: updated });
   });
 
@@ -547,7 +598,7 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
   // — the read model behind FloAdmin's business/terminal status views.
   app.get('/admin/v1/organizations/:org/health', async (req: Request, res: Response) => {
     if (!(await requireOperator(req, res))) return;
-    const health = await store.organizationHealth(req.params.org);
+    const health = await store.organizationHealth(String(req.params.org));
     res.json(health);
   });
 

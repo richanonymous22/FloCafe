@@ -25,7 +25,7 @@
  * the generic `storeEvent`/`pullEvents` so earlier suites are unaffected.
  */
 
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 
 export type DeviceStatus = 'active' | 'revoked';
 export type CloudEntityType =
@@ -251,6 +251,7 @@ export interface CloudStore {
   getMerchantByOrganization(organizationUid: string): CloudMerchant | null;
   listMerchants(search?: string): CloudMerchant[];
   updateMerchant(merchantCode: string, fields: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): CloudMerchant | null;
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean;
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void;
   observability(): { accepted: number; duplicate: number; rejected: number; authFailure: number };
@@ -272,7 +273,9 @@ export class SqliteCloudStore implements CloudStore {
   private db: Database.Database;
 
   constructor(filename = ':memory:') {
-    this.db = new Database(filename);
+    // Loaded on demand: only the dev/test store needs the SQLite driver; the production image does not ship it.
+    const SqliteDriver = require('better-sqlite3') as typeof import('better-sqlite3');
+    this.db = new SqliteDriver(filename);
     this.db.pragma('journal_mode = WAL');
     this.migrate();
   }
@@ -372,6 +375,7 @@ export class SqliteCloudStore implements CloudStore {
         plan_id TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','closed')), notes TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS cloud_rate_limits (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, hits INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_feed_sequence (organization_uid TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS cloud_nonces (device_uid TEXT NOT NULL, nonce TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (device_uid, nonce));
       CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
@@ -674,6 +678,14 @@ export class SqliteCloudStore implements CloudStore {
       license.grace_days, license.device_limit, license.location_limit, JSON.stringify(license.features ?? []), license.signature, at);
   }
 
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean {
+    const windowStart = Math.floor(nowMs / windowMs) * windowMs;
+    const row = this.db.prepare(`INSERT INTO cloud_rate_limits (key, window_start, hits) VALUES (?, ?, 1)
+      ON CONFLICT(key) DO UPDATE SET hits = CASE WHEN cloud_rate_limits.window_start = excluded.window_start THEN cloud_rate_limits.hits + 1 ELSE 1 END, window_start = excluded.window_start
+      RETURNING hits`).get(key, windowStart) as { hits: number };
+    if (Math.random() < 0.01) this.db.prepare('DELETE FROM cloud_rate_limits WHERE window_start < ?').run(nowMs - 3_600_000);
+    return row.hits <= max;
+  }
   private planOf(r: any): CloudPlan {
     let features: string[] = []; try { features = JSON.parse(r.features); } catch { features = []; }
     return { plan_id: r.plan_id, name: r.name, description: r.description, features, device_limit: r.device_limit, location_limit: r.location_limit, grace_days: r.grace_days, term_days: r.term_days, is_active: !!r.is_active };

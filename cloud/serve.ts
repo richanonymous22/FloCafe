@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   }
 
   const store = await createPostgresCloudStore(backend.connectionString as string);
-  const app = createCloudServer(store, { enableDevEnroll });
+  const app = createCloudServer(store, { enableDevEnroll, requestLog: String(process.env.PLEMMO_LOG_REQUESTS ?? '1') !== '0' });
   const server = app.listen(port, () => console.log(`[cloud] Plemmo sync API listening on :${port}`));
 
   const shutdown = (signal: string) => {

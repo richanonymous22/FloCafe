@@ -12,7 +12,7 @@
  * accidentally point at production storage.
  */
 
-import { SqliteCloudStore } from './store';
+import type { SqliteCloudStore } from './store';
 import { PostgresCloudStore, connectPg, PgClient } from './postgres-store';
 
 export type CloudBackendKind = 'sqlite' | 'postgres';
@@ -32,7 +32,9 @@ export function resolveCloudBackend(env: NodeJS.ProcessEnv = process.env): Cloud
 
 /** Builds the dev/test SQLite store. */
 export function createSqliteCloudStore(config: CloudBackendConfig = { kind: 'sqlite' }): SqliteCloudStore {
-  return new SqliteCloudStore(config.sqliteFile ?? ':memory:');
+  // Loaded on demand: the production image has no SQLite driver and never needs one.
+  const { SqliteCloudStore: Store } = require('./store') as typeof import('./store');
+  return new Store(config.sqliteFile ?? ':memory:');
 }
 
 /** Builds the production Postgres store from a live connection. */

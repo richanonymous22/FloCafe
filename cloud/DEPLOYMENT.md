@@ -1,5 +1,9 @@
 # Plemmo Cloud — production deployment (SYNC-D)
 
+> **Start with `docs/CLOUD_HOSTING.md`** — hosting options, the environment reference, secrets handoff,
+> deploy/rollback, backups with a rehearsed restore, monitoring and the client-compatibility policy. This file
+> is the original design record.
+
 The standalone cloud sync service: an Express app (`cloud/server.ts`) over a
 `CloudStore`. In production the store is `PostgresCloudStore` on managed
 PostgreSQL. The desktop client never runs any of this — it only speaks the

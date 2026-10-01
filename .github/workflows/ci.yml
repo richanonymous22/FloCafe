@@ -263,3 +263,18 @@ jobs:
         run: npm run test:pg-sync
         env:
           PLEMMO_CLOUD_DB_URL: postgres://plemmo:plemmo_dev_pw@127.0.0.1:5432/plemmo_sync_test
+
+  # 9. Cloud image: the production container must build, start its code without the desktop dependencies,
+  #    and contain no SQLite driver (the service speaks PostgreSQL only).
+  cloud-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the cloud image
+        run: docker build -f cloud/Dockerfile -t plemmo-cloud .
+
+      - name: The built service loads and has no SQLite driver
+        run: |
+          docker run --rm --entrypoint node plemmo-cloud -e "require('./dist/server.js'); require('./dist/postgres-store.js'); require('./dist/factory.js'); try { require('better-sqlite3'); console.error('better-sqlite3 is present'); process.exit(1); } catch (e) { console.log('ok: no SQLite driver in the image'); }"

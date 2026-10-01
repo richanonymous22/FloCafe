@@ -48,12 +48,17 @@ export class HttpSyncTransport implements SyncTransport, SyncPullTransport {
           'x-plemmo-timestamp': timestamp,
           'x-plemmo-nonce': nonce,
           'x-plemmo-signature': signature,
+          'x-plemmo-protocol': '1',
         },
         body: method === 'GET' ? undefined : body,
       });
     } catch (error) {
       // Network unreachable / DNS / connection reset — transient (Part O).
       throw new SyncTransportError(`network error: ${(error as Error).message}`, 'transient');
+    }
+    if (res.status === 426) {
+      // The cloud no longer serves this version of the app. Retry slowly; the till shows the reason.
+      throw new SyncTransportError('this version of the app is too old for the cloud: update it', 'transient');
     }
     if (res.status === 401 || res.status === 403) {
       throw new SyncTransportError(`auth failure (${res.status})`, 'auth');

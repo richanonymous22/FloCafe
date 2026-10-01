@@ -238,6 +238,7 @@ async function run() {
     await waitFor(() => !!C.doc.getElementById('cfOk'), 4000, 'confirm');
     C.clickEl('#cfOk');
     await waitFor(() => /was not voided/.test(C.toasts()), 6000, 'void refused toast');
+    await waitFor(() => !C.doc.getElementById('cfOk'), 4000, 'first confirm dialog gone');
     ok((db.prepare(`SELECT status FROM orders WHERE id=?`).get(v1.order.id) as any).status !== 'cancelled', 'wrong PIN: the backend order is NOT cancelled');
     ok(v1.o.status === 'open' && stock() === before - 3, 'wrong PIN: Meridian still shows it open and stock is unchanged');
     resetApprovalRateLimits(); C.clearToasts();

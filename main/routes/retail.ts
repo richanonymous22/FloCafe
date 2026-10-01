@@ -7,6 +7,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { getDatabase } from '../db';
 import { getBalance } from '../core/inventory';
 import { requireRole } from '../middleware/security';
@@ -21,6 +22,14 @@ import { getRetailDailySummary } from '../modules/retail/reports';
 import { openCashDrawer } from '../printers/thermal';
 
 const router = Router();
+
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
 
 function statusFor(error: any): number {
   return typeof error?.statusCode === 'number' ? error.statusCode : 500;

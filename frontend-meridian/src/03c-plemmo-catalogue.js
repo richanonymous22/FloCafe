@@ -63,6 +63,7 @@
       desc: p.description || '',
       sku: p.sku || '',
       barcode: p.barcode || '',
+      taxCat: p.tax_category_id || null,
       available: p.is_active == null ? true : !!p.is_active,
       kiosk: true
     };
@@ -123,6 +124,8 @@
       S.categories = cats.map(mapCategory);
       S.modGroups = groups.map(mapModGroup);
       S.products = prods.map(mapProduct);
+      // The server keeps no per-item picture symbol; an item is shown with its category's.
+      S.products.forEach((p) => { const c = S.categories.find((x) => x.id === p.cat); if (c) p.emoji = c.emoji; });
       S.customers = customers.map(mapCustomer);
       S._plemmoAddons = buildAddonIndex(groups);
     }

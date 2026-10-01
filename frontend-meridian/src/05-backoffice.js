@@ -42,18 +42,33 @@ A.itTab=d=>{U.items.tab=d.t;renderView();};
 IN.itQ=debounce(v=>{U.items.q=v;const pos=$('[data-in="itQ"]').selectionStart;renderView();const i=$('[data-in="itQ"]');if(i){i.focus();i.setSelectionRange(pos,pos);}},180);
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 CH.itCat=v=>{U.items.cat=v;renderView();};
-CH.itAvail=(v,el)=>{const p=prod(el.dataset.id);if(!p)return;p.available=el.checked;save();renderRail();toast(`${p.name} is ${p.available?'back on sale':'marked sold out'}`);};
+const adminLive=()=>!!(window.PlemmoAdmin&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated());
+// After the server accepted a catalogue change, take its version of the catalogue back.
+async function reloadCatalogue(){try{await PlemmoCatalogue.load(S);}catch(e){/* keep the last copy; the change itself is already saved on the server */}}
+CH.itAvail=async(v,el)=>{
+  const p=prod(el.dataset.id);if(!p)return;
+  const want=el.checked;
+  if(adminLive()){
+    try{await PlemmoAdmin.products.setActive(p.id,want);}
+    catch(e){el.checked=!want;toast(`${p.name} was not changed: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    await reloadCatalogue();renderRail();toast(`${p.name} is ${want?'back on sale':'marked sold out'}`);return;
+  }
+  p.available=want;save();renderRail();toast(`${p.name} is ${p.available?'back on sale':'marked sold out'}`);
+};
 A.itEdit=d=>editItem(d.id);
 let IT=null;
-function editItem(id){
+async function editItem(id){
   const p=id?prod(id):null;
-  IT={id,emoji:p?p.emoji:'🍽️',allergens:new Set(p?p.allergens:[]),mods:new Set(p?p.mods:[]),track:p?p.stock!=null:false};
+  IT={id,emoji:p?p.emoji:'🍽️',allergens:new Set(p?p.allergens:[]),mods:new Set(p?p.mods:[]),track:p?p.stock!=null:false,live:adminLive(),tax:null};
+  if(IT.live){try{IT.tax=await PlemmoAdmin.taxCategories();}catch(e){IT.tax=null;}}
   const cats=S.categories;
   const L=modal({title:p?esc(p.name):'New item',cls:'wide',body:`<div class="fgrid">
     <label class="field span2"><span>Name</span><input class="input" id="itN" value="${esc(p?p.name:'')}" placeholder="For example, Oat Flat White" autofocus></label>
-    <div class="field span2"><span>Picture on the register</span><div class="emoji-grid" role="listbox" aria-label="Choose an emoji">${EMOJIS.map(e=>`<button type="button" class="${IT.emoji===e?'on':''}" data-act="itEmoji" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}</div></div>
+    ${IT.live?'':`<div class="field span2"><span>Picture on the register</span><div class="emoji-grid" role="listbox" aria-label="Choose an emoji">${EMOJIS.map(e=>`<button type="button" class="${IT.emoji===e?'on':''}" data-act="itEmoji" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}</div></div>`}
     <label class="field"><span>Category</span><select class="input" id="itC">${cats.map(c=>`<option value="${c.id}" ${p&&p.cat===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}${cats.length?'':'<option value="">No categories yet</option>'}</select></label>
-    <label class="field"><span>SKU or barcode</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>
+    ${IT.live?`<label class="field"><span>SKU</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>
+    <label class="field"><span>Barcode</span><input class="input num" id="itBar" value="${esc(p?p.barcode||'':'')}" placeholder="Scan or type" autocomplete="off"></label>
+    ${IT.tax&&IT.tax.ready?`<label class="field span2"><span>${esc(S.settings.taxName)} rate</span><select class="input" id="itV">${IT.tax.list.map(c=>`<option value="${esc(c.id)}" ${((p&&p.taxCat)||IT.tax.defaultId)===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}</select></label>`:''}`:`<label class="field"><span>SKU or barcode</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>`}
     <label class="field"><span>Price${S.settings.taxInclusive?' (incl. '+esc(S.settings.taxName)+')':''}</span><input class="input num" id="itP" type="number" min="0" step="0.05" value="${p?p.price:''}" data-in="itMargin"></label>
     <label class="field"><span>Cost to you</span><input class="input num" id="itCo" type="number" min="0" step="0.05" value="${p?p.cost:''}" data-in="itMargin"></label>
     <div class="span2" id="itMarg"></div>
@@ -62,7 +77,7 @@ function editItem(id){
     <div class="span2 fgrid" id="itStockF" ${IT.track?'':'hidden'}><label class="field"><span>In stock now</span><input class="input num" id="itS" type="number" min="0" value="${p&&p.stock!=null?p.stock:0}"></label><label class="field"><span>Warn me below</span><input class="input num" id="itL" type="number" min="0" value="${p&&p.low!=null?p.low:5}"></label></div>
     ${S.modGroups.length?`<div class="field span2"><span>Options customers can choose</span><div class="chips">${S.modGroups.map(g=>`<button type="button" class="chip ${IT.mods.has(g.id)?'on':''}" data-act="itMod" data-id="${g.id}">${esc(g.name)}</button>`).join('')}</div></div>`:''}
     <div class="field span2"><span>Allergens</span><div class="chips">${ALLERGENS.map(a=>`<button type="button" class="chip ${IT.allergens.has(a)?'on':''}" data-act="itAll" data-a="${a}">${a}</button>`).join('')}</div></div>
-    <div class="span2 row">${sw(p?p.available:true,'id="itA"','On sale')}${sw(p?p.kiosk!==false:true,'id="itK"','Show on the kiosk')}</div>
+    <div class="span2 row">${sw(p?p.available:true,'id="itA"','On sale')}${IT.live?'':sw(p?p.kiosk!==false:true,'id="itK"','Show on the kiosk')}</div>
    </div>`,
    foot:`${p?`<button class="btn btn-danger" data-act="itDel" data-id="${p.id}">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" data-act="itSave">${p?'Save changes':'Add item'}</button>`});
   IT.L=L;IN.itMargin();
@@ -72,10 +87,34 @@ A.itEmoji=(d,el)=>{IT.emoji=d.e;$$('.emoji-grid button').forEach(b=>b.classList.
 A.itMod=(d,el)=>{IT.mods.has(d.id)?IT.mods.delete(d.id):IT.mods.add(d.id);el.classList.toggle('on');};
 A.itAll=(d,el)=>{IT.allergens.has(d.a)?IT.allergens.delete(d.a):IT.allergens.add(d.a);el.classList.toggle('on');};
 CH.itTrack=(v,el)=>{IT.track=el.checked;$('#itStockF').hidden=!el.checked;};
-A.itSave=()=>{
+A.itSave=async()=>{
   const name=$('#itN').value.trim(),price=+$('#itP').value;
   if(!name){toast('Give the item a name','warn');$('#itN').focus();return;}
   if(!(price>=0)||$('#itP').value===''){toast('Add a price','warn');$('#itP').focus();return;}
+  if(IT.live){
+    const prev=IT.id?prod(IT.id):null;
+    const stockNow=IT.track?Math.max(0,Math.round(+$('#itS').value||0)):null;
+    const f={name,categoryId:$('#itC').value,sku:$('#itSku').value.trim(),barcode:($('#itBar')||{}).value?$('#itBar').value.trim():'',price:r2(price),cost:r2(+$('#itCo').value||0),
+      description:$('#itD').value.trim(),track:IT.track,stock:stockNow,low:IT.track?Math.max(0,Math.round(+$('#itL').value||0)):0,
+      groupIds:[...IT.mods],allergens:[...IT.allergens],available:$('#itA').checked};
+    if($('#itV'))f.taxCategoryId=$('#itV').value;
+    const btn=document.querySelector('[data-act="itSave"]');if(btn)btn.disabled=true;
+    try{
+      let saved;
+      if(prev){
+        saved=await PlemmoAdmin.products.update(prev.id,f);
+        // A different quantity is a stock adjustment on the ledger, with a reason — never a silent overwrite.
+        if(IT.track&&prev.stock!=null&&stockNow!==prev.stock&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,prev.stock,'Edited on the item');
+        else if(IT.track&&prev.stock==null&&stockNow>0&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,0,'Stock tracking switched on');
+      }else saved=await PlemmoAdmin.products.create(f);
+      await reloadCatalogue();
+      IT.L.close();renderView();renderRail();toast(prev?`${name} saved`:`${name} added to the register`);
+    }catch(e){
+      if(btn)btn.disabled=false;
+      toast(`${name} was not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');
+    }
+    return;
+  }
   let p=IT.id?prod(IT.id):null;const isNew=!p;
   if(!p){p={id:uid('p'),w:3};S.products.push(p);}
   const prevStock=p.stock;
@@ -83,7 +122,16 @@ A.itSave=()=>{
   if(IT.track&&p.stock!==prevStock)S.stockLog.push({id:uid('sl'),ts:Date.now(),pid:p.id,name:p.name,change:p.stock-(prevStock||0),kind:'count',reason:isNew?'Opening stock':'Edited on the item',by:U.user,after:p.stock});
   save();IT.L.close();renderView();renderRail();toast(isNew?`${name} added to the register`:`${name} saved`);
 };
-A.itDel=async d=>{const p=prod(d.id);if(!await confirmBox({title:`Delete ${p.name}?`,text:'It disappears from the register and kiosk. Past orders keep their record of it.',ok:'Delete item',danger:true}))return;S.products=S.products.filter(x=>x!==p);save();closeAll();renderView();renderRail();toast(`${p.name} deleted`);};
+A.itDel=async d=>{
+  const p=prod(d.id);
+  if(!await confirmBox({title:`Delete ${p.name}?`,text:'It disappears from the register and kiosk. Past orders keep their record of it.',ok:'Delete item',danger:true}))return;
+  if(adminLive()){
+    try{await PlemmoAdmin.products.remove(p.id);}
+    catch(e){toast(`${p.name} was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    await reloadCatalogue();closeAll();renderView();renderRail();toast(`${p.name} deleted`);return;
+  }
+  S.products=S.products.filter(x=>x!==p);save();closeAll();renderView();renderRail();toast(`${p.name} deleted`);
+};
 A.stockAdj=d=>{
   const p=prod(d.id);if(!p)return;
   const st={mode:'receive',qty:12,reason:'Delivery'};
@@ -121,8 +169,25 @@ A.catEdit=d=>{
     <div class="field mt"><span>Icon</span><div class="emoji-grid">${EMOJIS.map(e=>`<button type="button" class="${e===emoji?'on':''}" data-e="${e}">${e}</button>`).join('')}</div></div>`,
    foot:`${c?`<button class="btn btn-danger" id="cDel">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="cGo">${c?'Save':'Add category'}</button>`});
   L.el.addEventListener('click',e=>{const s=e.target.closest('[data-c]'),m=e.target.closest('[data-e]');if(s){color=s.dataset.c;$$('[data-c]',L.el).forEach(b=>b.classList.toggle('on',b===s));}if(m){emoji=m.dataset.e;$$('[data-e]',L.el).forEach(b=>b.classList.toggle('on',b===m));}});
-  L.el.querySelector('#cGo').onclick=()=>{const n=L.el.querySelector('#cN').value.trim();if(!n){toast('Name the category','warn');return;}if(c)Object.assign(c,{name:n,color,emoji});else S.categories.push({id:uid('c'),name:n,color,emoji});save();L.close();renderView();toast(c?'Category saved':`${n} added`);};
-  const del=L.el.querySelector('#cDel');if(del)del.onclick=()=>{if(S.products.some(p=>p.cat===c.id)){toast('Move or delete its items first','warn');return;}S.categories=S.categories.filter(x=>x!==c);save();L.close();renderView();toast('Category deleted');};
+  L.el.querySelector('#cGo').onclick=async()=>{
+    const n=L.el.querySelector('#cN').value.trim();if(!n){toast('Name the category','warn');return;}
+    if(adminLive()){
+      const btn=L.el.querySelector('#cGo');btn.disabled=true;
+      try{if(c)await PlemmoAdmin.categories.update(c.id,{name:n,color,emoji});else await PlemmoAdmin.categories.create({name:n,color,emoji});}
+      catch(e){btn.disabled=false;toast(`${n} was not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();renderRail();toast(c?'Category saved':`${n} added`);return;
+    }
+    if(c)Object.assign(c,{name:n,color,emoji});else S.categories.push({id:uid('c'),name:n,color,emoji});save();L.close();renderView();toast(c?'Category saved':`${n} added`);
+  };
+  const del=L.el.querySelector('#cDel');if(del)del.onclick=async()=>{
+    if(S.products.some(p=>p.cat===c.id)){toast('Move or delete its items first','warn');return;}
+    if(adminLive()){
+      try{await PlemmoAdmin.categories.remove(c.id);}
+      catch(e){toast(`${c.name} was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();renderRail();toast('Category deleted');return;
+    }
+    S.categories=S.categories.filter(x=>x!==c);save();L.close();renderView();toast('Category deleted');
+  };
 };
 A.modEdit=d=>{
   const g=d.id?S.modGroups.find(x=>x.id===d.id):null;
@@ -133,8 +198,26 @@ A.modEdit=d=>{
     <div class="row mt">${sw(st.req,'id="mgR"','Customer must choose')}${sw(st.multi,'id="mgM"','Allow more than one')}</div>
     <div class="field mt"><span>Choices and extra price</span><div class="opt-rows">${st.opts.map(([n,p],i)=>`<div class="opt-row"><input class="input on" value="${esc(n)}" placeholder="Choice"><input class="input op num" type="number" step="0.05" min="0" value="${p}"><button class="btn btn-icon btn-ghost" data-rm="${i}" aria-label="Remove">${ic('x',16)}</button></div>`).join('')}</div><button class="btn btn-sm" id="mgAdd" style="justify-self:start">${ic('plus',14)} Add a choice</button></div>`;};
   L.el.addEventListener('click',e=>{if(e.target.closest('#mgAdd')){read();st.opts.push(['',0]);draw();}const rm=e.target.closest('[data-rm]');if(rm){read();st.opts.splice(+rm.dataset.rm,1);draw();}});
-  L.el.querySelector('#mgGo').onclick=()=>{read();const opts=st.opts.filter(o=>o[0].trim()).map(o=>[o[0].trim(),r2(o[1])]);if(!st.name.trim()||!opts.length){toast('Add a name and at least one choice','warn');return;}if(g)Object.assign(g,{name:st.name.trim(),req:st.req,multi:st.multi,opts});else S.modGroups.push({id:uid('m'),name:st.name.trim(),req:st.req,multi:st.multi,opts});save();L.close();renderView();toast('Options saved');};
-  const del=L.el.querySelector('#mgDel');if(del)del.onclick=()=>{S.modGroups=S.modGroups.filter(x=>x!==g);S.products.forEach(p=>p.mods=(p.mods||[]).filter(x=>x!==g.id));save();L.close();renderView();toast('Option group deleted');};
+  L.el.querySelector('#mgGo').onclick=async()=>{
+    read();const opts=st.opts.filter(o=>o[0].trim()).map(o=>[o[0].trim(),r2(o[1])]);
+    if(!st.name.trim()||!opts.length){toast('Add a name and at least one choice','warn');return;}
+    if(adminLive()){
+      const btn=L.el.querySelector('#mgGo');btn.disabled=true;
+      const body={name:st.name.trim(),req:st.req,multi:st.multi,opts};
+      try{if(g)await PlemmoAdmin.optionGroups.update(g.id,body);else await PlemmoAdmin.optionGroups.create(body);}
+      catch(e){btn.disabled=false;toast(`The options were not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();toast('Options saved');return;
+    }
+    if(g)Object.assign(g,{name:st.name.trim(),req:st.req,multi:st.multi,opts});else S.modGroups.push({id:uid('m'),name:st.name.trim(),req:st.req,multi:st.multi,opts});save();L.close();renderView();toast('Options saved');
+  };
+  const del=L.el.querySelector('#mgDel');if(del)del.onclick=async()=>{
+    if(adminLive()){
+      try{await PlemmoAdmin.optionGroups.remove(g.id);}
+      catch(e){toast(`The option group was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();toast('Option group deleted');return;
+    }
+    S.modGroups=S.modGroups.filter(x=>x!==g);S.products.forEach(p=>p.mods=(p.mods||[]).filter(x=>x!==g.id));save();L.close();renderView();toast('Option group deleted');
+  };
   draw();
 };
 

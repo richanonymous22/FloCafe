@@ -15,6 +15,7 @@ import { registerIpcHandlers } from './ipc';
 import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
 import { isAllowedLocalWindowUrl, isSafeExternalUrl } from './security/url-allowlist';
+import { getBrand } from './brand';
 
 // ── GPU compatibility ────────────────────────────────────────────────────────
 // On Windows, some systems hit "GPU process exited unexpectedly" (exit code
@@ -367,7 +368,7 @@ function createTray(): void {
         },
       ]);
 
-      tray.setToolTip('Flo Cafe');
+      tray.setToolTip(getBrand().productName);
       tray.setContextMenu(linuxMenu);
       // Single-click also shows the window on Linux (no double-click standard).
       tray.on('click', () => {
@@ -505,7 +506,7 @@ function createMenu(): void {
     {
       label: 'Window',
       submenu: [
-        { label: 'Flo Cafe', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+        { label: getBrand().productName, click: () => { mainWindow?.show(); mainWindow?.focus(); } },
         { type: 'separator' },
         { role: 'minimize' },
         ...(process.platform === 'darwin' ? [

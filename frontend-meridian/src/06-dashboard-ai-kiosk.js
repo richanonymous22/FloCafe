@@ -670,7 +670,7 @@ function updateBubble(m){
 function setSendBtn(){const b=$('#aiSend');if(!b)return;b.dataset.act=AI_CTL?'aiStop':'aiSend';b.className='btn '+(AI_CTL?'btn-dark':'btn-primary');b.setAttribute('aria-label',AI_CTL?'Stop':'Send');b.innerHTML=ic(AI_CTL?'stop':'send',20);}
 function buildTurns(q,tools){
   const e=me(),s=S.settings;
-  const rules=`You are the assistant built into Meridian, the point-of-sale system at ${s.name}, a ${s.type} at ${s.address||'an unlisted address'}. You're talking with ${e.name}, the ${roleLabel(e.role).toLowerCase()}. It is ${fmtDL(Date.now())}, ${fmtT(Date.now())}.
+  const rules=`You are the assistant built into ${BRAND().shortName}, the point-of-sale system at ${s.name}, a ${s.type} at ${s.address||'an unlisted address'}. You're talking with ${e.name}, the ${roleLabel(e.role).toLowerCase()}. It is ${fmtDL(Date.now())}, ${fmtT(Date.now())}.
 Answer only from the live till data in the JSON below. If the data doesn't cover the question, say what's missing instead of guessing.
 How to answer: lead with the answer in one sentence. Then a few short lines or a short list. Use a Markdown table only when comparing three or more rows. Write money with the ${s.currency.trim()} symbol. Keep it under 170 words unless asked for detail. End with one practical next step when it helps.
 ${tools?'You can change menu items with the update_item tool: price, stock count, or whether an item is on sale. Only use it when the user clearly asks for a change, then confirm exactly what changed. The user sees an Undo button for each change.':'You cannot change anything in the till. If asked, say where to do it: prices and stock are on the Items page, staff on the Team page.'}

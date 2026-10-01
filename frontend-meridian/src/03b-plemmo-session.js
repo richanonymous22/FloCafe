@@ -180,7 +180,7 @@ function renderPlemmoAuth(msg) {
       <input class="input" type="password" name="password" id="plPass" required autocomplete="current-password" ${lastEmail ? 'autofocus' : ''}></label>
     <p class="pl-err" id="plErr">${msg ? esc(msg) : ''}</p>
     <button class="pl-btn" type="submit" id="plBtn">Sign in</button>
-    <p class="pl-foot">Meridian POS · powered by Plemmo</p>
+    <p class="pl-foot" data-brand="foot">${esc(brandFoot())}</p>
   </form>`;
   const form = $('#plForm');
   if (form) form.addEventListener('submit', onPlemmoLoginSubmit);
@@ -257,7 +257,7 @@ function renderPlemmoSetup(status) {
       <span>I accept the Terms &amp; Conditions, Privacy Policy and No-Warranty Disclaimer.</span></label>
     <p class="pl-err" id="plSetupErr"></p>
     <button class="pl-btn" type="submit" id="plSetupBtn">Create business</button>
-    <p class="pl-foot">Meridian POS · powered by Plemmo</p>
+    <p class="pl-foot" data-brand="foot">${esc(brandFoot())}</p>
   </form>`;
   const form = $('#plSetupForm');
   if (form) form.addEventListener('submit', onPlemmoSetupSubmit);

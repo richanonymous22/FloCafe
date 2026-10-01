@@ -65,6 +65,8 @@ async function main() {
   console.log('='.repeat(56));
 
   const db = initTestDb();
+  // These scenarios are about a store OUTSIDE the UK (India, then Thailand); a fresh install now defaults to GB.
+  db.prepare("UPDATE settings SET value = 'IN' WHERE key = 'country'").run();
   const owner = seedOwnerUser(db);
   const manager = seedManagerUser(db);
   seedCategory(db, 'tax-pack-products', 'Tax Pack Products');

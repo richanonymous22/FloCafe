@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { createHash } from 'crypto';
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
@@ -748,7 +749,7 @@ router.patch('/:id/discount', requireRole('owner', 'manager', 'cashier', 'waiter
     }
     const moneyExp = currencyExponent(getSettingValue('currency'));
     const tenantInfo = {
-      country: getSettingValue('country') || 'IN',
+      country: getSettingValue('country') || DEFAULT_COUNTRY,
       business_type: getSettingValue('business_type') || 'restaurant',
       state_code: getSettingValue('state_code') || '',
       taxes_enabled: getSettingValue('taxes_enabled') === 'true',
@@ -982,7 +983,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
     const settings = db.prepare("SELECT * FROM settings WHERE key IN ('country', 'business_type', 'state_code', 'taxes_enabled')").all() as any[];
     const settingsMap = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
     const tenantInfo = {
-      country: settingsMap.country || 'IN',
+      country: settingsMap.country || DEFAULT_COUNTRY,
       business_type: settingsMap.business_type || 'restaurant',
       state_code: settingsMap.state_code || '',
       taxes_enabled: settingsMap.taxes_enabled === 'true',

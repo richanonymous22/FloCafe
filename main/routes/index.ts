@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Express } from 'express';
 import { authRoutes } from './auth';
 import { requireRole } from '../middleware/security';
@@ -148,7 +149,7 @@ export function registerRoutes(app: Express): void {
   app.get('/api/tax/categories', requireRole('owner', 'manager'), async (req, res) => {
     try {
       const { getActiveCountryPack, hasConfiguredTaxCategories, previewCategoryRate } = await import('../services/tax');
-      const country = getSettingValue('country') || 'IN';
+      const country = getSettingValue('country') || DEFAULT_COUNTRY;
       const businessType = getSettingValue('business_type') || 'restaurant';
       const pack = getActiveCountryPack(country);
       const configurationReady = hasConfiguredTaxCategories(pack, businessType);
@@ -270,7 +271,7 @@ export function registerRoutes(app: Express): void {
       }
 
       const db = getDatabase();
-      const tenantCountry = getSettingValue('country') || 'IN';
+      const tenantCountry = getSettingValue('country') || DEFAULT_COUNTRY;
       const parsed = parsePhoneE164(String(phone).trim(), tenantCountry);
       const lookupPhone = parsed ? parsed.e164 : String(phone).trim();
       const phoneDigits = stripPhoneDigits(lookupPhone);
@@ -428,7 +429,7 @@ export function registerRoutes(app: Express): void {
           newExclusiveTax = quantiseMoney(exclusiveTax * taxRatio, moneyExp);
         }
         const tenantInfo = {
-          country: getSettingValue('country') || 'IN',
+          country: getSettingValue('country') || DEFAULT_COUNTRY,
           business_type: getSettingValue('business_type') || 'restaurant',
           state_code: getSettingValue('state_code') || '',
           taxes_enabled: getSettingValue('taxes_enabled') === 'true',
@@ -597,7 +598,7 @@ export function registerRoutes(app: Express): void {
           newExclusiveTax = Math.round(exclusiveTax * taxRatio * 100) / 100;
         }
         const tenantInfo = {
-          country: getSettingValue('country') || 'IN',
+          country: getSettingValue('country') || DEFAULT_COUNTRY,
           business_type: getSettingValue('business_type') || 'restaurant',
           state_code: getSettingValue('state_code') || '',
           taxes_enabled: getSettingValue('taxes_enabled') === 'true',

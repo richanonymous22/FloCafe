@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
@@ -274,7 +275,7 @@ router.post('/', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Req
     let finalCountryCode = country_code ? String(country_code).trim() : null;
 
     if (finalPhone) {
-      const tenantCountry = getSettingValue('country') || 'IN';
+      const tenantCountry = getSettingValue('country') || DEFAULT_COUNTRY;
       const parsed = parsePhoneE164(finalPhone, tenantCountry);
       if (!parsed) {
         return res.status(400).json({ message: 'Phone number is not valid. Use international format (e.g. +919876543210).' });
@@ -355,7 +356,7 @@ router.put('/:id', requireRole('owner', 'manager', 'cashier'), (req: Request, re
     let finalCountryCode = country_code ? String(country_code).trim() : null;
 
     if (finalPhone) {
-      const tenantCountry = getSettingValue('country') || 'IN';
+      const tenantCountry = getSettingValue('country') || DEFAULT_COUNTRY;
       const parsed = parsePhoneE164(finalPhone, tenantCountry);
       if (!parsed) {
         return res.status(400).json({ error: 'Phone number is not valid. Use international format (e.g. +919876543210).' });

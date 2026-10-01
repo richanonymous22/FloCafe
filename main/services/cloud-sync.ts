@@ -6,6 +6,7 @@
  * for whitelisted read-only requests such as reports and live orders.
  */
 
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from '../core/defaults';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import log from 'electron-log';
@@ -444,9 +445,9 @@ class CloudSyncService {
         contact_name: owner?.name || '',
         email: settings.email || '',
         phone: settings.business_phone || settings.phone || '',
-        country: settings.country || 'IN',
-        timezone: settings.timezone || 'Asia/Kolkata',
-        currency: settings.currency || 'INR',
+        country: settings.country || DEFAULT_COUNTRY,
+        timezone: settings.timezone || DEFAULT_TIMEZONE,
+        currency: settings.currency || DEFAULT_CURRENCY,
         address: settings.business_address || '',
       },
       requested_at: new Date().toISOString(),

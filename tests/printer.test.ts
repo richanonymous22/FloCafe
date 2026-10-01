@@ -137,6 +137,7 @@ const fixtureBusiness = {
   address: '42 MG Road, Bengaluru 560001',
   phone: '+91 98765 43210',
   taxRegistrationNumber: 'TAXID-0001',
+  currency_symbol: '₹', // explicit: the fixture exercises a non-ASCII symbol, independent of the install default
 };
 
 console.log('🧪 FloDesktop Printer Tests');

@@ -53,6 +53,7 @@
  * in the extraction notes.
  */
 
+import { DEFAULT_COUNTRY } from './defaults';
 import {
   getDatabase,
   generateOrderNumber,
@@ -339,7 +340,7 @@ function readTenantContext(db: ReturnType<typeof getDatabase>): TenantContext {
   (db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[])
     .forEach((row) => { settings[row.key] = row.value; });
   return {
-    country: settings.country || 'IN',
+    country: settings.country || DEFAULT_COUNTRY,
     business_type: settings.business_type || 'restaurant',
     state_code: settings.state_code || '',
     taxes_enabled: settings.taxes_enabled === 'true',

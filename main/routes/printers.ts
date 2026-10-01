@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, attachEffectiveAddons, isKotPrintingEnabled, parseItemJson, deriveBillPaymentDetails } from '../db';
 import { v4 as uuidv4 } from 'uuid';
@@ -405,8 +406,8 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
       phone: settings.business_phone || '',
       taxRegistrationNumber: settings.tax_registration_number || '',
       // The symbol follows the business currency; a stored symbol (or the legacy rupee default) is only a fallback.
-      currency_symbol: (settings.currency ? getCurrencySymbol(settings.currency, getCountryByCode(settings.country || '')?.locale) : '') || settings.currency_symbol || '₹',
-      country: settings.country || 'IN',
+      currency_symbol: (settings.currency ? getCurrencySymbol(settings.currency, getCountryByCode(settings.country || '')?.locale) : '') || settings.currency_symbol || DEFAULT_CURRENCY_SYMBOL,
+      country: settings.country || DEFAULT_COUNTRY,
       instagram_handle: settings.instagram_handle || '',
       customer_name: customer?.name || '',
       customer_phone: customer?.phone

@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
@@ -91,10 +92,10 @@ function buildLocalTenant(db: ReturnType<typeof getDatabase>, userRole: string) 
     slug: 'local',
     database_name: 'local',
     business_type: s.business_type || 'restaurant',
-    country: s.country || 'IN',
-    currency: s.currency || 'INR',
-    currency_symbol: getCurrencySymbol(s.currency || 'INR', getCountryByCode(s.country)?.locale) || '₹',
-    timezone: s.timezone || 'Asia/Kolkata',
+    country: s.country || DEFAULT_COUNTRY,
+    currency: s.currency || DEFAULT_CURRENCY,
+    currency_symbol: getCurrencySymbol(s.currency || DEFAULT_CURRENCY, getCountryByCode(s.country)?.locale) || DEFAULT_CURRENCY_SYMBOL,
+    timezone: s.timezone || DEFAULT_TIMEZONE,
     language: s.language || 'en',
     service_model: s.service_model || 'finedine',
     plan: 'desktop',
@@ -729,10 +730,10 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
       language,
       business_name,
       store_name,
-      country = 'IN',
-      currency = 'INR',
+      country = DEFAULT_COUNTRY,
+      currency = DEFAULT_CURRENCY,
       currency_symbol,
-      timezone = 'Asia/Kolkata',
+      timezone = DEFAULT_TIMEZONE,
       business_address,
       address,
       business_phone,
@@ -753,7 +754,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
     const normalizedBusinessType = String(business_type || 'restaurant').trim();
     const normalizedSetupProfile = String(setup_profile || 'express').trim().toLowerCase();
     const normalizedServiceModel = String(service_model || 'qsr').trim().toLowerCase();
-    const normalizedCurrency = String(currency || 'INR').trim().toUpperCase();
+    const normalizedCurrency = String(currency || DEFAULT_CURRENCY).trim().toUpperCase();
     const storeName = String(store_name || business_name || '').trim();
     const resolvedStoreName = storeName || 'Store';
     const outletAddress = String(business_address || address || '').trim();

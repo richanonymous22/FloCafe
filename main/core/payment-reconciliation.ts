@@ -29,6 +29,7 @@
  * second identical legacy line cannot double-match the same payment.
  */
 
+import { DEFAULT_CURRENCY } from './defaults';
 import { getDatabase, now } from '../db';
 import { ulid } from './ids';
 
@@ -91,7 +92,7 @@ export function reconcileBillPayments(
     'SELECT id, method, amount_minor, provider_reference FROM payments WHERE bill_id = ? ORDER BY requested_at ASC, created_at ASC',
   ).all(billId) as AuthoritativePaymentRow[];
   const consumed = new Set<string>();
-  const currency = ((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value || 'INR').toUpperCase();
+  const currency = ((db.prepare("SELECT value FROM settings WHERE key = 'currency'").get() as { value?: string } | undefined)?.value || DEFAULT_CURRENCY).toUpperCase();
 
   const insertPayment = db.prepare(`
     INSERT INTO payments (

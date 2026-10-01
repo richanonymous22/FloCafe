@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from './core/defaults';
 import Database from 'better-sqlite3';
 import type { Request, Response, NextFunction } from 'express';
 import * as path from 'path';
@@ -10,6 +11,7 @@ import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled
 import { ulid } from './core/ids';
 import { fromMinor, minorUnitExponent } from './core/money';
 import { dropMoneyGuards, installMoneyGuards, repairMoneyColumns, scanMoneyIntegrity } from './core/money-integrity';
+import { getBrand } from './brand';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -5550,7 +5552,7 @@ export class SchemaVersionMismatchError extends Error {
     super(
       `Database schema (v${dbVersion}) is newer than this app version supports (v${appVersion}). ` +
       `This usually means another device or a previous update already upgraded this database. ` +
-      `Please update Flo Cafe to the latest version before continuing.`
+      `Please update ${getBrand().productName} to the latest version before continuing.`
     );
     this.name = 'SchemaVersionMismatchError';
   }
@@ -6196,10 +6198,10 @@ function seedInstallDefaults(): void {
 
   insert('business_name', '');
   insert('business_type', 'restaurant');
-  insert('country', 'IN');
-  insert('currency', 'INR');
-  insert('currency_symbol', '₹');
-  insert('timezone', 'Asia/Kolkata');
+  insert('country', DEFAULT_COUNTRY);
+  insert('currency', DEFAULT_CURRENCY);
+  insert('currency_symbol', DEFAULT_CURRENCY_SYMBOL);
+  insert('timezone', DEFAULT_TIMEZONE);
   insert('address', '');
   insert('phone', '');
   insert('email', '');
@@ -6316,7 +6318,7 @@ export function generateOrderNumber(): string {
   const prefix = getSettingValue('order_number_prefix') ?? 'ORD';
   const includeDate = getSettingValue('order_number_include_date') !== 'false';
   const resetDaily = getSettingValue('order_number_reset_daily') !== 'false';
-  const timezone = getSettingValue('timezone') || 'Asia/Kolkata';
+  const timezone = getSettingValue('timezone') || DEFAULT_TIMEZONE;
 
   // The sequence "bucket": a per-day counter when the series resets at store
   // midnight, or a single fixed bucket when the series is meant to keep

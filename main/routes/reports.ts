@@ -1,3 +1,4 @@
+import { DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import Decimal from 'decimal.js';
@@ -562,7 +563,7 @@ router.get('/insights', requirePermission('reports.view'), (req: Request, res: R
     // filters on the index. Day boundaries are UTC; the tenant timezone only
     // drives the hour/day-of-week bucketing below.
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const timeZone = getSettingValue('timezone') || 'Asia/Kolkata';
+    const timeZone = getSettingValue('timezone') || DEFAULT_TIMEZONE;
     const [windowStart] = utcDayBounds(startDate);
 
     // AOV — same revenue basis ("paid bills") as the existing daily-stats tile.

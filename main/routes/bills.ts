@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { createHash, randomUUID } from 'crypto';
 import { Router, Request, Response } from 'express';
 import expressRateLimit from 'express-rate-limit';
@@ -201,7 +202,7 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
         const orderPackaging     = order.packaging_charge|| 0;
         const orderTotal         = order.total           || 0;
 
-        const pack = getActiveCountryPack(getSettingValue('country') || 'IN');
+        const pack = getActiveCountryPack(getSettingValue('country') || DEFAULT_COUNTRY);
         const { total: roundedOrderTotal, adjustment: orderRoundOff } = applyPayableRounding(orderTotal, pack);
 
         const totalsChanged =
@@ -252,7 +253,7 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
       const discountAmount = order.discount_amount || 0;
       const deliveryCharge = order.delivery_charge || 0;
       const packagingCharge = order.packaging_charge || 0;
-      const pack = getActiveCountryPack(getSettingValue('country') || 'IN');
+      const pack = getActiveCountryPack(getSettingValue('country') || DEFAULT_COUNTRY);
       const { total, adjustment: roundOff } = applyPayableRounding(order.total || 0, pack);
 
       const runResult = db.prepare(`
@@ -1087,7 +1088,7 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
     const newTaxAmount = Math.round(itemTaxAmount * taxRatio * 100) / 100;
     const newExclusiveTax = Math.round(itemExclusiveTax * taxRatio * 100) / 100;
     const tenantInfo = {
-      country: getSettingValue('country') || 'IN',
+      country: getSettingValue('country') || DEFAULT_COUNTRY,
       business_type: getSettingValue('business_type') || 'restaurant',
       state_code: getSettingValue('state_code') || '',
       taxes_enabled: getSettingValue('taxes_enabled') === 'true',

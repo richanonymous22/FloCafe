@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { randomUUID, createHash, type KeyLike } from 'crypto';
 import Decimal from 'decimal.js';
@@ -13,6 +14,7 @@ import {
   type TaxPackCatalogEntry,
 } from '../tax-packs/catalog';
 import { TRUSTED_TAX_PACK_SIGNING_PUBLIC_KEY } from '../tax-packs/trusted-signing-key';
+import { getBrand } from '../brand';
 
 const router = Router();
 const BUNDLED_PACKS_BY_ID = new Map(BUNDLED_COUNTRY_PACKS.map((pack) => [pack.id, pack]));
@@ -378,7 +380,7 @@ export function validationChecklist(
     && pack.version === version.version && pack.effectiveFrom === version.effective_from,
   'Valid, internally consistent version and effective-date range');
   add(4, semverAtLeast(APP_VERSION, pack.minFloVersion),
-    `FloCafe ${APP_VERSION} satisfies minimum compatible version ${pack.minFloVersion}`);
+    `${getBrand().productName} ${APP_VERSION} satisfies minimum compatible version ${pack.minFloVersion}`);
   add(5, version.digest === createHash('sha256').update(version.pack_json).digest('hex'), 'Stored artifact digest matches');
   const bundledDefinition = BUNDLED_PACKS_BY_ID.get(pack.id);
   const legacyTrustedDigest = LEGACY_TRUSTED_PACK_DIGESTS[pack.id];
@@ -639,7 +641,7 @@ export async function installCatalogEntry(
 router.get('/', requireRole('owner', 'manager'), (_req: Request, res: Response) => {
   try {
     const db = getDatabase();
-    const storeCountry = getSettingValue('country') || 'IN';
+    const storeCountry = getSettingValue('country') || DEFAULT_COUNTRY;
     const rows = db.prepare(`
       SELECT pack.*,
         (SELECT COUNT(*) FROM tax_overrides override
@@ -1065,7 +1067,7 @@ router.post('/test-calculation', requireRole('owner', 'manager'), (req: Request,
     if (tax_behavior && !TAX_BEHAVIORS.includes(tax_behavior)) {
       return res.status(400).json({ error: `tax_behavior must be one of: ${TAX_BEHAVIORS.join(', ')}` });
     }
-    const country = getSettingValue('country') || 'IN';
+    const country = getSettingValue('country') || DEFAULT_COUNTRY;
     const active = activePackForCountry(country);
     if (!active.definition.categories.some((category) => category.id === category_id)) {
       return res.status(400).json({ error: 'Unknown category for the active pack' });
@@ -1105,7 +1107,7 @@ router.post('/test-calculation', requireRole('owner', 'manager'), (req: Request,
 
 router.post('/overrides', requireRole('owner'), (req: Request, res: Response) => {
   try {
-    const country = getSettingValue('country') || 'IN';
+    const country = getSettingValue('country') || DEFAULT_COUNTRY;
     const active = activePackForCountry(country);
     const target = validateOverrideTarget(
       active.version.id,

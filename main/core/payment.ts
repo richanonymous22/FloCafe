@@ -78,6 +78,7 @@
  * the rewrite this milestone avoids.
  */
 
+import { DEFAULT_CURRENCY } from './defaults';
 import { getDatabase, getSettingValue, now, withTxn } from '../db';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
@@ -727,7 +728,7 @@ export interface RecordAppliedPaymentLineInput {
  */
 export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): void {
   const db = getDatabase();
-  const currency = (getSettingValue('currency') || 'INR').toUpperCase();
+  const currency = (getSettingValue('currency') || DEFAULT_CURRENCY).toUpperCase();
   const adapter: PaymentAdapterId = input.line.method === 'cash' ? 'cash'
     : input.line.method === 'wallet' ? 'wallet'
     : 'manual_card';

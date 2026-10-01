@@ -10,6 +10,19 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 // Identifiers (cart lines, idempotency keys, import ids) come from the platform's secure random source.
 const rnd6=()=>{const a=new Uint32Array(2);crypto.getRandomValues(a);return (a[0].toString(36)+a[1].toString(36)).slice(0,6);};
 const uid=(p='id')=>p+'_'+rnd6()+(Date.now()%1e6).toString(36);
+// The product's name and links come from the server's brand config (brand/brand.json), so nothing here is hard-wired.
+const BRAND_DEFAULT={productName:'Meridian POS',shortName:'Meridian',markLetter:'M',companyName:'Plemmo',poweredBy:'Plemmo',supportEmail:'',websiteUrl:'',termsUrl:'',privacyUrl:''};
+const BRAND=()=>window.__brand||BRAND_DEFAULT;
+const brandFoot=()=>{const b=BRAND();return b.productName+(b.poweredBy?' · powered by '+b.poweredBy:'');};
+function applyBrandDom(){
+  const b=BRAND();document.title=b.productName;
+  document.querySelectorAll('[data-brand]').forEach(el=>{const k=el.dataset.brand;el.textContent=k==='foot'?brandFoot():k==='mark'?b.markLetter:k==='name'?b.productName:b.shortName;});
+}
+function loadBrand(){
+  if(typeof window==='undefined'||typeof window.fetch!=='function')return;
+  window.fetch('/api/brand').then(r=>r.ok?r.json():null).then(j=>{if(j&&j.brand){window.__brand=Object.assign({},BRAND_DEFAULT,j.brand);applyBrandDom();}}).catch(()=>{/* the built-in names stay */});
+}
+loadBrand();
 const r2=n=>Math.round((Number(n)+Number.EPSILON)*100)/100;
 const sum=(a,f=x=>x)=>a.reduce((s,x)=>s+(Number(f(x))||0),0);
 const clamp=(n,a,b)=>Math.min(b,Math.max(a,n));

@@ -1,3 +1,4 @@
+import { getBrand } from './brand';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
@@ -28,7 +29,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
   // Only protect API routes — static files and SPA fallback must pass through
   if (!req.path.startsWith('/api')) { next(); return; }
   // Health check — unauthenticated
-  if (req.path === '/api/health') { next(); return; }
+  if (req.path === '/api/health' || req.path === '/api/brand') { next(); return; }
   // Auth routes handle their own token verification
   if (req.path.startsWith('/api/auth')) { next(); return; }
   // Allow unauthenticated GET requests for product images (so <img> tags work)
@@ -220,11 +221,14 @@ export function startServer(): Promise<void> {
       res.status(db.ok ? 200 : 503).json({
         status: db.ok ? 'ok' : 'error',
         db: db.ok ? 'ok' : db.error,
-        service: 'Flo Local API',
+        service: `${getBrand().productName} Local API`,
         version: process.env.npm_package_version || '2.4.7',
         timestamp: new Date().toISOString(),
       });
     });
+
+    // ── Brand (public: the sign-in screen needs the name before anyone has signed in) ──
+    app.get('/api/brand', (_req: Request, res: Response) => { res.json({ brand: getBrand() }); });
 
     // ── All API routes ─────────────────────────────────────────────────
     registerRoutes(app);

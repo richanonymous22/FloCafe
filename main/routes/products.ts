@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, generateShortId, getSettingValue } from '../db';
 import { requireRole, isBlockedSsrfTarget } from '../middleware/security';
@@ -7,6 +8,7 @@ import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as https from 'https';
 import * as net from 'net';
+import { getBrand } from '../brand';
 
 const MAX_FETCH_BYTES = 10 * 1024 * 1024;
 
@@ -56,7 +58,7 @@ function fetchPinnedHttps(
       port: parsedUrl.port || 443,
       path: `${parsedUrl.pathname}${parsedUrl.search}`,
       method: 'GET',
-      headers: { 'User-Agent': 'FloCafe-ImageProxy/1.0' },
+      headers: { 'User-Agent': `${getBrand().shortName.replace(/[^A-Za-z0-9]/g, '')}-ImageProxy/1.0` },
       servername: parsedUrl.hostname,
       signal,
       lookup: ((_hostname, options, callback) => {
@@ -242,7 +244,7 @@ function validateTaxCategoryId(categoryId: unknown): string | null {
   if (categoryId === null || categoryId === undefined || categoryId === '') return null;
   if (typeof categoryId !== 'string') return 'tax_category_id must be a string or null';
 
-  const country = getSettingValue('country') || 'IN';
+  const country = getSettingValue('country') || DEFAULT_COUNTRY;
   const businessType = getSettingValue('business_type') || 'restaurant';
   const pack = getActiveCountryPack(country);
   if (!hasConfiguredTaxCategories(pack, businessType)) {

@@ -1,3 +1,4 @@
+import { DEFAULT_CURRENCY_SYMBOL } from '../core/defaults';
 import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -876,7 +877,7 @@ function formatCompactReceipt(order: any, bill: any, biz: any, cols: number = 48
 
   const amtLen = 10;
   const itemNameLen = itemNameWidth(cols, amtLen);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxIdLabel = getCountryByCode(biz.country)?.taxIdLabel || 'Tax ID';
@@ -967,7 +968,7 @@ function formatClassicReceipt(order: any, bill: any, biz: any, cols: number = 48
 
   const amtLen = 10;
   const itemNameLen = itemNameWidth(cols, amtLen);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxComponents = resolveTaxComponents({ ...bill, items: order.items });
@@ -1084,7 +1085,7 @@ function formatDetailedReceipt(order: any, bill: any, biz: any, cols: number = 4
   const dash = '-'.repeat(cols);
 
   const itemNameLen = itemNameWidth(cols, 10);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxIdLabel = getCountryByCode(biz.country)?.taxIdLabel || 'Tax ID';
@@ -1695,7 +1696,7 @@ public static class FloRawPrinter {
             EnsureReady(hPrinter);
 
             DOCINFO docInfo = new DOCINFO();
-            docInfo.pDocName = "FloCafe Receipt";
+            docInfo.pDocName = "POS Receipt";
             docInfo.pDataType = "RAW";
 
             uint jobId = StartDocPrinter(hPrinter, 1, docInfo);

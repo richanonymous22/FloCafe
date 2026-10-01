@@ -281,7 +281,7 @@ function renderLock(){
   const onNow=staff.filter(e=>onShift(e.id));
   el.innerHTML=`<div class="lock">
    <section class="lock-l" aria-hidden="true">
-     <div class="brand"><div class="mark sm">M</div><span>Meridian</span></div>
+     <div class="brand"><div class="mark sm" data-brand="mark">${esc(BRAND().markLetter)}</div><span data-brand="short">${esc(BRAND().shortName)}</span></div>
      <div class="lock-tape"><div class="paper"><div class="p-h"><b>${esc(S.settings.name)}</b><span class="pm">Latest sales</span></div><div class="rule"></div>${recent.map(o=>`<div class="kv"><span>${o.no}</span><span class="pm">${fmtT(o.ts)}</span><span>${money(o.total)}</span></div>`).join('')||'<div class="pm">No sales yet today</div>'}</div></div>
      <div class="lock-time num" id="lockTime">${fmtT(now)}</div>
      <div class="lock-date">${fmtDL(now)}</div>
@@ -351,7 +351,7 @@ function showOnboarding(){
 }
 const OBV={
  welcome:()=>`<h1 class="hero">Set up your till in two minutes.</h1>
-   <p class="lede">Meridian runs your counter, kitchen, kiosk, stock, team and reports from one screen. Tell it about your business and it builds the rest.</p>
+   <p class="lede">${esc(BRAND().shortName)} runs your counter, kitchen, kiosk, stock, team and reports from one screen. Tell it about your business and it builds the rest.</p>
    <div class="row"><button class="btn btn-primary btn-lg" data-act="obNext">Set up my business ${ic('chevR',18)}</button></div>
    <div class="demo-card"><div><b>Just looking?</b><p class="muted" style="margin-top:2px">Open a demo café with nine weeks of sales, a live kitchen and a team of five.</p></div><button class="btn" data-act="obDemo">${ic('play',16)} Open the demo café</button></div>`,
  business:()=>`<h1>What’s your business called?</h1>
@@ -392,13 +392,13 @@ const OBV={
     ${!r?`<div><i>${ic('check',16)}</i>Floor plan with 12 tables, kitchen display and a customer kiosk</div>`:`<div><i>${ic('check',16)}</i>Customer kiosk for self-checkout</div>`}
     ${d.catalog==='sample'&&d.history?`<div><i>${ic('check',16)}</i>Nine weeks of sample sales for reports and the assistant</div>`:''}
    </div>
-   <div class="row"><button class="btn btn-primary btn-lg" data-act="obFinish" id="obGo">Open Meridian ${ic('chevR',18)}</button></div>`;},
+   <div class="row"><button class="btn btn-primary btn-lg" data-act="obFinish" id="obGo">Open ${esc(BRAND().shortName)} ${ic('chevR',18)}</button></div>`;},
 };
 function renderOB(){
   const st=OB_STEPS[OB.step],mid=OB.step>0&&OB.step<6;
   $('#onboard').innerHTML=`<div class="ob">
    <section class="ob-l">
-    <header class="ob-top"><div class="brand"><div class="mark sm">M</div><span>Meridian</span></div>${mid?`<span class="ob-count">Step ${OB.step} of 5</span>`:''}</header>
+    <header class="ob-top"><div class="brand"><div class="mark sm" data-brand="mark">${esc(BRAND().markLetter)}</div><span data-brand="short">${esc(BRAND().shortName)}</span></div>${mid?`<span class="ob-count">Step ${OB.step} of 5</span>`:''}</header>
     ${mid?`<div class="ob-prog" role="progressbar" aria-valuemin="0" aria-valuemax="5" aria-valuenow="${OB.step}"><i style="width:${OB.step/5*100}%"></i></div>`:''}
     <div class="ob-body">${OBV[st]()}<p class="err" id="obErr" aria-live="assertive">${esc(OB.err)}</p></div>
     ${mid?`<div class="ob-nav"><button class="btn btn-ghost" data-act="obBack">${ic('chevL',18)} Back</button><button class="btn btn-primary btn-lg" data-act="obNext">Continue ${ic('chevR',18)}</button></div>`:''}

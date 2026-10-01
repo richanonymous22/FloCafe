@@ -13,7 +13,7 @@ function stockCell(p){
 }
 VIEWS.items=()=>{
   const tab=U.items.tab,low=lowStock().length;
-  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history']].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
+  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history'],...(adminLive()?[['take','Stocktake'],['value','Stock value'],['import','Import stock']]:[])].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
   let body='';
   if(tab==='items'){
     const q=U.items.q.toLowerCase();
@@ -30,6 +30,10 @@ VIEWS.items=()=>{
   }else if(tab==='mods'){
     body=`<div class="cards">${S.modGroups.map(g=>{const used=S.products.filter(p=>(p.mods||[]).includes(g.id)).length;return`<div class="panel"><div class="panel-h"><h3>${esc(g.name)}</h3><button class="btn btn-sm btn-ghost btn-icon" data-act="modEdit" data-id="${g.id}" aria-label="Edit ${esc(g.name)}">${ic('edit',16)}</button></div><div class="panel-b"><div class="row" style="margin-bottom:10px"><span class="badge">${g.req?'Required':'Optional'}</span><span class="badge">${g.multi?'Choose any':'Choose one'}</span><span class="badge info">On ${used} item${used===1?'':'s'}</span></div>${g.opts.map(([n,p])=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${esc(n)}</span><span class="num muted">${p?'+'+money(p):'Free'}</span></div>`).join('')}</div></div>`;}).join('')}
      <button class="panel" data-act="modEdit" style="display:grid;place-items:center;min-height:160px;border-style:dashed;color:var(--muted);font-weight:600;gap:8px">${ic('plus',22)}New option group</button></div>`;
+  }else if(adminLive()&&['take','value','import'].includes(tab)){
+    body=stockToolsBody(tab);
+  }else if(adminLive()&&tab==='log'){
+    body=liveLogBody();
   }else{
     const log=[...S.stockLog].sort((a,b)=>b.ts-a.ts).slice(0,150);
     body=`<div class="panel"><div class="tbl-wrap">${log.length?`<table class="tbl"><thead><tr><th>When</th><th>Item</th><th class="r">Change</th><th>Reason</th><th>By</th><th class="r">Stock after</th></tr></thead><tbody>${log.map(s=>`<tr><td class="num">${fmtDT(s.ts)}</td><td>${esc(s.name)}</td><td class="r num"><b style="color:${s.change<0?'var(--bad-text)':'var(--ok-text)'}">${s.change>0?'+':''}${s.change}</b></td><td>${esc(s.reason)}</td><td>${esc(first((emp(s.by)||{}).name||''))}</td><td class="r num">${s.after}</td></tr>`).join('')}</tbody></table>`:`<div class="empty"><h3>No stock movements yet</h3><p>Deliveries, waste and counts show up here.</p></div>`}</div></div>`;
@@ -38,7 +42,7 @@ VIEWS.items=()=>{
   return`<div class="page"><div class="page-head"><div><h2>Items & stock</h2><p class="sub">${S.products.length} items, ${tracked.length} with tracked stock${low?`, <b style="color:var(--warn-text)">${low} running low</b>`:''}</p></div>
    <div class="ph-actions">${tabs}${tab==='cats'?`<button class="btn btn-primary" data-act="catEdit">${ic('plus',16)} New category</button>`:tab==='items'?`<button class="btn btn-primary" data-act="itEdit">${ic('plus',16)} New item</button>`:''}</div></div>${body}</div>`;
 };
-A.itTab=d=>{U.items.tab=d.t;renderView();};
+A.itTab=d=>{U.items.tab=d.t;if(U.st)U.st[d.t+'Key']=0;renderView();};
 IN.itQ=debounce(v=>{U.items.q=v;const pos=$('[data-in="itQ"]').selectionStart;renderView();const i=$('[data-in="itQ"]');if(i){i.focus();i.setSelectionRange(pos,pos);}},180);
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 CH.itCat=v=>{U.items.cat=v;renderView();};

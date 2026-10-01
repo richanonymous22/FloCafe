@@ -27,6 +27,7 @@ mkdir -p dist
       src/03l-plemmo-admin.js \
       src/04-register-kitchen.js \
       src/05-backoffice.js \
+      src/05b-stock-tools.js \
       src/06-dashboard-ai-kiosk.js
   printf '\n</script>\n</body>\n</html>\n'
 } > dist/meridian-pos.html

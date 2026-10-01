@@ -750,6 +750,32 @@ The same data as CSV. `section` is one of `summary`, `vat`, `products`, `categor
 
 ---
 
+## Inventory, stocktakes and stock import
+
+All quantities come from the inventory ledger (`inventory_movements`); nothing here edits a stock column directly.
+
+### GET `/api/inventory/movements?limit=&product_id=&type=&from=&to=`
+The ledger as a feed, newest first, with item, variant and person names (`inventory.view`).
+
+### GET `/api/inventory/valuation` · `/api/inventory/valuation/csv`
+Stock on hand at cost: ledger balance × cost, per tracked item or variant, with totals by category and the number of items in stock that have no cost (`inventory.view`).
+
+### POST `/api/inventory/import`
+`{ "csv": "sku,quantity\nABC,12", "mode": "set" | "add", "dry_run": true, "import_id": "...", "reason": "..." }` (`inventory.adjust`). Columns: `sku` and/or `barcode`, `quantity`, optional `reason`. `dry_run` is the default and posts nothing; it returns every row (`current`, `new_quantity`, `delta`, or the `error`). Applying needs a unique `import_id`; a file with ANY invalid row is refused whole (`422`, with the report). `set` states what is on the shelf (re-importing changes nothing); `add` states what arrived (exactly-once per `import_id` and row). Limit 100 KB / 10,000 rows.
+
+### Stocktakes — `/api/stocktakes` (`inventory.stocktake`: owner, manager)
+| Call | Purpose |
+| --- | --- |
+| `POST /` `{ name?, category_ids? }` | Start. A line for every tracked item/variant in scope; one open stocktake per location (`409` otherwise). |
+| `GET /` · `GET /:id` | History; one stocktake with its lines and variance summary (units and value at cost). |
+| `PUT /:id/lines` `{ product_id, variant_id?, quantity, mode: "set"\|"add" }` | Record a count. |
+| `POST /:id/scan` `{ code, quantity? }` | Add to the line whose barcode or SKU matches (default +1; `404 unknown_code`). |
+| `POST /:id/approve` `{ uncounted: "ignore"\|"zero", note? }` | Post one ledger adjustment per counted line, atomically. |
+| `POST /:id/cancel` | Discard; posts nothing. |
+A line's adjustment is `counted − balance when it was counted`, so sales made while counting are kept. A correction that would take stock below zero is clamped to zero and the line is flagged `clamped`. An approved or cancelled stocktake is final (`409`).
+
+---
+
 ## Settings
 
 ### GET `/api/settings/business`

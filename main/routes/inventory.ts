@@ -6,6 +6,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { getDatabase } from '../db';
 import { requireRole } from '../middleware/security';
 import { requirePermission } from '../middleware/authorize';
 import { getBalance, getMovementHistory, adjustStock, listLowStock } from '../core/inventory';
@@ -65,6 +66,26 @@ router.post('/adjust', requirePermission('inventory.adjust', {
     if (status >= 500) console.error('[Inventory] adjust failed:', error);
     res.status(status).json({ error: error?.message || 'Internal server error' });
   }
+});
+
+// The stock ledger as a feed: newest first, with item and person names. Filter by product, type or date.
+router.get('/movements', requirePermission('inventory.view'), (req: Request, res: Response) => {
+  const db = getDatabase();
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const where: string[] = ['(m.location_id IS ? OR m.location_id IS NULL)'];
+  const params: any[] = [getCurrentLocationId()];
+  if (req.query.product_id) { where.push('m.product_id = ?'); params.push(String(req.query.product_id)); }
+  if (req.query.type) { where.push('m.movement_type = ?'); params.push(String(req.query.type)); }
+  if (req.query.from) { where.push('m.created_at > ?'); params.push(String(req.query.from)); }
+  if (req.query.to) { where.push('m.created_at <= ?'); params.push(String(req.query.to)); }
+  const rows = db.prepare(`
+    SELECT m.id, m.created_at, m.product_id, m.product_variant_id, m.quantity_delta, m.movement_type, m.reason, m.reference_type, m.balance_after,
+           p.name AS product_name, v.name AS variant_name, u.name AS actor_name
+    FROM inventory_movements m
+    LEFT JOIN products p ON p.id = m.product_id LEFT JOIN product_variants v ON v.id = m.product_variant_id LEFT JOIN users u ON u.id = m.actor_user_id
+    WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?
+  `).all(...params, limit);
+  res.json({ movements: rows });
 });
 
 const money = (minor: number, exp: number) => (minor / Math.pow(10, exp)).toFixed(exp);

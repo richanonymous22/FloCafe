@@ -2003,6 +2003,117 @@ export function buildIdealSchemaDb(): Database.Database {
 // Each entry runs exactly once, in order, wrapped in a transaction.
 // To add a schema change: append a new entry. Never edit existing entries.
 
+/**
+ * Register every bundled country tax pack (idempotent: INSERT OR IGNORE / ON CONFLICT, and an
+ * already-active version is never replaced). Used by the original v38 migration and again by
+ * v99 so a pack added to the bundle later (e.g. the UK VAT pack) reaches upgraded databases too.
+ */
+function seedBundledCountryPacks(): void {
+  const insertPack = db.prepare(`
+    INSERT INTO country_packs (
+      id, publisher, country, jurisdiction, active_version_id, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      publisher = excluded.publisher,
+      country = excluded.country,
+      jurisdiction = excluded.jurisdiction,
+      active_version_id = COALESCE(country_packs.active_version_id, excluded.active_version_id),
+      updated_at = excluded.updated_at
+  `);
+  const insertVersion = db.prepare(`
+    INSERT OR IGNORE INTO country_pack_versions (
+      id, pack_id, version, schema_version, manifest_json, pack_json, digest, signature,
+      effective_from, effective_to, min_flo_version, published_at, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'active', ?)
+  `);
+  const insertCategory = db.prepare(`
+    INSERT OR IGNORE INTO tax_categories (
+      id, pack_version_id, category_id, label, default_behavior, definition_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertRule = db.prepare(`
+    INSERT OR IGNORE INTO tax_rules (
+      id, pack_version_id, rule_id, label, calculation_type, rate, amount,
+      applies_per, base_rule_ids, definition_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const pack of BUNDLED_COUNTRY_PACKS) {
+    const versionId = bundledPackVersionId(pack);
+    const packJson = JSON.stringify(pack);
+    const installedAt = now();
+    const alreadyInstalled = db.prepare(
+      'SELECT 1 FROM country_pack_versions WHERE id = ?'
+    ).get(versionId);
+
+    insertPack.run(
+      pack.id, pack.publisher, pack.country, pack.jurisdiction,
+      versionId, installedAt, installedAt,
+    );
+    insertVersion.run(
+      versionId,
+      pack.id,
+      pack.version,
+      pack.schemaVersion,
+      JSON.stringify({
+        id: pack.id,
+        publisher: pack.publisher,
+        country: pack.country,
+        jurisdiction: pack.jurisdiction,
+        version: pack.version,
+        publishedAt: pack.publishedAt,
+      }),
+      packJson,
+      sha256Hex(packJson),
+      pack.effectiveFrom,
+      pack.effectiveTo || null,
+      pack.minFloVersion,
+      pack.publishedAt,
+      installedAt,
+    );
+
+    for (const category of pack.categories) {
+      insertCategory.run(
+        `${versionId}:category:${category.id}`,
+        versionId,
+        category.id,
+        category.label,
+        category.defaultBehavior || null,
+        JSON.stringify(category),
+        installedAt,
+      );
+    }
+    for (const rule of pack.rules) {
+      insertRule.run(
+        `${versionId}:rule:${rule.id}`,
+        versionId,
+        rule.id,
+        rule.label,
+        rule.type,
+        rule.rate || null,
+        rule.amount || null,
+        rule.appliesPer || null,
+        JSON.stringify(rule.baseRuleIds || []),
+        JSON.stringify(rule),
+        installedAt,
+      );
+    }
+
+    if (!alreadyInstalled) {
+      db.prepare(`
+        INSERT INTO tax_config_audit (
+          action, pack_id, pack_version_id, details_json, created_at
+        ) VALUES ('install_bundled_pack', ?, ?, ?, ?)
+      `).run(
+        pack.id,
+        versionId,
+        JSON.stringify({ source: 'application_bundle', version: pack.version }),
+        installedAt,
+      );
+    }
+  }
+}
+
 export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
   {
     version: 1,
@@ -2699,109 +2810,7 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
     name: 'register_bundled_tax_pack_versions',
     up: () => {
       createTaxPackSchema();
-      const insertPack = db.prepare(`
-        INSERT INTO country_packs (
-          id, publisher, country, jurisdiction, active_version_id, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          publisher = excluded.publisher,
-          country = excluded.country,
-          jurisdiction = excluded.jurisdiction,
-          active_version_id = COALESCE(country_packs.active_version_id, excluded.active_version_id),
-          updated_at = excluded.updated_at
-      `);
-      const insertVersion = db.prepare(`
-        INSERT OR IGNORE INTO country_pack_versions (
-          id, pack_id, version, schema_version, manifest_json, pack_json, digest, signature,
-          effective_from, effective_to, min_flo_version, published_at, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'active', ?)
-      `);
-      const insertCategory = db.prepare(`
-        INSERT OR IGNORE INTO tax_categories (
-          id, pack_version_id, category_id, label, default_behavior, definition_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertRule = db.prepare(`
-        INSERT OR IGNORE INTO tax_rules (
-          id, pack_version_id, rule_id, label, calculation_type, rate, amount,
-          applies_per, base_rule_ids, definition_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (const pack of BUNDLED_COUNTRY_PACKS) {
-        const versionId = bundledPackVersionId(pack);
-        const packJson = JSON.stringify(pack);
-        const installedAt = now();
-        const alreadyInstalled = db.prepare(
-          'SELECT 1 FROM country_pack_versions WHERE id = ?'
-        ).get(versionId);
-
-        insertPack.run(
-          pack.id, pack.publisher, pack.country, pack.jurisdiction,
-          versionId, installedAt, installedAt,
-        );
-        insertVersion.run(
-          versionId,
-          pack.id,
-          pack.version,
-          pack.schemaVersion,
-          JSON.stringify({
-            id: pack.id,
-            publisher: pack.publisher,
-            country: pack.country,
-            jurisdiction: pack.jurisdiction,
-            version: pack.version,
-            publishedAt: pack.publishedAt,
-          }),
-          packJson,
-          sha256Hex(packJson),
-          pack.effectiveFrom,
-          pack.effectiveTo || null,
-          pack.minFloVersion,
-          pack.publishedAt,
-          installedAt,
-        );
-
-        for (const category of pack.categories) {
-          insertCategory.run(
-            `${versionId}:category:${category.id}`,
-            versionId,
-            category.id,
-            category.label,
-            category.defaultBehavior || null,
-            JSON.stringify(category),
-            installedAt,
-          );
-        }
-        for (const rule of pack.rules) {
-          insertRule.run(
-            `${versionId}:rule:${rule.id}`,
-            versionId,
-            rule.id,
-            rule.label,
-            rule.type,
-            rule.rate || null,
-            rule.amount || null,
-            rule.appliesPer || null,
-            JSON.stringify(rule.baseRuleIds || []),
-            JSON.stringify(rule),
-            installedAt,
-          );
-        }
-
-        if (!alreadyInstalled) {
-          db.prepare(`
-            INSERT INTO tax_config_audit (
-              action, pack_id, pack_version_id, details_json, created_at
-            ) VALUES ('install_bundled_pack', ?, ?, ?, ?)
-          `).run(
-            pack.id,
-            versionId,
-            JSON.stringify({ source: 'application_bundle', version: pack.version }),
-            installedAt,
-          );
-        }
-      }
+      seedBundledCountryPacks();
     },
   },
   {
@@ -5381,6 +5390,17 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
         CREATE INDEX IF NOT EXISTS idx_refund_lines_bill ON refund_lines(bill_id);
         CREATE INDEX IF NOT EXISTS idx_refund_lines_item ON refund_lines(order_item_id);
       `);
+    },
+  },
+  {
+    version: 99,
+    name: 'bundled_uk_vat_pack',
+    up: () => {
+      // UK VAT, offline. The generic pack carries no rules (it charges nothing), and every
+      // other country pack would come from the upstream plugin feed. The GB pack (standard 20%,
+      // reduced 5%, zero, exempt) is part of the application bundle; this registers it for
+      // databases that already passed v38. Existing packs, assignments and settings are untouched.
+      seedBundledCountryPacks();
     },
   },
 ];

@@ -1,8 +1,10 @@
 import type { CountryPack } from './types';
 import genericPackData from './generic.json';
+import gbPackData from './gb.json';
 
 export const BUNDLED_COUNTRY_PACKS: readonly CountryPack[] = [
   genericPackData as CountryPack,
+  gbPackData as CountryPack,
 ];
 
 export function bundledPackVersionId(pack: CountryPack): string {

@@ -229,3 +229,25 @@ The spec PDF is now in hand; see `docs/V1_SCOPE.md` (reconciled scope) and `docs
 - **WP13 adds** the §77 architecture package (schema, permission model, ID structure, transaction/audit, sync, payment, update/rollback, backup/recovery, DB security model, integration plan) and OpenAPI docs.
 
 Revised total: roughly **38–48 Claude sessions** (was 27–35); elapsed time is still dominated by external items.
+
+
+---
+
+## 8. Finding during WP3 — back-office handlers that only change the screen (new WP3d)
+
+A systematic census of Meridian's handlers (every `A.*`/`IN.*`/`CH.*` that mutates state and calls `save()` with no backend call) found these still local-only while the till is connected. They break the rule *"no feature may exist on one layer and pretend"*, and the first one matters most: **the register sells at backend prices, so editing a price on the Items screen changed nothing a customer is charged.**
+
+| Handler | What it pretends to do | Backend that already exists |
+| --- | --- | --- |
+| `A.itSave`, `A.itDel`, `CH.itAvail` | Add / edit / delete / mark-unavailable an item (price, cost, SKU, stock, VAT, barcode…) | `POST/PUT/DELETE /api/products`, `POST /products/:id/stock` |
+| `A.catEdit` | Categories | `/api/categories` CRUD |
+| `A.modEdit` | Modifier groups and options | `/api/addon-groups` CRUD (+ addons) |
+| `A.custPts` | Adjust a customer's points | needs a ledger adjustment route (add, audited, permissioned) |
+| `CH.perm` | Role permission toggles | server role table is fixed code today (WP3c) |
+| `CH.set` | Business name, VAT, tipping, receipt, discount limits… | `/api/settings/business`, `/tax`, `/discount`, `/loyalty`, `/kds`, `/order-numbering` |
+| `A.ktItem/ktNext/ktBack/kdsRecall` | The in-app kitchen board | server KDS (`/api/kds`, order-item status) |
+| `A.changeTable` | Move an order to another table | table routes |
+| `A.clockInMe` | Clock in | `/api/shifts` |
+| `A.obFinish`, `A.obDemo`, `A.resetDemo` | Onboarding / demo data | first-run setup route; demo data must not ship (WP6) |
+
+**WP3d — Back-office on the backend (L, 3 sessions).** Order: (1) Items + Categories + Modifiers (retail-critical: barcode, VAT category, stock), (2) Settings (business, VAT, receipt, tipping, discount limits), (3) Staff/permissions (joins WP3c), (4) Customers (points adjust, edit), (5) Kitchen board + table move + clock-in. Each one: wire to the existing route, error handling from the server, no local write on failure, UI→HTTP→DB test, and removal of any control the backend cannot honour. Exit: re-run the census; zero handlers that change money, stock, prices or configuration without a backend call.

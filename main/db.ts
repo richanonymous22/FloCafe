@@ -5433,6 +5433,55 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 101,
+    name: 'stocktakes',
+    up: () => {
+      // STOCKTAKES. A count is a document: it is started, counted line by line (typed or scanned), reviewed
+      // as a variance report and then approved, which posts one ledger adjustment per counted line. Nothing
+      // existing is altered. `expected_at_count` is the ledger balance at the moment the line was counted, so
+      // sales made while counting are never overwritten when the count is approved.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS stocktakes (
+          id             TEXT PRIMARY KEY,
+          number         INTEGER NOT NULL UNIQUE,
+          location_id    TEXT,
+          name           TEXT NOT NULL,
+          status         TEXT NOT NULL DEFAULT 'counting' CHECK (status IN ('counting', 'approved', 'cancelled')),
+          category_ids   TEXT,
+          uncounted      TEXT,
+          created_by     TEXT,
+          created_at     TEXT NOT NULL,
+          approved_by    TEXT,
+          approved_at    TEXT,
+          cancelled_at   TEXT,
+          note           TEXT
+        );
+        CREATE TABLE IF NOT EXISTS stocktake_lines (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          stocktake_id      TEXT NOT NULL,
+          product_id        TEXT NOT NULL,
+          product_variant_id TEXT,
+          name              TEXT NOT NULL,
+          sku               TEXT,
+          barcode           TEXT,
+          unit_cost         REAL NOT NULL DEFAULT 0,
+          expected          REAL NOT NULL DEFAULT 0,
+          expected_at_count REAL,
+          counted           REAL,
+          counted_by        TEXT,
+          counted_at        TEXT,
+          applied_delta     REAL,
+          movement_id       TEXT,
+          clamped           INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (stocktake_id) REFERENCES stocktakes(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stocktake_lines_unique
+          ON stocktake_lines(stocktake_id, product_id, COALESCE(product_variant_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_stocktakes_status ON stocktakes(status, location_id);
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

@@ -56,6 +56,7 @@ import QRCode from 'qrcode';
 import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
+import { stocktakeRoutes } from './stocktakes';
 import { supplierRoutes } from './suppliers';
 import { purchaseOrderRoutes } from './purchase-orders';
 import { transferRoutes } from './transfers';
@@ -93,6 +94,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/auth', authRoutes);
   app.use('/api/retail', retailRoutes);
   app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/stocktakes', stocktakeRoutes);
   app.use('/api/suppliers', supplierRoutes);
   app.use('/api/purchase-orders', purchaseOrderRoutes);
   app.use('/api/transfers', transferRoutes);

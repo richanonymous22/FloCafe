@@ -723,4 +723,4 @@ router.post('/import/addons', requireRole('owner', 'manager'), (req: Request, re
   }
 });
 
-export { router as menuCsvRoutes };
+export { router as menuCsvRoutes, parseCSV, toObjects, CsvImportError };

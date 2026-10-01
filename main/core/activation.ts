@@ -79,7 +79,7 @@ export function checkCloudUrl(url: string): string {
 export const ORGANIZATION_COLUMN_TABLES = [
   'orders', 'locations', 'audit_events', 'payments', 'suppliers', 'purchase_orders', 'stock_transfers', 'inventory_movements',
   'organization_features', 'sync_outbox', 'remote_payment_events', 'remote_orders', 'remote_order_items', 'remote_bills',
-  'sales_conflicts', 'sales_reconciliation_actions', 'sales_pending_relationships', 'remote_reference_entities',
+  'sales_conflicts', 'sales_reconciliation_actions', 'sales_pending_relationships', 'remote_reference_entities', 'card_attempts',
 ];
 
 /**

@@ -590,7 +590,7 @@ A.charge=()=>{
   const remote=plemmoSaleMode();
   PAY.L=modal({title:'Take payment',cls:'xl',body:`<div id="payBody"></div>`,dismiss:false,onClose:()=>{
     if(PAY&&PAY.payments.length&&!PAY.done)toast('Payment cancelled. Money already taken is shown on the order when you charge again.','warn');
-    if(PAY&&!PAY.done)releasePreparedSale(PAY);
+    if(PAY&&!PAY.done){cancelCardAttempt(PAY);releasePreparedSale(PAY);}
   }});
   if(remote){PAY.remote=true;PAY.stage='prep';renderPay();preparePlemmoSale(PAY);}
   else renderPay();
@@ -637,6 +637,7 @@ async function preparePlemmoSale(p){
   try{
     await ensurePlemmoBill(p);
     await refreshWallet(U.cart.custId);
+    await refreshCardConfig();
     if(PAY!==p||(p.L&&p.L.closed)){releasePreparedSale(p);return;}
     p.due=Number(p.saved.bill.total);p.stage='idle';renderPay();
   }catch(e){
@@ -659,26 +660,32 @@ async function releasePreparedSale(p,force){
 }
 function payRem(){return r2(PAY.due+PAY.tip-sum(PAY.payments,p=>p.a));}
 function cashSuggest(rem){const c=[rem,Math.ceil(rem),Math.ceil(rem/5)*5,Math.ceil(rem/10)*10,Math.ceil(rem/20)*20,50];return[...new Set(c.map(r2))].filter(v=>v>=rem).slice(0,4);}
+// The pay modal's own body: an earlier modal that is still fading out can hold an element with the same id.
+function payBodyEl(){return(PAY&&PAY.L&&PAY.L.el&&PAY.L.el.querySelector('#payBody'))||$('#payBody');}
 function renderPay(){
-  if(PAY.stage==='prep'){$('#payBody').innerHTML=`<div class="reader wait" style="margin:40px auto;max-width:420px"><b>Preparing the bill…</b><small>Checking prices, tax and any discount with the till server.</small></div>`;return;}
+  if(PAY.stage==='prep'){payBodyEl().innerHTML=`<div class="reader wait" style="margin:40px auto;max-width:420px"><b>Preparing the bill…</b><small>Checking prices, tax and any discount with the till server.</small></div>`;return;}
   const rem=payRem(),paidAny=PAY.payments.length>0,tips=S.settings.tipping;
   const tipBtns=[0,10,12.5,15].map(p=>`<button class="chip ${PAY.tipPct===p&&!PAY.tipCustom?'on':''}" data-act="payTip" data-p="${p}" ${paidAny?'disabled':''}>${p?p+'%':'No tip'}</button>`).join('')+`<button class="chip ${PAY.tipCustom?'on':''}" data-act="payTipCustom" ${paidAny?'disabled':''}>Other</button>`;
   let pane='';
-  const lastCard=[...PAY.payments].reverse().find(p=>p.m==='card');
+  const lastCard=[...PAY.payments].reverse().find(p=>p.m==='card'&&!p.attemptId);
   if(rem<=0.004&&paidAny&&PAY.stage==='idle'){
     pane=`<div class="reader idle"><div class="rd-ic">${ic('check',30)}</div><b>Payment taken</b><small>The sale has not been saved yet. Nothing more is charged when you try again.</small></div>
       ${lastCard?`<label class="field"><span>Terminal reference <span class="faint">(optional, fix it if it was mistyped)</span></span><input id="payRef2" maxlength="64" autocomplete="off" value="${esc(lastCard.ref||'')}"></label>`:''}
       <button class="btn btn-primary btn-lg btn-block" data-act="payRetry">Save the sale</button>`;
   }else if(PAY.method==='card'){
     const amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
-    if(PAY.stage==='wait'){
+    if(PAY.stage==='cardwait'){pane=cardWaitHTML();}
+    else if(PAY.stage==='wait'){
       const ca=money(PAY.cardAmt||amt);
       pane=`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>Enter this amount on your card terminal and let the customer pay. Then confirm the result below.</small></div>
         <label class="field"><span>Terminal receipt or authorisation number <span class="faint">(optional)</span></span><input id="payRef" maxlength="64" autocomplete="off" placeholder="e.g. 004217"></label>
         <button class="btn btn-primary btn-lg btn-block" data-act="payCardOk">Payment approved on the terminal</button>
         <button class="btn btn-block" data-act="payCardNo">Declined or cancelled</button>`;
     }else{
-      pane=`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>Take ${money(amt)} on your card terminal, then confirm the result here. The till does not talk to the terminal yet, so this is recorded as an unverified card payment.</small></div>
+      pane=cardProviderOn()?`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>${money(amt)} is sent to the card terminal${S._card.simulated?'. This is a simulated terminal: no real card is charged':''}. The sale is only recorded once the terminal approves it.</small></div>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Send ${money(amt)} to the terminal</button>
+        <button class="btn btn-block" data-act="payCardManual">Terminal not working? Record a card by hand</button>`
+      :`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>Take ${money(amt)} on your card terminal, then confirm the result here. No card terminal is set up for this till${live()?' (set one up in Settings, Card payments)':''}, so this is recorded as an unverified card payment.</small></div>
         <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Take ${money(amt)} by card</button>`;
     }
   }else if(PAY.method==='wallet'){
@@ -700,7 +707,7 @@ function renderPay(){
       ${keypadHTML('money','wide')}
       <div class="fgrid"><button class="btn btn-lg" data-act="paySplitCard" ${n>0?'':'disabled'}>${ic('card',18)} Card</button><button class="btn btn-lg" data-act="paySplitCash" ${n>0?'':'disabled'}>${ic('cash',18)} Cash</button></div>`;
   }
-  $('#payBody').innerHTML=`<div class="pay">
+  payBodyEl().innerHTML=`<div class="pay">
    <div class="pay-sum">
     <div><span class="muted" style="font-weight:600">${paidAny?'Left to pay':'Amount due'}</span><div class="pay-big num">${money(rem)}</div><p class="pay-sub">Order ${money(PAY.due)}${PAY.tip?`, tip ${money(PAY.tip)}`:''}${U.cart.custId&&!PAY.remote?`, ${esc(first(cust(U.cart.custId).name))} earns ${Math.floor(PAY.due*S.settings.loyalty.earn)} points`:''}</p></div>
     ${tips?`<div class="field"><span>Tip</span><div class="chips">${tipBtns}</div></div>`:''}
@@ -712,7 +719,7 @@ function renderPay(){
     <div class="seg">${[['card','Card','card'],['cash','Cash','cash'],...(walletMinor()>0?[['wallet','Wallet','star']]:[]),['split','Split','split']].map(([k,l,i])=>`<button class="${PAY.method===k?'on':''}" data-act="payMethod" data-m="${k}" ${PAY.stage!=='idle'?'disabled':''}>${ic(i,16)}${l}</button>`).join('')}</div>
     ${pane}
    </div></div>`;
-  if(PAY.method!=='card')bindPad($('#payBody'),payKey);
+  if(PAY.method!=='card')bindPad(payBodyEl(),payKey);
 }
 function payKey(k){
   const f=PAY.method==='cash'?'tendered':'splitAmt';let v=PAY[f];
@@ -730,7 +737,7 @@ function walletMinor(){
 A.payWallet=()=>{
   const rem=payRem(),use=Math.min(walletMinor(),Math.round(rem*100));
   if(use<=0)return;
-  PAY.payments.push({m:'wallet',a:r2(use/100)});
+  pushPay({m:'wallet',a:r2(use/100)});
   afterPayment();
 };
 A.payMethod=d=>{PAY.method=d.m;PAY.splitMode=d.m==='split';if(d.m!=='split')PAY.splitAmt='';renderPay();};
@@ -747,6 +754,86 @@ function cardFlow(amount){
   PAY.stage='wait';PAY.cardAmt=r2(amount);
   return new Promise(resolve=>{PAY.cardResolve=resolve;renderPay();});
 }
+// The tip is shared out over the payments in the order they are taken (never onto the wallet), so each card
+// line carries exactly the tip its terminal charge included.
+function tipShareFor(amount){
+  const given=sum(PAY.payments,p=>p.tipShare||0);
+  return r2(Math.max(0,Math.min(PAY.tip-given,amount-0.01)));
+}
+function pushPay(p){p.tipShare=p.m==='wallet'?0:tipShareFor(p.a);PAY.payments.push(p);}
+// A card terminal is connected when the till server says so; the card is then asked for on the terminal and
+// the sale is only recorded after the provider approves it. Without one, staff record the card by hand.
+async function refreshCardConfig(){
+  if(!(window.PlemmoAPI&&PlemmoAPI.isAuthenticated())){S._card=null;return;}
+  try{S._card=await PlemmoAPI.get('/card/config');}catch(e){S._card=null;}
+}
+function cardProviderOn(){return !!(S._card&&S._card.enabled&&PAY&&PAY.remote&&PAY.saved&&PAY.saved.bill);}
+function takeCard(amount){return cardProviderOn()?providerCardFlow(amount):cardFlow(amount);}
+function stopCardPoll(){if(PAY&&PAY.cardTimer){clearInterval(PAY.cardTimer);PAY.cardTimer=null;}}
+function providerCardFlow(amount){
+  const share=tipShareFor(amount);
+  PAY.stage='cardwait';PAY.cardAmt=r2(amount);PAY.cardShare=share;PAY.cardAtt=null;PAY.cardErr=null;
+  return new Promise(resolve=>{PAY.cardResolve=resolve;renderPay();startCardAttempt();});
+}
+async function startCardAttempt(){
+  const p=PAY;if(!p)return;
+  p.cardAtt=null;p.cardErr=null;renderPay();
+  try{
+    const net=r2(p.cardAmt-p.cardShare);
+    const body={bill_id:p.saved.bill.id,amount:net};
+    if(p.cardShare>0)body.tip=p.cardShare;
+    const a=await PlemmoAPI.post('/card/attempts',body,{idempotent:false});
+    if(PAY!==p)return;
+    p.cardAtt=a;renderPay();
+    stopCardPoll();p.cardTimer=setInterval(()=>pollCardAttempt(p),1500);
+  }catch(e){
+    if(PAY!==p)return;
+    p.cardErr=(e&&e.data&&e.data.error)||'The card terminal could not be started. Nothing was charged.';renderPay();
+  }
+}
+async function pollCardAttempt(p){
+  if(PAY!==p||!p.cardAtt||p.cardPolling)return;
+  p.cardPolling=true;
+  try{
+    const a=await PlemmoAPI.get('/card/attempts/'+encodeURIComponent(p.cardAtt.id));
+    if(PAY!==p)return;
+    p.cardAtt=a;
+    if(a.state==='approved'){
+      stopCardPoll();
+      const net=r2(p.cardAmt-p.cardShare);
+      pushPay({m:'card',a:r2(net+(a.tip_minor||0)/100),attemptId:a.id,l4:a.card_last4||undefined,sim:!!a.simulated});
+      toast('Card approved'+(a.card_last4?' (ending '+a.card_last4+')':''),'ok',{ms:1800});
+      endCardFlow(true);return;
+    }
+    if(a.state!=='pending')stopCardPoll();
+    renderPay();
+  }catch(e){/* keep waiting; the terminal result is not lost */}
+  finally{p.cardPolling=false;}
+}
+function cardWaitHTML(){
+  const ca=money(PAY.cardAmt),a=PAY.cardAtt,sim=S._card&&S._card.simulated;
+  const simNote=sim?'<small class="faint">Simulated terminal: no real card is charged.</small>':'';
+  const again='<button class="btn btn-primary btn-lg btn-block" data-act="payCardRetry">Try again</button><button class="btn btn-block" data-act="payCardBack">Choose another way to pay</button>';
+  if(PAY.cardErr)return`<div class="reader idle"><div class="rd-ic">${ic('x',30)}</div><b>Not sent</b><small>${esc(PAY.cardErr)}</small></div>${again}`;
+  if(!a)return`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>Contacting the card terminal…</small></div>`;
+  if(a.state==='pending')return`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>${esc(a.message||'Waiting for the customer to pay on the terminal…')}</small>${simNote}</div>
+    <button class="btn btn-block" data-act="payCardCancel">Cancel this card payment</button>`;
+  const why={declined:'The card was declined.',cancelled:'The card payment was cancelled.',timed_out:'The customer did not use the terminal in time.',failed:'The card payment failed.'}[a.state]||'The card payment did not complete.';
+  return`<div class="reader idle"><div class="rd-ic">${ic('x',30)}</div><b>No payment taken</b><small>${esc(a.message||why)} Nothing was charged on this sale.</small></div>${again}`;
+}
+async function cancelCardAttempt(p){
+  stopCardPoll();
+  const a=p&&p.cardAtt;
+  if(a&&a.state==='pending'){try{await PlemmoAPI.post('/card/attempts/'+encodeURIComponent(a.id)+'/cancel',{},{idempotent:false});}catch(e){toast('The terminal could not be reached to cancel. Cancel on the terminal itself.','warn',{ms:5000});}}
+}
+A.payCardRetry=()=>{if(PAY&&PAY.stage==='cardwait')startCardAttempt();};
+A.payCardBack=async()=>{if(!PAY)return;await cancelCardAttempt(PAY);if(!PAY)return;endCardFlow(false);renderPay();};
+A.payCardCancel=async()=>{if(!PAY)return;await cancelCardAttempt(PAY);if(!PAY)return;toast('Card payment cancelled. Nothing was charged.','info');endCardFlow(false);renderPay();};
+A.payCardManual=async()=>{
+  const rem=payRem(),amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
+  if(!(await cardFlow(amt)))return;
+  PAY.splitAmt='';afterPayment();
+};
 function endCardFlow(result){
   const res=PAY&&PAY.cardResolve;if(!res)return;
   PAY.cardResolve=null;PAY.stage='idle';res(result);
@@ -754,14 +841,14 @@ function endCardFlow(result){
 A.payRetry=()=>{
   if(!PAY||PAY.saving)return;
   const el=$('#payRef2');
-  if(el){const lc=[...PAY.payments].reverse().find(p=>p.m==='card');if(lc){const v=(el.value||'').trim().slice(0,64);lc.ref=v||undefined;}}
+  if(el){const lc=[...PAY.payments].reverse().find(p=>p.m==='card'&&!p.attemptId);if(lc){const v=(el.value||'').trim().slice(0,64);lc.ref=v||undefined;}}
   finishSale();
 };
 A.payCardOk=()=>{
   if(!PAY||!PAY.cardResolve)return;
   const el=$('#payRef'),ref=(el&&el.value||'').trim().slice(0,64);
   const amount=PAY.cardAmt;
-  PAY.payments.push({m:'card',a:r2(amount),ref:ref||undefined});
+  pushPay({m:'card',a:r2(amount),ref:ref||undefined});
   endCardFlow(true);
 };
 A.payCardNo=()=>{
@@ -771,19 +858,19 @@ A.payCardNo=()=>{
 };
 A.payCard=async()=>{
   const rem=payRem(),amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
-  if(!(await cardFlow(amt)))return;
+  if(!(await takeCard(amt)))return;
   PAY.splitAmt='';afterPayment();
 };
 A.payCash=()=>{
   const rem=payRem(),ten=PAY.tendered?+PAY.tendered:rem;
   if(ten<=0){toast('Enter the cash you were given','warn');return;}
-  const take=Math.min(ten,rem);PAY.payments.push({m:'cash',a:r2(take)});
+  const take=Math.min(ten,rem);pushPay({m:'cash',a:r2(take)});
   PAY.change=r2(Math.max(0,ten-rem));PAY.tendered='';
   if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});
   afterPayment();
 };
-A.paySplitCard=async()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.method='card';if(!(await cardFlow(amt)))return;PAY.method='split';PAY.splitAmt='';afterPayment();};
-A.paySplitCash=()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.payments.push({m:'cash',a:r2(amt)});PAY.splitAmt='';if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});afterPayment();};
+A.paySplitCard=async()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.method='card';if(!(await takeCard(amt)))return;PAY.method='split';PAY.splitAmt='';afterPayment();};
+A.paySplitCash=()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;pushPay({m:'cash',a:r2(amt)});PAY.splitAmt='';if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});afterPayment();};
 function afterPayment(){if(payRem()<=0.004)finishSale();else renderPay();}
 // Plemmo is authoritative for prices/tax/totals/stock/loyalty. A fresh counter
 // sale commits to Plemmo (order → bill → payments incl. tip). Dine-in orders
@@ -803,6 +890,10 @@ function finishSale(){
     // The server refused the wallet part (balance changed since it was read): take the wallet
     // line back out so the cashier can pick another way to pay, rather than looping on "Save".
     const errText=String((e&&e.data&&e.data.error)||(e&&e.message)||'');
+    if(e&&e.status===409&&/card payment|terminal/i.test(errText)&&PAY&&PAY.payments.some(p=>p.attemptId)){
+      PAY.payments=PAY.payments.filter(p=>!p.attemptId);PAY.payKeyFor=null;PAY.stage='idle';renderPay();
+      toast(`That card payment could not be used: ${errText}`,'warn',{ms:6000});return;
+    }
     if(e&&e.status===400&&/wallet/i.test(errText)&&PAY){
       PAY.payments=PAY.payments.filter(p=>p.m!=='wallet');PAY.payKeyFor=null;
       refreshWallet(U.cart.custId).then(()=>{if(PAY){PAY.stage='idle';renderPay();}});
@@ -822,8 +913,11 @@ async function finishSalePlemmo(){
   const plemmoOrderId=sv.orderId,orderResp=sv.orderResp||null,bill=sv.bill;
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
-    const line={method:p.m==='card'?'card':p.m==='wallet'?'wallet':'cash',amount:r2(p.a)};
-    if(i===0&&PAY.tip)line.tip=r2(PAY.tip);
+    const share=p.tipShare||0;
+    // A card line's amount is the bill's share only; the terminal's tip travels beside it.
+    const line={method:p.m==='card'?'card':p.m==='wallet'?'wallet':'cash',amount:r2(p.m==='card'?p.a-share:p.a)};
+    if(share>0)line.tip=r2(share);
+    if(p.m==='card'&&p.attemptId)line.card_attempt_id=p.attemptId;
     if(p.m==='card'&&p.ref)line.transaction_id=p.ref;
     if(p.m==='cash'&&i===PAY.payments.length-1&&PAY.change)line.tendered=r2(p.a+PAY.change);
     return line;
@@ -842,7 +936,7 @@ async function finishSalePlemmo(){
     items:c.items.map(l=>({...l,sent:true})),
     subtotal:Number(bill.subtotal)||cartTotals(c).subtotal,tax:Number(bill.tax_amount)||0,
     discAmt:Number(bill.discount_amount)||0,total:Number(bill.total)||0,
-    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||null});
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a,l4:p.l4,sim:p.sim})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||null});
   if(!existing)S.orders.push(o);
   const change=PAY.change||0;
   PAY.done=true;PAY.L.close();PAY=null;
@@ -897,7 +991,7 @@ function receiptHTML(o,{cls=''}={}){
    <div class="kv b"><span>Total</span><span>${money(o.total)}</span></div>
    ${o.tip?`<div class="kv"><span>Tip, thank you</span><span>${money(o.tip)}</span></div><div class="kv b"><span>Paid</span><span>${money(grand)}</span></div>`:''}
    <div class="rule"></div>
-   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Loyalty wallet':'Card'}</span><span>${money(p.a)}</span></div>`).join('')}
+   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Loyalty wallet':'Card'+(p.l4?' ····'+esc(p.l4):'')+(p.sim?' (simulated)':'')}</span><span>${money(p.a)}</span></div>`).join('')}
    ${o.status==='refunded'?`<div class="rule"></div><div class="kv b"><span>REFUNDED</span><span>${fmtT(o.refund.ts)}</span></div>`:''}
    ${o.status!=='refunded'&&o.refundedAmt>0?`<div class="rule"></div><div class="kv b"><span>Part refunded</span><span>−${money(o.refundedAmt)}</span></div>`:''}
    ${o.status==='void'?`<div class="rule"></div><div class="kv b"><span>VOIDED</span></div>`:''}

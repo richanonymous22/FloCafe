@@ -28,6 +28,7 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
 import { recordAppliedPaymentLine, PaymentError } from '../core/payment';
+import { CardError, consumeApprovedAttempt, getAttempt, markRefundConsumed, refundOnProvider } from '../core/card-terminal/service';
 import { ApprovalError, resolveApprover } from '../core/approval';
 import { refundBill, listBillPayments, listRefundableLines } from '../core/refund';
 import { minorUnitExponent, toMinor, fromMinor } from '../core/money';
@@ -390,6 +391,8 @@ interface PaymentInput {
   tip?: number | string | null;
   transaction_id?: string;
   notes?: string;
+  /** A card payment the terminal approved (see core/card-terminal). Only valid with method 'card'. */
+  card_attempt_id?: string;
 }
 
 // A payment request is prepared and fully validated before any ledger or bill
@@ -465,7 +468,37 @@ function validatePaymentFields(payment: PaymentInput, index: number): void {
       throw Object.assign(new Error(`${field} is invalid or too long`), { statusCode: 400 });
     }
   }
+  if (payment.card_attempt_id !== undefined) {
+    if (payment.method !== 'card' || typeof payment.card_attempt_id !== 'string' || payment.card_attempt_id.length < 8 || payment.card_attempt_id.length > 64) {
+      throw Object.assign(new Error(`card_attempt_id is only valid on a card payment (line ${index + 1})`), { statusCode: 400 });
+    }
+  }
   if (payment.amount !== undefined && payment.amount !== null) paymentAmountCents(payment.amount);
+}
+
+/**
+ * A card line that names a terminal attempt takes its amount, tip and reference from that approved attempt,
+ * never from the browser. A line that already used its attempt on this bill stays a replay candidate.
+ */
+function bindCardAttempt(payment: PaymentInput, billId: string): PaymentInput {
+  if (!payment.card_attempt_id) return payment;
+  const attempt = getAttempt(payment.card_attempt_id);
+  const reused = attempt?.state === 'consumed' && attempt.bill_id != null && String(attempt.bill_id) === String(billId);
+  try {
+    if (!reused) consumeApprovedAttempt(payment.card_attempt_id, { billId });
+  } catch (error) {
+    if (error instanceof CardError) throw Object.assign(new Error(error.message), { statusCode: error.statusCode });
+    throw error;
+  }
+  if (!attempt) throw Object.assign(new Error('Unknown card payment'), { statusCode: 400 });
+  const exact = (attempt.amount_minor / 100).toFixed(2);
+  if (payment.amount !== undefined && payment.amount !== null && Math.round(Number(payment.amount) * 100) !== attempt.amount_minor) {
+    throw Object.assign(new Error('The amount does not match what the customer approved on the terminal.'), { statusCode: 409 });
+  }
+  if (payment.tip !== undefined && payment.tip !== null && Math.round(Number(payment.tip) * 100) !== attempt.tip_minor) {
+    throw Object.assign(new Error('The tip does not match what the customer approved on the terminal.'), { statusCode: 409 });
+  }
+  return { ...payment, amount: exact, tip: (attempt.tip_minor / 100).toFixed(2), transaction_id: attempt.provider_reference || payment.transaction_id };
 }
 
 function paymentTransactionKey(payment: unknown): string | null {
@@ -512,7 +545,7 @@ function preparePaymentBatch(
   // has always used for any legacy line that predated that field.
   const existingPayments: any[] = deriveBillPaymentDetails(billId) || [];
   payments.forEach(validatePaymentFields);
-  const resolvedPayments = payments.map((payment, index) => {
+  const resolvedPayments = payments.map((payment) => bindCardAttempt(payment, billId)).map((payment, index) => {
     if (PAYMENT_METHODS.has(payment.method)) return payment;
     const configured = payment.method === 'custom'
       ? db.prepare('SELECT id, name FROM payment_methods WHERE id = ? AND is_active = 1').get(payment.payment_method_id) as any
@@ -597,6 +630,7 @@ function preparePaymentBatch(
       ...(payment.payment_method_id !== undefined ? { payment_method_id: payment.payment_method_id } : {}),
     };
     if (payment.transaction_id !== undefined) normalizedPayment.transaction_id = payment.transaction_id;
+    if (payment.card_attempt_id !== undefined) normalizedPayment.card_attempt_id = payment.card_attempt_id;
     if (payment.notes !== undefined) normalizedPayment.notes = payment.notes;
     if (payment.tip !== undefined && payment.tip !== null) normalizedPayment.tip = payment.tip;
     return {
@@ -739,6 +773,7 @@ function applyPaymentBatch(
         tipCents,
         transactionId: line.payment.transaction_id ?? null,
         notes: line.payment.notes ?? null,
+        cardAttemptId: line.payment.card_attempt_id ?? null,
       },
       actorUserId: idempotencyUserId ?? null,
     });
@@ -871,7 +906,7 @@ const refundRateLimit = expressRateLimit({
 // Idempotency: an `Idempotency-Key` makes a retry (dropped response, reconnect)
 // replay the stored result instead of refunding twice. Without a key, a second
 // identical request is still bounded by the unrefunded balance.
-router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cashier'), async (req: Request, res: Response) => {
   try {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -920,11 +955,27 @@ router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cas
       rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:refund`, action: 'refund a sale',
     });
 
-    const result = withTxn(() => {
-      const refunded = refundBill({
-        billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null, amountFromItems: body.amount_from_items === true,
-        approvedByUserId: approver.userId, requestedByUserId: user.userId,
+    const refundInput = {
+      billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null, amountFromItems: body.amount_from_items === true,
+      approvedByUserId: approver.userId, requestedByUserId: user.userId,
+    };
+    // Card tenders go back through the card provider first. If the provider refuses, nothing is changed here.
+    const providerRefunds: Record<string, string> = {};
+    const preview = refundBill({ ...refundInput, dryRun: true });
+    for (const allocation of preview.allocations || []) {
+      if (allocation.adapter !== 'card_terminal') continue;
+      const made = await refundOnProvider({
+        paymentId: allocation.payment_id, amountMinor: allocation.amount_minor, alreadyRefundedMinor: allocation.already_refunded_minor,
+        currency: allocation.currency, userId: approver.userId,
       });
+      providerRefunds[allocation.payment_id] = made.refundReference;
+    }
+    const result = withTxn(() => {
+      const refunded = refundBill({ ...refundInput, providerRefunds });
+      for (const r of refunded.refunds) {
+        const ref = providerRefunds[r.payment_id];
+        if (ref) markRefundConsumed(ref, r.id);
+      }
       if (idemKey) {
         db.prepare('INSERT INTO payment_idempotency (user_id, idempotency_key, bill_id, request_hash, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
           .run(user.userId, idemKey, billId, requestHash, JSON.stringify(refunded), now());
@@ -937,7 +988,7 @@ router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cas
     if (error instanceof ApprovalError) {
       return res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
     }
-    const statusCode = (error instanceof PaymentError || error instanceof InventoryError) && error.statusCode ? error.statusCode : 500;
+    const statusCode = (error instanceof PaymentError || error instanceof InventoryError || error instanceof CardError) && error.statusCode ? error.statusCode : 500;
     if (statusCode >= 500) console.error('[API] Bill refund failed:', error);
     res.status(statusCode).json({ error: statusCode >= 500 ? 'Refund failed' : error.message });
   }

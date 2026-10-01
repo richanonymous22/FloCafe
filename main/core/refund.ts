@@ -57,6 +57,18 @@ export interface RefundBillInput {
   approvedByUserId: string;
   /** The authenticated user who asked for it. */
   requestedByUserId: string;
+  /** Work out which tenders would be touched and stop, writing nothing (used to refund cards at the provider first). */
+  dryRun?: boolean;
+  /** Provider refunds already made, by payment id. Required for every card_terminal tender the refund touches. */
+  providerRefunds?: Record<string, string>;
+}
+
+export interface RefundAllocation {
+  payment_id: string;
+  adapter: string;
+  amount_minor: number;
+  already_refunded_minor: number;
+  currency: string;
 }
 
 export interface RefundBillResult {
@@ -73,6 +85,8 @@ export interface RefundBillResult {
   loyalty_points_reversed: number;
   wallet_points_returned: number;
   idempotentReplay: boolean;
+  /** Which tenders the money goes back to, in order. */
+  allocations?: RefundAllocation[];
 }
 
 const REFUNDABLE_STATES = ['captured', 'settled', 'refunded'];
@@ -199,6 +213,30 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       if (quantity > 0) restockPlan.push({ orderItemId: w.orderItemId, quantity });
     }
 
+    const allocations: RefundAllocation[] = [];
+    {
+      let left = amount;
+      for (const payment of payments) {
+        if (left <= 0) break;
+        const take = Math.min(refundableOf(payment), left);
+        if (take <= 0) continue;
+        allocations.push({ payment_id: payment.id, adapter: payment.adapter, amount_minor: take, already_refunded_minor: payment.refunded_minor, currency: payment.currency });
+        left -= take;
+      }
+    }
+    if (input.dryRun) {
+      return {
+        bill_id: bill.id, amount_minor: amount, currency: payments[0]?.currency || 'GBP', refunds: [], payments, fully_refunded: false,
+        refundable_remaining_minor: totalRefundable - amount, restocked: [], lines: [], cash_drawer_recorded: false,
+        loyalty_points_reversed: 0, wallet_points_returned: 0, idempotentReplay: false, allocations,
+      } as RefundBillResult;
+    }
+    for (const a of allocations) {
+      if (a.adapter === 'card_terminal' && !input.providerRefunds?.[a.payment_id]) {
+        throw new PaymentError('A card payment can only be refunded through the card provider.', 409);
+      }
+    }
+
     const refunds: RefundRecord[] = [];
     const restocked: { order_item_id: number; quantity: number }[] = [];
     let cashRefundMinor = 0;
@@ -214,6 +252,7 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
         amountMinor: take,
         reason,
         actorUserId: input.approvedByUserId,
+        providerReference: input.providerRefunds?.[payment.id] ?? null,
         // Stock is returned once, against the first tender touched.
         items: firstRefund && restockPlan.length
           ? restockPlan.map((r) => ({ orderItemId: r.orderItemId, quantity: r.quantity }))
@@ -314,7 +353,7 @@ export function refundBill(input: RefundBillInput): RefundBillResult {
       fully_refunded: refundableAfter === 0, refundable_remaining_minor: refundableAfter,
       restocked, lines: recordedLines, cash_drawer_recorded: cashDrawerRecorded,
       loyalty_points_reversed: loyaltyPointsReversed, wallet_points_returned: walletPointsReturned,
-      idempotentReplay: false,
+      idempotentReplay: false, allocations,
     };
   });
 }

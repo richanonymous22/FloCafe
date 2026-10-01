@@ -5485,6 +5485,48 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 102,
+    name: 'card_attempts',
+    up: () => {
+      // CARD TERMINAL ATTEMPTS. One row per request to a card provider (a sale or a refund). A sale only
+      // becomes a payment when the provider says approved AND the till consumes the attempt exactly once;
+      // `consumed_payment_id` is that link. Nothing existing is altered.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS card_attempts (
+          id                  TEXT PRIMARY KEY,
+          kind                TEXT NOT NULL DEFAULT 'sale' CHECK (kind IN ('sale', 'refund')),
+          provider            TEXT NOT NULL,
+          simulated           INTEGER NOT NULL DEFAULT 0,
+          terminal_id         TEXT,
+          bill_id             INTEGER,
+          amount_minor        INTEGER NOT NULL CHECK (amount_minor > 0),
+          tip_minor           INTEGER NOT NULL DEFAULT 0,
+          currency            TEXT NOT NULL,
+          state               TEXT NOT NULL DEFAULT 'pending'
+            CHECK (state IN ('pending', 'approved', 'declined', 'cancelled', 'timed_out', 'failed', 'consumed')),
+          provider_reference  TEXT,
+          auth_code           TEXT,
+          card_scheme         TEXT,
+          card_last4          TEXT,
+          message             TEXT,
+          parent_payment_id   TEXT,
+          consumed_payment_id TEXT,
+          consumed_refund_id  TEXT,
+          created_by          TEXT,
+          created_at          TEXT NOT NULL,
+          updated_at          TEXT NOT NULL,
+          expires_at          TEXT NOT NULL,
+          organization_id     TEXT,
+          location_id         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_card_attempts_state ON card_attempts(state, created_at);
+        CREATE INDEX IF NOT EXISTS idx_card_attempts_bill ON card_attempts(bill_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_card_attempts_provider_ref
+          ON card_attempts(provider, provider_reference, kind) WHERE provider_reference IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

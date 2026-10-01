@@ -58,6 +58,7 @@ import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
 import { stocktakeRoutes } from './stocktakes';
+import { cardRoutes } from './card';
 import { activationRoutes } from './activation';
 import { updateRoutes } from './updates';
 import { requireTradingLicence } from '../middleware/license-gate';
@@ -100,7 +101,9 @@ export function registerRoutes(app: Express): void {
   app.post('/api/orders', requireTradingLicence);
   app.post('/api/orders/:id/items', requireTradingLicence);
   app.post('/api/bills/generate', requireTradingLicence);
+  app.post('/api/bills/:id/payment', requireTradingLicence);
   app.post('/api/bills/:id/payments', requireTradingLicence);
+  app.post('/api/card/attempts', requireTradingLicence);
   app.post('/api/retail/checkout', requireTradingLicence);
 
   // Auth routes
@@ -108,6 +111,7 @@ export function registerRoutes(app: Express): void {
   app.use('/api/retail', retailRoutes);
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/stocktakes', stocktakeRoutes);
+  app.use('/api/card', cardRoutes);
   app.use('/api/activation', activationRoutes);
   app.use('/api/updates', updateRoutes);
   app.use('/api/suppliers', supplierRoutes);

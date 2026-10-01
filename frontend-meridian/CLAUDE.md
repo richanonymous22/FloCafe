@@ -107,8 +107,10 @@ make sense together.
 
 - A till with no server connection falls back to the cached local flow; the connected-only screens (stocktake,
   suppliers and purchase orders, period reports, options) are not offered then.
-- Cards are recorded by staff as approved on their own terminal (no provider integration yet); the till labels
-  such takings as not confirmed by a card provider.
+- With no card provider chosen, cards are recorded by staff as approved on their own terminal and the till labels
+  such takings as not confirmed by a card provider. With a provider (Settings, Card payments) the till sends the
+  amount to the terminal and only the provider's answer approves it (`05d-cards.js`, `04-register-kitchen.js`
+  `providerCardFlow`). Only a simulated provider exists so far; see `docs/CARD_PROVIDERS.md`.
 - Auth is the server's: account sign-in plus a per-staff PIN checked on the server.
 
 ## Conventions to keep

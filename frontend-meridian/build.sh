@@ -29,6 +29,7 @@ mkdir -p dist
       src/05-backoffice.js \
       src/05b-stock-tools.js \
       src/05c-licence.js \
+      src/05d-cards.js \
       src/06-dashboard-ai-kiosk.js
   printf '\n</script>\n</body>\n</html>\n'
 } > dist/meridian-pos.html
@@ -37,7 +38,7 @@ mkdir -p dist
 if command -v node >/dev/null 2>&1; then
   cat src/00-plemmo-api.js src/02-data.js src/03-app-shell.js src/03b-plemmo-session.js src/03c-plemmo-catalogue.js src/03d-plemmo-orders.js src/03e-plemmo-cash.js src/03f-plemmo-inventory.js src/03g-plemmo-tables.js src/03h-plemmo-staff.js src/03i-plemmo-reports.js src/03j-plemmo-sync.js src/03k-plemmo-till.js src/03l-plemmo-admin.js \
       src/04-register-kitchen.js \
-      src/05-backoffice.js src/06-dashboard-ai-kiosk.js > /tmp/meridian-check.js
+      src/05-backoffice.js src/05b-stock-tools.js src/05c-licence.js src/05d-cards.js src/06-dashboard-ai-kiosk.js > /tmp/meridian-check.js
   node --check /tmp/meridian-check.js && echo "JS syntax OK"
 fi
 

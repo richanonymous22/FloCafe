@@ -28,6 +28,7 @@ import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
 import { recordAppliedPaymentLine, PaymentError } from '../core/payment';
+import { refreshOffers } from '../core/offers';
 import { CardError, consumeApprovedAttempt, getAttempt, markRefundConsumed, refundOnProvider } from '../core/card-terminal/service';
 import { ApprovalError, resolveApprover } from '../core/approval';
 import { refundBill, listBillPayments, listRefundableLines } from '../core/refund';
@@ -182,6 +183,8 @@ router.get('/order/:orderId', requireRole('owner', 'manager', 'cashier'), (req: 
  */
 export function generateBillForOrder(orderId: number | string): { bill: any; isNew: boolean } {
   const db = getDatabase();
+  // Bring any automatic offer up to date before the bill copies the order's totals.
+  withTxn(() => { refreshOffers(orderId); });
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
   if (!order) {
     const error: any = new Error('Order not found');
@@ -1185,7 +1188,7 @@ router.post('/:id/applyDiscount', refundRateLimit, requireRole('owner', 'manager
       // settlement boundary) holds the pack-rounded payable total (#170).
       db.prepare(`
         UPDATE orders SET discount_amount = ?, discount_type = ?, discount_value = ?,
-          discount_reason = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?,
+          discount_reason = ?, discount_source = NULL, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?,
           total = ?, round_off = ?, updated_at = ?
         WHERE id = ?
       `).run(

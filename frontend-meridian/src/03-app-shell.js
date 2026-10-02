@@ -176,8 +176,19 @@ const NAV=[
 const TITLES={home:'Home',pos:'Register',tables:'Tables',kitchen:'Kitchen',orders:'Orders',items:'Items & stock',customers:'Customers',team:'Team',cash:'Cash drawer',reports:'Reports',assistant:'Assistant',settings:'Settings'};
 const navVisible=n=>!n.sep&&(!n.when||n.when())&&(!n.perm||can(n.perm));
 function render(){if(!U.user||!S)return;renderRail();renderTopbar();renderView();}
+// Orders waiting on the kitchen. On a connected till the tickets live on the kitchen display, so the count is the
+// server's (refreshKitchenQueue); local tickets only exist when no server is reachable.
+function kitchenQueue(){
+  if(typeof live==='function'&&live())return(U.kq&&U.kq.open)||0;
+  return S.tickets.filter(t=>t.status==='new'||t.status==='prep').length;
+}
+async function refreshKitchenQueue(){
+  if(typeof live!=='function'||!live())return;
+  try{const q=await PlemmoAPI.get('/kitchen-queue');const changed=!U.kq||U.kq.open!==q.open||U.kq.late!==q.late;U.kq=q;if(changed){renderRail();if(U.view==='home')renderView();}}catch(e){/* keep the last count */}
+}
+setTimeout(refreshKitchenQueue,1500);setInterval(refreshKitchenQueue,30000);
 function renderRail(){
-  const kq=S.tickets.filter(t=>t.status==='new'||t.status==='prep').length;
+  const kq=kitchenQueue();
   const low=lowStock().length;
   const badges={kitchen:kq?[kq,'']:null,items:low?[low,'warn']:null};
   let html=`<div class="mark" aria-hidden="true">M</div>`,lastSep=true;
@@ -286,7 +297,7 @@ function renderLock(){
      <div class="lock-time num" id="lockTime">${fmtT(now)}</div>
      <div class="lock-date">${fmtDL(now)}</div>
      <div class="lock-biz">${esc(S.settings.name)}</div>
-     <div class="lock-meta"><span><b>${todays.length}</b> orders today</span><span><b>${onNow.length}</b> on shift</span>${S.tickets.filter(t=>t.status==='new'||t.status==='prep').length?`<span><b>${S.tickets.filter(t=>t.status==='new'||t.status==='prep').length}</b> in the kitchen</span>`:''}</div>
+     <div class="lock-meta"><span><b>${todays.length}</b> orders today</span><span><b>${onNow.length}</b> on shift</span>${kitchenQueue()?`<span><b>${kitchenQueue()}</b> in the kitchen</span>`:''}</div>
    </section>
    <section class="lock-r">
      <div class="seg" role="tablist"><button class="${LK.mode==='signin'?'on':''}" data-act="lkMode" data-m="signin">Sign in</button><button class="${LK.mode==='clock'?'on':''}" data-act="lkMode" data-m="clock">Clock in or out</button></div>

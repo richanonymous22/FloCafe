@@ -29,6 +29,7 @@ function statusBody() {
   return {
     activated: isActivated(),
     requires_activation: getLicensePolicy().requireActivation,
+    pilot: getLicensePolicy().pilot,
     trading_allowed: gate.ok,
     trading_blocked_reason: gate.ok ? null : gate.message,
     device_id: device,

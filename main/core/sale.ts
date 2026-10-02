@@ -82,6 +82,7 @@ import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
 import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext } from './context';
 import { appendOrderSnapshot, appendOrderItemSnapshot, appendBillSnapshot } from './sync/sales-events';
+import { refreshOffers } from './offers';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -698,6 +699,8 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       subtotal, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns),
       taxRollup.snapshotJson, total, roundOff, now(), orderId,
     );
+    // Automatic offers (a no-op when none apply): the sale's discount, tax and total follow from them.
+    refreshOffers(Number(orderId));
 
     // Sale creation itself has no hospitality-specific branch anymore: this
     // used to be a direct `UPDATE tables ...` here. It now goes through the
@@ -968,6 +971,9 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
       db.prepare(`UPDATE bills SET total = ?, balance = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, round_off = ?, updated_at = ? WHERE id = ?`)
         .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
     }
+
+    // The lines changed: bring any automatic offer up to date (a person's discount, if present, is left alone).
+    refreshOffers(input.saleId);
 
     const sale = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(input.saleId)) as SaleRecord;
     const lines = attachEffectiveAddons(

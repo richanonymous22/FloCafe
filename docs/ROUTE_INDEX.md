@@ -129,6 +129,7 @@ complete list.
 | GET | `/api/kds/orders` | see handler | `main/routes/kds.ts` |
 | GET | `/api/kds/pairing` | see handler | `main/routes/kds.ts` |
 | POST | `/api/kds/pairing` | role: owner, manager | `main/routes/kds.ts` |
+| GET | `/api/kitchen-queue` | role: owner, manager, cashier, waiter, chef | `main/routes/kitchen-queue.ts` |
 | GET | `/api/kitchen-stations` | see handler | `main/routes/kitchen-stations.ts` |
 | POST | `/api/kitchen-stations` | role: owner, manager | `main/routes/kitchen-stations.ts` |
 | DELETE | `/api/kitchen-stations/:id` | role: owner, manager | `main/routes/kitchen-stations.ts` |
@@ -157,6 +158,13 @@ complete list.
 | POST | `/api/mobile/rotate-code` | role: owner | `main/routes/index.ts` |
 | GET | `/api/more-apps` | see handler | `main/routes/more-apps.ts` |
 | GET | `/api/more-apps/revflo` | see handler | `main/routes/more-apps.ts` |
+| GET | `/api/offers` | role: owner, manager, cashier, waiter | `main/routes/offers.ts` |
+| POST | `/api/offers` | permission: offers.manage | `main/routes/offers.ts` |
+| DELETE | `/api/offers/:id` | permission: offers.manage | `main/routes/offers.ts` |
+| PUT | `/api/offers/:id` | permission: offers.manage | `main/routes/offers.ts` |
+| POST | `/api/offers/:id/active` | permission: offers.manage | `main/routes/offers.ts` |
+| POST | `/api/offers/preview` | role: owner, manager, cashier, waiter | `main/routes/offers.ts` |
+| GET | `/api/offers/usage` | permission: reports.view | `main/routes/offers.ts` |
 | PATCH | `/api/order-items/:id/status` | see handler | `main/routes/order-items.ts` |
 | GET | `/api/orders` | role: owner, manager, cashier, waiter | `main/routes/orders.ts` |
 | POST | `/api/orders` | permission: sales.create | `main/routes/orders.ts` |
@@ -353,4 +361,4 @@ complete list.
 | DELETE | `/api/users/:id/locations/:locationId` | permission: locations.manage | `main/routes/staff.ts` |
 | POST | `/api/users/:id/reactivate` | permission: employees.manage | `main/routes/staff.ts` |
 
-340 routes.
+348 routes.

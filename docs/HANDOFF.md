@@ -87,18 +87,21 @@ PLEMMO_CLOUD_DB_URL=postgres://... npm run test:pg-sync   # needs a PostgreSQL
 
 ## 6. What you must supply before launch
 
-1. **Card provider**: choose one, get sandbox credentials and a terminal, implement the provider file (one file against
-   `CardProvider`, see `docs/CARD_PROVIDERS.md`), and add settlement-report import (payments stay `captured` until then).
-2. **Windows code-signing certificate** and, for the Microsoft Store, the Partner Center identity values; the installer
-   product name and icons; an update feed (GitHub releases of the final repository, or an https feed).
-3. **Cloud hosting accounts**: host, PostgreSQL, domain, TLS, backup schedule storage, error tracking and alerting
-   (`docs/CLOUD_HOSTING.md` has the recommendation and a rehearsed restore).
-4. **Licence keys**: generate the Ed25519 signing key in your secret store, pin the public key(s) in release builds,
-   decide the rotation routine (`docs/OPERATOR_RUNBOOK.md`).
-5. **Real-device testing** of printers, scanners, drawers, tablets and the Windows installer; a **pilot merchant** (WP12).
-6. **Product decisions still open**: offers/promotions,
-   stock transfers screen, low-stock alert list,
-   (product CSV import is now in Items & stock → Items file).
+Decisions already taken: the real card provider and the Windows code-signing certificate are **deferred** (the pilot uses
+the simulated terminal and an unsigned installer; add a certificate if a client later asks for one).
+
+1. **For the pilot** (`docs/PILOT_GUIDE.md`): nothing but a Windows PC and one trusted merchant. Build the installer from
+   the "Pilot Windows installer" workflow.
+2. **Before paying merchants:**
+   - a **card provider** (chosen, sandbox credentials, a terminal) and the one-file adapter plus settlement import
+     (`docs/CARD_PROVIDERS.md`);
+   - the **licence key** (`docs/LICENCE_KEYS.md`, a 2-minute script) and **cloud hosting** (a host, a PostgreSQL database,
+     a domain with TLS, backup storage, alerting: `docs/CLOUD_HOSTING.md`);
+   - optionally a code-signing certificate, and for the Microsoft Store the Partner Center identity; the installer product
+     name and icons; where updates are published.
+3. **Real-device testing** of printers, scanners, drawers, tablets: `docs/HARDWARE_TEST_MATRIX.md`.
+4. **Product decisions still open:** a stock transfers screen (only matters with two or more locations); syncing offers
+   between tills and to the cloud.
 
 ## 7. Known limits
 

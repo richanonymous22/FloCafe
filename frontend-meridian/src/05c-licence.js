@@ -15,6 +15,7 @@ async function licenceCheck(){
   try{U.lic.status=await PlemmoAPI.get('/activation/status');U.lic.err=null;}
   catch(e){U.lic.err=e&&e.status===403?'You don’t have permission to see licence details.':null;return;}
   if(U.lic.status.trading_allowed)U.lic.dismissed=false;
+  drawPilotChip();
   drawLicenceGate();
   if(U.view==='settings'&&U.set.tab==='licence')renderView();
 }
@@ -23,6 +24,13 @@ setTimeout(licenceCheck,800);
 if(!U.lic.timer)U.lic.timer=setInterval(licenceCheck,60000);
 window.addEventListener('plemmo-licence-blocked',()=>{U.lic.dismissed=false;licenceCheck();});
 
+// A pilot installer (no licence enforced, simulated card terminal) says so on every screen.
+function drawPilotChip(){
+  let el=document.getElementById('pilot-chip');
+  const on=!!(U.lic.status&&U.lic.status.pilot)&&PlemmoAPI.isAuthenticated();
+  if(!on){if(el)el.remove();return;}
+  if(!el){el=document.createElement('div');el.id='pilot-chip';el.textContent='PILOT VERSION';el.setAttribute('role','note');document.body.appendChild(el);}
+}
 const LIC_TITLES={unactivated:'Activate this till',suspended:'Sales are paused',revoked:'This account is closed',expired:'The licence has expired',unlicensed:'The licence could not be checked',device_revoked:'This device was removed'};
 function licenceGateHTML(st){
   const reason=st.activated?(st.license?st.license.status:'unlicensed'):'unactivated';
@@ -76,6 +84,7 @@ function licenceHTML(){
   const badge=(ok,text)=>`<span class="badge ${ok?'ok':'warn'}">${licEsc(text)}</span>`;
   const label={active:'Active',grace:'Expired, in grace period',needs_verification:'Active: needs a check',suspended:'Suspended',revoked:'Closed',expired:'Expired',unlicensed:'Not verified'};
   return`<div class="panel"><div class="panel-b">
+   ${st.pilot?row('Pilot version','This is a test version for a trusted tester. No licence is needed and a simulated card terminal is available. It is not the version sold to paying merchants.',badge(false,'Pilot')):''}
    ${row('Trading',st.trading_allowed?'Sales are open on this till':licEsc(st.trading_blocked_reason||''),badge(st.trading_allowed,st.trading_allowed?'Open':'Paused'))}
    ${L?row('Licence',`Plan: <b>${licEsc(L.plan)}</b>${L.features&&L.features.length?'. Includes '+licEsc(L.features.join(', ')):''}`,badge(L.status==='active',label[L.status]||L.status)):row('Licence',st.requires_activation?'This till has not been activated':'No licence on this till (not required for this build)','')}
    ${L?row('Valid until',L.expires_at?licWhen(L.expires_at)+(L.grace_days?` (then ${L.grace_days} days of grace)`:''):'No expiry',''):''}

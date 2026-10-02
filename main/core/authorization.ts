@@ -40,7 +40,8 @@ export type Permission =
   | 'purchasing.manage' | 'reports.z'
   | 'reports.view'
   | 'employees.manage'
-  | 'locations.manage';
+  | 'locations.manage'
+  | 'offers.manage';
 
 export type Role = 'owner' | 'manager' | 'cashier' | 'waiter' | 'chef';
 
@@ -63,11 +64,11 @@ const LOCATION_UNRESTRICTED_ROLES: readonly Role[] = ['owner', 'manager'];
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: [
     'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.discount', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
-    'inventory.transfer', 'inventory.stocktake', 'purchasing.manage', 'reports.view', 'reports.z', 'employees.manage', 'locations.manage',
+    'inventory.transfer', 'inventory.stocktake', 'purchasing.manage', 'reports.view', 'reports.z', 'employees.manage', 'locations.manage', 'offers.manage',
   ],
   manager: [
     'sales.create', 'sales.refund', 'sales.void', 'sales.price_override', 'sales.discount', 'sales.reconcile', 'inventory.view', 'inventory.adjust', 'inventory.receive',
-    'inventory.transfer', 'inventory.stocktake', 'purchasing.manage', 'reports.view', 'reports.z', 'employees.manage',
+    'inventory.transfer', 'inventory.stocktake', 'purchasing.manage', 'reports.view', 'reports.z', 'employees.manage', 'offers.manage',
   ],
   // NOTE (SYNC-F Part M): sales.reconcile is deliberately withheld from
   // cashier/waiter/chef. Resolving a financial conflict is more powerful than

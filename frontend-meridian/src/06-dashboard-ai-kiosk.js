@@ -77,7 +77,8 @@ VIEWS.home=()=>{
   // needs attention
   const att=[];
   lowStock().forEach(p=>att.push({sev:p.stock<=0?'bad':'warn',t:`${p.name}: ${p.stock<=0?'sold out':p.stock+' left'}`,s:'Reorder or mark it sold out',act:'goLow'}));
-  const late=S.tickets.filter(t=>t.status!=='ready'&&t.status!=='done'&&now-t.ts>=10*MIN);
+  if(live()&&U.kq&&U.kq.late>0)att.unshift({sev:'bad',t:`${U.kq.late} order${U.kq.late>1?'s':''} waiting over ${U.kq.late_after_minutes} minutes in the kitchen`,s:`The oldest has waited ${U.kq.oldest_minutes} minutes`,act:'nav',v:'kitchen'});
+  const late=live()?[]:S.tickets.filter(t=>t.status!=='ready'&&t.status!=='done'&&now-t.ts>=10*MIN);
   if(late.length)att.unshift({sev:'bad',t:`${late.length} kitchen ticket${late.length>1?'s':''} over 10 minutes`,s:'Oldest is order '+late.sort((a,b)=>a.ts-b.ts)[0].no,act:'nav',v:'kitchen'});
   S.orders.filter(o=>o.status==='open'&&o.table&&now-o.opened>=60*MIN).forEach(o=>att.push({sev:'warn',t:`Table ${(tableOf(o.table)||{}).name} seated over an hour`,s:`${money(o.total)} not paid yet`,act:'nav',v:'tables'}));
   if(!S.drawer.open&&can('cash')&&new Date().getHours()>=s.openHour&&new Date().getHours()<s.closeHour)att.push({sev:'info',t:'The cash drawer isn’t open',s:'Open it with a float before taking cash',act:'nav',v:'cash'});

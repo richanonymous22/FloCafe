@@ -56,6 +56,7 @@ export type AuditEventType =
   | 'sale.discount_applied'
   | 'payment.recorded'
   | 'payment.voided'
+  | 'offer.changed'
   | 'card.attempt_started'
   | 'card.attempt_approved'
   | 'card.attempt_cancelled'

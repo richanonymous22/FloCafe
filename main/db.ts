@@ -5540,6 +5540,62 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       }
     },
   },
+  {
+    version: 104,
+    name: 'offers',
+    up: () => {
+      // OFFERS. Automatic promotions (multi-buy, buy-X-get-Y-free, percent off, amount off, fixed price) that the till
+      // server applies to a sale as an order-level discount, so tax, bills, refunds and reports already agree with
+      // them. `order_offers` records which offer saved how much on which order. `orders.discount_source` says whether
+      // the order's discount came from offers ('offer') or from a person (NULL): a person's discount always wins.
+      // Everything is additive; no existing row changes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS offers (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          kind            TEXT NOT NULL CHECK (kind IN ('percent_off', 'amount_off', 'fixed_price', 'multi_buy_price', 'buy_get_free')),
+          scope           TEXT NOT NULL DEFAULT 'all' CHECK (scope IN ('all', 'category', 'products')),
+          category_id     TEXT,
+          product_ids     TEXT,
+          percent         REAL,
+          amount_minor    INTEGER,
+          price_minor     INTEGER,
+          buy_qty         INTEGER,
+          get_qty         INTEGER,
+          bundle_qty      INTEGER,
+          starts_at       TEXT,
+          ends_at         TEXT,
+          days_of_week    TEXT,
+          time_from       TEXT,
+          time_to         TEXT,
+          customer_rule   TEXT NOT NULL DEFAULT 'any' CHECK (customer_rule IN ('any', 'member', 'tier')),
+          tiers           TEXT,
+          location_id     TEXT,
+          priority        INTEGER NOT NULL DEFAULT 0,
+          is_active       INTEGER NOT NULL DEFAULT 1,
+          archived_at     TEXT,
+          created_by      TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL,
+          organization_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_offers_active ON offers(is_active, archived_at);
+        CREATE TABLE IF NOT EXISTS order_offers (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          order_id      INTEGER NOT NULL,
+          offer_id      TEXT NOT NULL,
+          offer_name    TEXT NOT NULL,
+          savings_minor INTEGER NOT NULL,
+          units         INTEGER NOT NULL DEFAULT 0,
+          created_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_order_offers_order ON order_offers(order_id);
+        CREATE INDEX IF NOT EXISTS idx_order_offers_offer ON order_offers(offer_id);
+      `);
+      const cols = db.prepare("PRAGMA table_info('orders')").all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'discount_source')) db.exec('ALTER TABLE orders ADD COLUMN discount_source TEXT');
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

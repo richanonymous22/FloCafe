@@ -28,6 +28,7 @@ function stockToolsBody(tab){
   if(tab==='sup')return suppliersBody();
   if(tab==='po')return purchasesBody();
   if(tab==='menu')return menuFileBody();
+  if(tab==='offers')return offersBody();
   return importBody();
 }
 

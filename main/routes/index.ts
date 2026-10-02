@@ -58,7 +58,10 @@ import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
 import { stocktakeRoutes } from './stocktakes';
+import { refreshOffers } from '../core/offers';
+import { offerRoutes } from './offers';
 import { cardRoutes } from './card';
+import { kitchenQueueRoutes } from './kitchen-queue';
 import { activationRoutes } from './activation';
 import { updateRoutes } from './updates';
 import { requireTradingLicence } from '../middleware/license-gate';
@@ -112,6 +115,8 @@ export function registerRoutes(app: Express): void {
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/stocktakes', stocktakeRoutes);
   app.use('/api/card', cardRoutes);
+  app.use('/api/offers', offerRoutes);
+  app.use('/api/kitchen-queue', kitchenQueueRoutes);
   app.use('/api/activation', activationRoutes);
   app.use('/api/updates', updateRoutes);
   app.use('/api/suppliers', supplierRoutes);
@@ -508,6 +513,7 @@ export function registerRoutes(app: Express): void {
             .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
         }
 
+        if (!orderCancelled) refreshOffers(orderId); // a removed item can change which offers apply
         const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
         const items = attachEffectiveAddons(db, db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId).map(parseItemJson) as any[]);
         return { updatedOrder, items, orderCancelled };

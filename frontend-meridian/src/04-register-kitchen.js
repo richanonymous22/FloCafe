@@ -2,7 +2,7 @@
 /* =====================================================================
    REGISTER
    ===================================================================== */
-function cartTotals(c){c=c||U.cart;return totalsFor(c.items,c.discount);}
+function cartTotals(c){c=c||U.cart;return totalsFor(c.items,c.discount||offerFor(c));}
 function inCartQty(pid){return sum(U.cart.items.filter(l=>l.pid===pid),l=>l.qty);}
 let popCache={n:-1,ids:[]};
 function popularIds(){
@@ -68,7 +68,8 @@ function gridHTML(){
     </button>`;}).join('');
 }
 function cartHTML(){
-  const c=U.cart,t=cartTotals(),cu=c.custId?cust(c.custId):null,o=c.orderId?orderOf(c.orderId):null,tb=c.table?tableOf(c.table):null;
+  if(typeof scheduleCartOffers==='function')scheduleCartOffers();
+  const c=U.cart,t=cartTotals(),dd=c.discount||offerFor(c),cu=c.custId?cust(c.custId):null,o=c.orderId?orderOf(c.orderId):null,tb=c.table?tableOf(c.table):null;
   const hosp=hospitality(),L=S.settings.loyalty;
   // With the till server connected, points are the server's cashback wallet and are spent as a
   // payment (Wallet tender), not as a locally calculated discount.
@@ -89,7 +90,7 @@ function cartHTML(){
    <div class="tape-foot">
     <div class="tots">
      <div class="tot-row"><span>Subtotal</span><span class="num">${money(t.subtotal)}</span></div>
-     ${t.disc?`<div class="tot-row disc"><span>${esc(c.discount.reason)} ${c.discount.kind==='pct'?c.discount.value+'%':''} <button class="linkx" data-act="rmDisc">Remove</button></span><span class="num">−${money(t.disc)}</span></div>`:''}
+     ${t.disc?`<div class="tot-row disc"><span>${esc(dd.reason)} ${dd.kind==='pct'?dd.value+'%':''} ${dd.auto?'':'<button class="linkx" data-act="rmDisc">Remove</button>'}</span><span class="num">−${money(t.disc)}</span></div>`:''}
      <div class="tot-row"><span>${esc(S.settings.taxName)} ${S.settings.taxRate}%${S.settings.taxInclusive?' included':''}</span><span class="num">${money(t.tax)}</span></div>
      <div class="tot-big"><span>Total</span><span class="num">${money(t.total)}</span></div>
     </div>
@@ -936,7 +937,7 @@ async function finishSalePlemmo(){
     items:c.items.map(l=>({...l,sent:true})),
     subtotal:Number(bill.subtotal)||cartTotals(c).subtotal,tax:Number(bill.tax_amount)||0,
     discAmt:Number(bill.discount_amount)||0,total:Number(bill.total)||0,
-    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a,l4:p.l4,sim:p.sim})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||null});
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a,l4:p.l4,sim:p.sim})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||(Number(bill.discount_amount)>0?{reason:bill.discount_reason||'Discount'}:null)});
   if(!existing)S.orders.push(o);
   const change=PAY.change||0;
   PAY.done=true;PAY.L.close();PAY=null;

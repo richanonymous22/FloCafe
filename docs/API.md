@@ -1012,6 +1012,14 @@ Each item in an order has its own status, allowing:
 
 ---
 
+## Offers
+
+See `docs/OFFERS.md` for the rules. `GET /api/offers` (owner, manager, cashier, waiter), `POST /api/offers`,
+`PUT /api/offers/:id`, `POST /api/offers/:id/active {active}`, `DELETE /api/offers/:id` (archives) need `offers.manage`
+(owner, manager). `POST /api/offers/preview {items:[{product_id, variant_id?, quantity}], customer_id?}` returns
+`{savings_minor, applications:[{offerId, name, savingsMinor, units}]}`. `GET /api/offers/usage?from=&to=` needs
+`reports.view`. An order's offer discount is `orders.discount_source = 'offer'`.
+
 ## Role-Based Access
 
 | Role | Access |

@@ -27,12 +27,14 @@ function cardsHTML(){
   const owner=!!(me()&&(me().plemmoRole==='owner'||me().plemmoRole==='manager'));
   const row=(t,sub,ctl)=>`<div class="set-row"><div class="sr-t"><b>${t}</b>${sub?`<small>${sub}</small>`:''}</div>${ctl||''}</div>`;
   const opts=['none',...c.cfg.available].map(id=>`<option value="${esc(id)}" ${c.cfg.provider===id?'selected':''}>${esc(PROVIDER_NAMES[id]||id)}</option>`).join('');
+  const pilotNote=(U.lic&&U.lic.status&&U.lic.status.pilot)?row('Pilot version','Choose the simulated terminal to try card payments end to end. No real card is ever charged. Takings are labelled simulated on receipts and reports.',''):'';
   const state=!c.cfg.enabled?'Cards are taken on a separate terminal and recorded by hand. The till labels them as not confirmed by a card provider.'
     :c.termErr?`<span style="color:var(--bad-text)">${esc(c.termErr)}</span>`
     :(c.terminals||[]).length?(c.terminals.map(t=>`${esc(t.label)}: ${t.online?'online':'offline'}`).join('; ')):'No terminal found.';
   const rec=c.rec;
   const orph=rec?rec.orphans:[],mism=rec?rec.mismatches:[];
   return`<div class="panel"><div class="panel-b">
+   ${pilotNote}
    ${row('Card provider','Cards the terminal approves are recorded as confirmed card payments. Everything else stays marked unconfirmed.',`<select class="input" style="width:auto" data-ch="cardProvider" ${owner?'':'disabled'}>${opts}</select>`)}
    ${row('Terminal',state,c.cfg.enabled?`<button class="btn" data-act="cardsRefresh">Check again</button>`:'')}
    ${c.cfg.simulated?row('Simulated terminal','No real card is ever charged. Amounts ending .05 are declined, .06 never answer, .07 are offline, and refunds ending .13 are rejected, so you can practise every outcome.',''):''}

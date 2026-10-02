@@ -8,6 +8,7 @@
  *     "requireActivation": true,                       // trading needs an activated, licensed device
  *     "publicKeys": { "k1": "-----BEGIN PUBLIC KEY…" }, // licence-signing keys this build trusts (rotation: list old + new)
  *     "cloudUrl": "https://…"                          // where activation codes without a URL connect
+ *     "pilot": true, "allowCardSimulator": true        // pilot installers only (scripts/prepare-release.cjs --pilot)
  *   }
  *
  * With `publicKeys` present, a licence is only accepted if it carries a valid signature from one of these
@@ -22,9 +23,13 @@ export interface LicensePolicy {
   requireActivation: boolean;
   publicKeys: Record<string, string>;
   cloudUrl: string;
+  /** A pilot installer for a trusted tester: no licence enforced. Shown in the till so nobody mistakes it for a release. */
+  pilot: boolean;
+  /** The simulated card terminal may be chosen in this build (pilot builds only). */
+  allowCardSimulator: boolean;
 }
 
-const NONE: LicensePolicy = { requireActivation: false, publicKeys: {}, cloudUrl: '' };
+const NONE: LicensePolicy = { requireActivation: false, publicKeys: {}, cloudUrl: '', pilot: false, allowCardSimulator: false };
 
 function candidatePaths(): string[] {
   const paths: string[] = [];
@@ -47,6 +52,8 @@ export function getLicensePolicy(): LicensePolicy {
         requireActivation: raw.requireActivation === true,
         publicKeys: raw.publicKeys && typeof raw.publicKeys === 'object' ? raw.publicKeys : {},
         cloudUrl: typeof raw.cloudUrl === 'string' ? raw.cloudUrl.trim().replace(/\/+$/, '') : '',
+        pilot: raw.pilot === true,
+        allowCardSimulator: raw.allowCardSimulator === true && raw.pilot === true,
       };
       return cached;
     } catch (e) {

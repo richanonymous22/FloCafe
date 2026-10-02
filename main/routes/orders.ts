@@ -22,6 +22,7 @@ import { recordAuditEvent } from '../core/audit';
 import { currencyExponent, quantiseMoney, sumMoney } from '../core/money-integrity';
 import { ApprovalError, resolveApprover } from '../core/approval';
 import { restockCancelledLine } from '../core/inventory';
+import { refreshOffers } from '../core/offers';
 
 const router = Router();
 
@@ -832,7 +833,7 @@ router.patch('/:id/discount', requireRole('owner', 'manager', 'cashier', 'waiter
 
       db.prepare(`
         UPDATE orders SET discount_amount = ?, discount_type = ?, discount_value = ?,
-          discount_reason = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, total = ?, round_off = ?, updated_at = ? WHERE id = ?
+          discount_reason = ?, discount_source = NULL, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, total = ?, round_off = ?, updated_at = ? WHERE id = ?
       `).run(
         discountAmount,
         discount_value > 0 ? discount_type : null,
@@ -860,6 +861,10 @@ router.patch('/:id/discount', requireRole('owner', 'manager', 'cashier', 'waiter
           taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, billTotal, newBillBalance, billRoundOff, now(), existingBill.id
         );
       }
+
+      // A person's discount replaces any automatic offer; removing it lets offers apply again.
+      db.prepare('DELETE FROM order_offers WHERE order_id = ?').run(req.params.id);
+      if (!(discount_value > 0)) refreshOffers(req.params.id as string);
 
       const updatedOrder = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id)) as any;
       recordAuditEvent({
@@ -1081,6 +1086,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
           .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newOrderDiscount, billRoundOff, now(), existingBill.id);
       }
 
+      refreshOffers(req.params.id as string); // a line discount is a person's discount: offers step aside
       return db.prepare('SELECT * FROM order_items WHERE id = ?').get(req.params.itemId) as any;
     });
 

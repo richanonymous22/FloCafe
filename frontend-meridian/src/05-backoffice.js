@@ -13,7 +13,7 @@ function stockCell(p){
 }
 VIEWS.items=()=>{
   const tab=U.items.tab,low=lowStock().length;
-  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history'],...(adminLive()?[['take','Stocktake'],['value','Stock value'],['import','Import stock'],['menu','Items file'],['sup','Suppliers'],['po','Purchases']]:[])].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
+  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history'],...(adminLive()?[['take','Stocktake'],['value','Stock value'],['import','Import stock'],['menu','Items file'],['offers','Offers'],['sup','Suppliers'],['po','Purchases']]:[])].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
   let body='';
   if(tab==='items'){
     const q=U.items.q.toLowerCase();
@@ -30,7 +30,7 @@ VIEWS.items=()=>{
   }else if(tab==='mods'){
     body=`<div class="cards">${S.modGroups.map(g=>{const used=S.products.filter(p=>(p.mods||[]).includes(g.id)).length;return`<div class="panel"><div class="panel-h"><h3>${esc(g.name)}</h3><button class="btn btn-sm btn-ghost btn-icon" data-act="modEdit" data-id="${g.id}" aria-label="Edit ${esc(g.name)}">${ic('edit',16)}</button></div><div class="panel-b"><div class="row" style="margin-bottom:10px"><span class="badge">${g.req?'Required':'Optional'}</span><span class="badge">${g.multi?'Choose any':'Choose one'}</span><span class="badge info">On ${used} item${used===1?'':'s'}</span></div>${g.opts.map(([n,p])=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${esc(n)}</span><span class="num muted">${p?'+'+money(p):'Free'}</span></div>`).join('')}</div></div>`;}).join('')}
      <button class="panel" data-act="modEdit" style="display:grid;place-items:center;min-height:160px;border-style:dashed;color:var(--muted);font-weight:600;gap:8px">${ic('plus',22)}New option group</button></div>`;
-  }else if(adminLive()&&['take','value','import','menu','sup','po'].includes(tab)){
+  }else if(adminLive()&&['take','value','import','menu','offers','sup','po'].includes(tab)){
     body=stockToolsBody(tab);
   }else if(adminLive()&&tab==='log'){
     body=liveLogBody();

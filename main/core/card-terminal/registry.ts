@@ -1,10 +1,11 @@
 /**
  * Which card provider this till uses. The choice is the `card_provider` setting ('none' by default).
- * The simulator is only offered outside release builds, or when `PLEMMO_ALLOW_CARD_SIMULATOR=1` is set
- * (used by demos and the test suite), so a merchant can never take "payments" through a test double.
+ * The simulator is only offered outside release builds, in a PILOT installer (license-policy.json), or when
+ * `PLEMMO_ALLOW_CARD_SIMULATOR=1` is set (used by demos and the test suite), so a merchant can never take "payments" through a test double.
  */
 import { app } from 'electron';
 import { getSettingValue } from '../../db';
+import { getLicensePolicy } from '../license-policy';
 import { createSimulatorProvider } from './simulator';
 import { CardProvider } from './types';
 
@@ -18,6 +19,7 @@ export function registerCardProvider(id: string, factory: () => CardProvider): v
 
 export function simulatorAllowed(): boolean {
   if (process.env.PLEMMO_ALLOW_CARD_SIMULATOR === '1') return true;
+  if (getLicensePolicy().allowCardSimulator) return true; // a pilot installer
   try { return !app.isPackaged; } catch { return process.env.NODE_ENV !== 'production'; }
 }
 

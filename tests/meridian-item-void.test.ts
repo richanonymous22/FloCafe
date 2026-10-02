@@ -149,6 +149,7 @@ async function run() {
     const bagel = a.m.items.find((l: any) => l.pid === 'p-bagel');
     ok(stock() === s0 - 2, 'the order took 2 bagels');
     resetApprovalRateLimits(); C.clearToasts();
+    await waitFor(() => C.doc.querySelectorAll('.modal').length === 0, 6000, 'earlier dialogs gone');
     C.click('lineDel', { id: bagel.uid });
     await C.pin('9999');
     await waitFor(() => !!C.doc.getElementById('cfOk'), 4000, 'confirm');
@@ -156,6 +157,7 @@ async function run() {
     await waitFor(() => /was not removed/.test(C.toasts()), 6000, 'wrong-PIN refusal');
     ok((db.prepare(`SELECT status FROM order_items WHERE id=?`).get(bagel.itemId) as any).status === 'pending' && stock() === s0 - 2, 'wrong PIN: the line is still on the order and stock is unchanged');
     ok(cart().items.length === 2, 'wrong PIN: the cart still shows both lines');
+    await waitFor(() => C.doc.querySelectorAll('.modal').length === 0, 6000, 'earlier dialogs gone'); // a fading confirm must not be clicked again
     resetApprovalRateLimits(); C.clearToasts();
     C.click('lineDel', { id: bagel.uid });
     await C.pin('2222');
@@ -178,6 +180,7 @@ async function run() {
     const s1 = stock();
     db.prepare(`UPDATE order_items SET status='preparing' WHERE id=?`).run(bb.itemId);
     resetApprovalRateLimits(); C.clearToasts();
+    await waitFor(() => C.doc.querySelectorAll('.modal').length === 0, 6000, 'earlier dialogs gone');
     C.click('lineDel', { id: bb.uid });
     await C.pin('2222');
     await waitFor(() => !!C.doc.getElementById('cfOk'), 4000, 'confirm 3');
@@ -194,6 +197,7 @@ async function run() {
     const cl = c.m.items[0];
     const s2 = stock();
     resetApprovalRateLimits(); C.clearToasts();
+    await waitFor(() => C.doc.querySelectorAll('.modal').length === 0, 6000, 'earlier dialogs gone');
     C.click('lineDel', { id: cl.uid });
     await C.pin('2222');
     await waitFor(() => !!C.doc.getElementById('cfOk'), 4000, 'confirm 4');

@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import jwt from 'jsonwebtoken';
+import expressRateLimit from 'express-rate-limit';
 import { registerRoutes } from './routes';
 import { getJWTSecret } from './routes/auth';
 import { databaseMaintenanceMiddleware, getDbHealth, isDatabaseMaintenanceActive, isKdsEnabled } from './db';
@@ -213,6 +214,9 @@ export function startServer(): Promise<void> {
     });
 
     // ── Auth middleware (skips /api/health and /api/auth) ─────────────
+    // A per-client ceiling in front of authentication (which reads the user table). Far above what a till or
+    // tablet generates; it exists to stop a runaway or hostile client on the LAN.
+    app.use('/api', expressRateLimit({ windowMs: 60 * 1000, limit: 6000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Slow down and try again shortly.' } }));
     app.use(requireAuth);
 
     // ── API health check ───────────────────────────────────────────────

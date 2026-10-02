@@ -96,7 +96,7 @@ PLEMMO_CLOUD_DB_URL=postgres://... npm run test:pg-sync   # needs a PostgreSQL
 4. **Licence keys**: generate the Ed25519 signing key in your secret store, pin the public key(s) in release builds,
    decide the rotation routine (`docs/OPERATOR_RUNBOOK.md`).
 5. **Real-device testing** of printers, scanners, drawers, tablets and the Windows installer; a **pilot merchant** (WP12).
-6. **Product decisions still open**: a Supervisor role (needs a `users` table rebuild migration), offers/promotions,
+6. **Product decisions still open**: offers/promotions,
    stock transfers screen, low-stock alert list,
    (product CSV import is now in Items & stock → Items file).
 

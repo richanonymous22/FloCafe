@@ -5527,6 +5527,19 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       `);
     },
   },
+  {
+    version: 103,
+    name: 'users_supervisor_flag',
+    up: () => {
+      // SUPERVISOR. A cashier who may approve refunds, voids, discounts and price changes (by their own login or by
+      // PIN) without being a manager. Additive only: the users table is not rebuilt and no existing row changes
+      // (everyone starts as 0). The role stays 'cashier', so every route gated by role keeps treating them as one.
+      const cols = db.prepare("PRAGMA table_info('users')").all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'is_supervisor')) {
+        db.exec('ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {

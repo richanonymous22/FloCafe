@@ -1062,13 +1062,13 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
       const managerId = req.body.manager_id || req.body.user_id;
       let user: any = null;
       if (managerId) {
-        const candidate = db.prepare("SELECT * FROM users WHERE id = ? AND pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").get(managerId) as any;
+        const candidate = db.prepare("SELECT * FROM users WHERE id = ? AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1)) AND is_active = 1").get(managerId) as any;
         if (candidate && verifyPin(candidate.pin_hash, override_pin)) {
           user = candidate;
         }
       }
       if (!user) {
-        const managers = db.prepare("SELECT * FROM users WHERE pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").all() as any[];
+        const managers = db.prepare("SELECT * FROM users WHERE pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1)) AND is_active = 1").all() as any[];
         for (const u of managers) {
           if (verifyPin(u.pin_hash, override_pin)) {
             user = u;

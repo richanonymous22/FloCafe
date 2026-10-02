@@ -67,7 +67,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
     // Use the DB's current role rather than the JWT's role claim, so a role
     // change takes effect without waiting for the token to expire.
-    (req as any).user = { ...decoded, role: status.role };
+    (req as any).user = { ...decoded, role: status.role, supervisor: status.supervisor };
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' });

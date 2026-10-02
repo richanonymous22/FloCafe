@@ -60,7 +60,7 @@ export function resetApprovalRateLimits(): void {
 }
 
 export interface ResolveApproverInput {
-  user: { userId: string; role: string };
+  user: { userId: string; role: string; supervisor?: boolean };
   permission: Permission;
   overridePin?: unknown;
   /** Stable key for PIN rate limiting, e.g. `${ip}:refund`. */
@@ -70,7 +70,7 @@ export interface ResolveApproverInput {
 }
 
 export function resolveApprover(input: ResolveApproverInput): Approver {
-  if (hasPermission(input.user.role, input.permission)) {
+  if (hasPermission(input.user.role, input.permission, input.user.supervisor === true)) {
     return { userId: input.user.userId, role: input.user.role, via: 'self' };
   }
   const pin = input.overridePin === undefined || input.overridePin === null ? '' : String(input.overridePin).trim();
@@ -82,9 +82,9 @@ export function resolveApprover(input: ResolveApproverInput): Approver {
   }
   const db = getDatabase();
   const candidates = db.prepare(
-    "SELECT id, role, pin_hash FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')",
-  ).all() as { id: string; role: string; pin_hash: string }[];
-  const match = candidates.find((u) => verifyPin(u.pin_hash, pin) && hasPermission(u.role, input.permission));
+    "SELECT id, role, is_supervisor, pin_hash FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1))",
+  ).all() as { id: string; role: string; is_supervisor: number; pin_hash: string }[];
+  const match = candidates.find((u) => verifyPin(u.pin_hash, pin) && hasPermission(u.role, input.permission, u.is_supervisor === 1));
   if (!match) {
     throw new ApprovalError('Invalid manager PIN', 403, true);
   }

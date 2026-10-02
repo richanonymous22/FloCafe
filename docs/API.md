@@ -1022,6 +1022,13 @@ Each item in an order has its own status, allowing:
 | `waiter` | Orders, tables |
 | `chef` | KDS only |
 
+**Supervisor** is not a separate role: it is a `cashier` account with `is_supervisor = 1` (`supervisor: true` in the
+sign-in response and the staff list; migration v103, additive). Every role-gated route still treats them as a cashier.
+On top of a cashier they may approve refunds, voids, discounts and price changes, signed in themselves or by entering
+their PIN on someone else's request, and nothing else (no reports, stock, staff, card settings or reconciliation).
+Only an owner can set the flag (`POST /api/staff` / `PUT /api/staff/:id` with `"supervisor": true`); a supervisor
+may hold a PIN, an ordinary cashier may not, and removing the flag or changing the role also removes the PIN.
+
 ---
 
 ## Category Filtering (KDS)

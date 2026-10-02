@@ -131,8 +131,8 @@ async function bootstrapFromPlemmo() {
   try {
     if (window.PlemmoStaff) {
       const staff = await window.PlemmoStaff.list();
-      const merged = staff.map((s, i) => ({ id: s.id, name: s.name, role: plemmoRoleToMeridian(s.role), plemmoRole: s.role,
-        position: s.position, rate: s.rate || 0, pin: null, active: s.active, color: EMP_COLORS[i % EMP_COLORS.length] }));
+      const merged = staff.map((s, i) => ({ id: s.id, name: s.name, role: plemmoRoleToMeridian(s.role), plemmoRole: s.role, supervisor: !!s.supervisor, hasPin: !!s.hasPin, email: s.email || '',
+        position: s.supervisor ? 'Supervisor' : s.position, rate: s.rate || 0, pin: null, active: s.active, color: EMP_COLORS[i % EMP_COLORS.length] }));
       if (merged.length) S.employees = merged;
       if (!S.employees.find((e) => e.id === user.id)) S.employees.unshift({ id: user.id, name: user.name, role: meRole, plemmoRole: user.role, position: 'Owner', pin: null, rate: 0, color: '#E8912D', active: true });
     }

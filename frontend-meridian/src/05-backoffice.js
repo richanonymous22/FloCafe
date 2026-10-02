@@ -320,7 +320,7 @@ VIEWS.team=()=>{
   let body='';
   if(tab==='team'){
     body=`<div class="cards">${S.employees.map(e=>{const sh=onShift(e.id),h=hoursIn(e.id,ws,we),so=salesBy(e.id,ws,we);return`<div class="panel person" style="${e.active===false?'opacity:.55':''}">
-      <div class="person-top"><span class="av lg" style="--c:${e.color}">${initials(e.name)}</span><div class="pt"><b>${esc(e.name)}</b><small>${esc(e.position||'')}</small></div><span class="badge ${e.role==='owner'?'accent':e.role==='manager'?'info':''}">${esc(roleLabel(e.role))}</span></div>
+      <div class="person-top"><span class="av lg" style="--c:${e.color}">${initials(e.name)}</span><div class="pt"><b>${esc(e.name)}</b><small>${esc(e.position||'')}</small></div><span class="badge ${e.role==='owner'?'accent':e.role==='manager'?'info':e.supervisor?'info':''}">${esc(personRole(e))}</span></div>
       <div class="shift-line">${sh?`<i class="dot ok"></i>On shift since ${fmtT(sh.in)}, <span data-since="${sh.in}" data-fmt="dur">${fmtHrs((Date.now()-sh.in)/HOUR)}</span>`:`<i class="dot"></i>${e.active===false?'Inactive':'Off shift'}`}</div>
       <div class="pstats"><div><b class="num">${fmtHrs(h)}</b><span>This week</span></div><div><b class="num">${moneyK(sum(so,o=>o.total))}</b><span>Sales</span></div><div><b class="num">${so.length}</b><span>Orders</span></div></div>
       <div class="row">${can('team')&&e.active!==false?`<button class="btn btn-sm" data-act="tmClock" data-id="${e.id}">${sh?'Clock out':'Clock in'}</button>`:''}<span class="spacer"></span>${(e.role!=='owner'||me().role==='owner')?`<button class="btn btn-sm btn-ghost" data-act="tmEdit" data-id="${e.id}">${ic('edit',16)} Edit</button>`:''}</div></div>`;}).join('')}
@@ -341,12 +341,13 @@ VIEWS.team=()=>{
     const guide=[
       ['Owner','Everything, including cloud and licence settings and deleting data.','',''],
       ['Manager','Items and prices, reports, team, settings, closing the cash drawer, refunds, voids and discounts. Approves other people’s refunds, voids, discounts and price changes with their PIN.','',''],
+      ['Supervisor','Everything a cashier does, and approves refunds, removing an item the kitchen has, discounts and price changes: signed in themselves, or by entering their PIN on someone else’s till screen. Only owners can make someone a supervisor.','','Edit items or settings, see reports, close the drawer, manage the team.'],
       ['Cashier','Sell and take payment, add and edit customers, open the cash drawer and record paid in/out, look up stock, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, close the drawer, manage the team.'],
       ['Waiter','Take and edit their own orders, move an order to another table, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, manage the team.'],
       ['Chef','Use the kitchen display.','','Anything at the till.'],
     ];
     body=`<p class="muted" style="margin-bottom:14px">Permissions follow the person’s role and are enforced by the till server, so they hold on every till. Choosing individual permissions per person is not available in this version.</p>
-     <div class="grid g-2">${guide.map(([r,can,pin,no])=>`<div class="panel"><div class="panel-b"><b>${r}</b><p style="margin:8px 0 0">${can}</p>${pin?`<p class="muted" style="margin:8px 0 0"><b>Needs a manager’s PIN:</b> ${pin}</p>`:''}${no?`<p class="muted" style="margin:8px 0 0"><b>Cannot:</b> ${no}</p>`:''}</div></div>`).join('')}</div>`;
+     <div class="grid g-2">${guide.map(([r,can,pin,no])=>`<div class="panel"><div class="panel-b"><b>${r}</b><p style="margin:8px 0 0">${can}</p>${pin?`<p class="muted" style="margin:8px 0 0"><b>Needs a manager’s or supervisor’s PIN:</b> ${pin}</p>`:''}${no?`<p class="muted" style="margin:8px 0 0"><b>Cannot:</b> ${no}</p>`:''}</div></div>`).join('')}</div>`;
   }else{
     const roles=['manager','staff'];
     body=`<p class="muted" style="margin-bottom:14px">Owners can always do everything. When someone lacks a permission, the till asks for a manager’s PIN instead of blocking them.</p>
@@ -370,6 +371,7 @@ A.tmClock=async d=>{const e=emp(d.id);const wasOn=onShift(e.id);
   if(wasOn){clockOut(e.id);toast(`${first(e.name)} clocked out`);}else{clockIn(e.id);toast(`${first(e.name)} clocked in`);}renderView();};
 CH.perm=(v,el)=>{const r=S.roles[el.dataset.r],p=el.dataset.p;if(el.checked){if(!r.perms.includes(p))r.perms.push(p);}else r.perms=r.perms.filter(x=>x!==p);save();toast(`${r.label}s ${el.checked?'can now':'can no longer'} ${permLabel(p).toLowerCase()}`);};
 A.tmEdit=d=>{
+  if(adminLive())return teamEditLive(d);
   const e=d.id?emp(d.id):null;let color=e?e.color:EMP_COLORS[S.employees.length%EMP_COLORS.length];
   const L=modal({title:e?esc(e.name):'Add a team member',body:`<div class="fgrid">
     <label class="field span2"><span>Full name</span><input class="input" id="eN" value="${esc(e?e.name:'')}" autofocus autocomplete="off"></label>

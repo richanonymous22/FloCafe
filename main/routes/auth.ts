@@ -396,6 +396,7 @@ router.post('/login', authRateLimit(), async (req: Request, res: Response) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        supervisor: user.role === 'cashier' && user.is_supervisor === 1,
         category_ids: parseCategoryIds(user.category_ids),
       },
       // Single tenant — frontend auto-selects when tenants.length === 1
@@ -425,7 +426,7 @@ router.post('/tenants/select', (req: Request, res: Response) => {
     const decoded = jwt.verify(token, getJWTSecret()) as any;
 
     const db = getDatabase();
-    const user = db.prepare('SELECT id, name, email, role, is_active, tokens_valid_after FROM users WHERE id = ?').get(decoded.userId) as any;
+    const user = db.prepare('SELECT id, name, email, role, is_supervisor, is_active, tokens_valid_after FROM users WHERE id = ?').get(decoded.userId) as any;
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.is_active !== 1 || isTokenStale(decoded.iat, user.tokens_valid_after)) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -533,7 +534,7 @@ router.get('/me', (req: Request, res: Response) => {
     const tenant = buildLocalTenant(db, user.role);
 
     res.json({
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, supervisor: user.role === 'cashier' && user.is_supervisor === 1 },
       tenants: [tenant],
     });
   } catch {

@@ -80,11 +80,21 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 export interface AuthUser {
   userId: string;
   role: string;
+  /** A cashier flagged as a supervisor (users.is_supervisor). Ignored for every other role. */
+  supervisor?: boolean;
 }
 
-export function hasPermission(role: string, permission: Permission): boolean {
+/**
+ * What a supervisor may do on top of a cashier: approve the four sales exceptions. Nothing else - no reports, no
+ * stock adjustments, no staff or location management, no sync reconciliation. Held to a deliberately short list.
+ */
+export const SUPERVISOR_EXTRA_PERMISSIONS: readonly Permission[] = ['sales.refund', 'sales.void', 'sales.discount', 'sales.price_override'];
+
+export function hasPermission(role: string, permission: Permission, supervisor = false): boolean {
   const permissions = ROLE_PERMISSIONS[role as Role];
-  return permissions ? permissions.includes(permission) : false;
+  if (!permissions) return false;
+  if (permissions.includes(permission)) return true;
+  return supervisor && role === 'cashier' && SUPERVISOR_EXTRA_PERMISSIONS.includes(permission);
 }
 
 export function hasLocationAccess(user: AuthUser, locationId: string): boolean {
@@ -97,7 +107,7 @@ export interface AuthorizationContext {
 }
 
 export function can(user: AuthUser, permission: Permission, context: AuthorizationContext = {}): boolean {
-  if (!hasPermission(user.role, permission)) return false;
+  if (!hasPermission(user.role, permission, user.supervisor === true)) return false;
   if (context.locationId && !hasLocationAccess(user, context.locationId)) return false;
   return true;
 }
@@ -112,7 +122,7 @@ export class AuthorizationError extends Error {
 
 /** Throws rather than returning false — for Core-service call sites that need to fail the operation, not just branch on it. */
 export function requireCan(user: AuthUser, permission: Permission, context: AuthorizationContext = {}): void {
-  if (!hasPermission(user.role, permission)) {
+  if (!hasPermission(user.role, permission, user.supervisor === true)) {
     throw new AuthorizationError(`Role '${user.role}' does not have permission '${permission}'`);
   }
   if (context.locationId && !hasLocationAccess(user, context.locationId)) {

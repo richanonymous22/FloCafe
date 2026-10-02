@@ -500,7 +500,7 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
       }
 
       // Validate PIN against active owner/manager accounts only
-      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')")
+      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1))")
         .all()
         .find((u: any) => verifyPin(u.pin_hash, override_pin));
 
@@ -931,7 +931,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
       if (!checkPinRateLimit(rateLimitKey)) {
         return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
       }
-      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')")
+      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1))")
         .all()
         .find((u: any) => verifyPin(u.pin_hash, override_pin));
       if (!user) {

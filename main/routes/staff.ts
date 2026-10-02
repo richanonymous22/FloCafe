@@ -19,7 +19,7 @@ const OPERATIONAL_ROLES = ['cashier', 'waiter', 'chef'];
 // Milestone 8, Part B: sourced from AuthorizationService's own Role list
 // instead of a second hardcoded copy, so the two cannot drift apart.
 const VALID_ROLES: readonly string[] = ALL_ROLES;
-const STAFF_SELECT_FIELDS = 'id, name, email, role, (pin_hash IS NOT NULL) AS has_pin, is_active, created_at, updated_at';
+const STAFF_SELECT_FIELDS = 'id, name, email, role, is_supervisor, (pin_hash IS NOT NULL) AS has_pin, is_active, created_at, updated_at';
 
 function canModifyTargetStaff(requesterRole: string, targetRole: string): boolean {
   if (requesterRole === 'owner') return true;
@@ -29,6 +29,11 @@ function canModifyTargetStaff(requesterRole: string, targetRole: string): boolea
 
 function isOperationalRole(role: string): boolean {
   return OPERATIONAL_ROLES.includes(role);
+}
+
+/** Owners and managers hold a PIN, and so does a supervisor (a cashier flagged to approve exceptions). */
+function pinAllowed(role: string, supervisor: boolean): boolean {
+  return !isOperationalRole(role) || (role === 'cashier' && supervisor);
 }
 
 function hasNonEmptyPin(pin: unknown): boolean {
@@ -102,6 +107,7 @@ router.get('/:id', requireRole('owner', 'manager'), (req: Request, res: Response
 router.post('/', requirePermission('employees.manage'), authRateLimit(), (req: Request, res: Response) => {
   try {
     const { name, email, password, role, pin } = req.body;
+    const supervisor = req.body.supervisor === true;
 
     if (!name || !password || !role) {
       return res.status(400).json({ error: 'name, password, and role are required' });
@@ -119,8 +125,17 @@ router.post('/', requirePermission('employees.manage'), authRateLimit(), (req: R
       return res.status(403).json({ error: 'Managers can only create operational staff accounts (cashier, server, chef)' });
     }
 
-    if (isOperationalRole(role) && hasNonEmptyPin(pin)) {
-      return res.status(400).json({ error: 'PINs are only permitted for owner and manager roles' });
+    if (req.body.supervisor !== undefined && typeof req.body.supervisor !== 'boolean') {
+      return res.status(400).json({ error: 'supervisor must be true or false' });
+    }
+    if (supervisor && role !== 'cashier') {
+      return res.status(400).json({ error: 'Only a cashier can be a supervisor' });
+    }
+    if (supervisor && requesterRole !== 'owner') {
+      return res.status(403).json({ error: 'Only owners can make someone a supervisor' });
+    }
+    if (!pinAllowed(role, supervisor) && hasNonEmptyPin(pin)) {
+      return res.status(400).json({ error: 'PINs are only permitted for owner, manager and supervisor accounts' });
     }
     if (hasNonEmptyPin(pin) && !isValidPin(pin)) {
       return res.status(400).json({ error: 'PIN must be between 4 and 6 numeric digits' });
@@ -141,9 +156,9 @@ router.post('/', requirePermission('employees.manage'), authRateLimit(), (req: R
     const hashedPin = hasNonEmptyPin(pin) ? bcrypt.hashSync(String(pin), 10) : null;
 
     db.prepare(`
-      INSERT INTO users (id, name, email, password, role, pin_hash, is_active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-    `).run(id, name, email || null, hashedPassword, role, hashedPin, now(), now());
+      INSERT INTO users (id, name, email, password, role, is_supervisor, pin_hash, is_active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `).run(id, name, email || null, hashedPassword, role, supervisor ? 1 : 0, hashedPin, now(), now());
 
     const member = db.prepare(
       `SELECT ${STAFF_SELECT_FIELDS} FROM users WHERE id = ?`
@@ -187,8 +202,19 @@ router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req:
     }
 
     const targetRole = role ?? member.role;
-    if (isOperationalRole(targetRole) && hasNonEmptyPin(pin)) {
-      return res.status(400).json({ error: 'PINs are only permitted for owner and manager roles' });
+    if (req.body.supervisor !== undefined && typeof req.body.supervisor !== 'boolean') {
+      return res.status(400).json({ error: 'supervisor must be true or false' });
+    }
+    // A supervisor is a cashier. Moving someone to another role drops the flag; otherwise it stays as it was.
+    const targetSupervisor = targetRole !== 'cashier' ? false : (req.body.supervisor !== undefined ? req.body.supervisor === true : member.is_supervisor === 1);
+    if (targetSupervisor !== (member.is_supervisor === 1) && targetRole === 'cashier' && requesterRole !== 'owner') {
+      return res.status(403).json({ error: 'Only owners can make someone a supervisor' });
+    }
+    if (req.body.supervisor === true && targetRole !== 'cashier') {
+      return res.status(400).json({ error: 'Only a cashier can be a supervisor' });
+    }
+    if (!pinAllowed(targetRole, targetSupervisor) && hasNonEmptyPin(pin)) {
+      return res.status(400).json({ error: 'PINs are only permitted for owner, manager and supervisor accounts' });
     }
     if (hasNonEmptyPin(pin) && !isValidPin(pin)) {
       return res.status(400).json({ error: 'PIN must be between 4 and 6 numeric digits' });
@@ -206,7 +232,7 @@ router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req:
     }
 
     const hashedPassword = password ? bcrypt.hashSync(password, 10) : member.password;
-    const hashedPin = isOperationalRole(targetRole)
+    const hashedPin = !pinAllowed(targetRole, targetSupervisor)
       ? null
       : pin !== undefined
         ? (hasNonEmptyPin(pin) ? bcrypt.hashSync(String(pin), 10) : null)
@@ -215,7 +241,7 @@ router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req:
     // Revoke this user's outstanding sessions only when a credential actually
     // changed (not on a bare name/email/role edit) — matches auth.ts's
     // password/change and recover-password (#173).
-    const credentialsChanged = hashedPassword !== member.password || hashedPin !== member.pin_hash;
+    const credentialsChanged = hashedPassword !== member.password || hashedPin !== member.pin_hash || targetSupervisor !== (member.is_supervisor === 1);
     const tokensValidAfter = credentialsChanged ? now() : member.tokens_valid_after;
 
     const demotesActiveOwner = member.role === 'owner' && member.is_active === 1 && targetRole !== 'owner';
@@ -225,6 +251,7 @@ router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req:
         email      = COALESCE(?, email),
         password   = ?,
         role       = COALESCE(?, role),
+        is_supervisor = ?,
         pin_hash   = ?,
         tokens_valid_after = ?,
         updated_at = ?
@@ -235,7 +262,7 @@ router.put('/:id', requirePermission('employees.manage'), authRateLimit(), (req:
         )
     `).run(
       name || null, email || null, hashedPassword,
-      role || null, hashedPin, tokensValidAfter,
+      role || null, targetSupervisor ? 1 : 0, hashedPin, tokensValidAfter,
       now(), req.params.id, demotesActiveOwner ? 1 : 0,
     );
     if (result.changes === 0) {

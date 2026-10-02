@@ -367,6 +367,12 @@ Create new order.
 
 ---
 
+**Price override.** A line may carry `"price_override": { "unit_price": 3.00, "reason": "Damaged box" }` (also accepted by `POST /api/orders/:id/items`). It needs the `sales.price_override` permission (owner/manager) or a manager/owner `override_pin` in the request body; otherwise `403` (`requiresApproval: true`). The line is sold at the override price; the catalogue price is kept on the line as `original_unit_price` (with `price_override_reason` / `price_override_by`), the product's own price is never changed, and a `sale.price_overridden` audit event records the original price, new price, reason, requester and approver.
+
+**Cancelling (void).** `PATCH /api/orders/:id/status` with `{"status":"cancelled"}` cancels an unpaid order and returns its stock through the inventory ledger. An order that has taken payment is refused with `409` (`code: "order_has_payments"`) — refund it instead.
+
+---
+
 ### GET `/api/orders/:id`
 Get order details.
 
@@ -402,6 +408,20 @@ Update item status (KDS workflow).
 
 ---
 
+### PATCH `/api/orders/:orderId/items/:itemId/cancel`
+Remove one line from an order. An owner/manager removes it outright; a cashier or waiter must send a manager/owner `override_pin` (waiters only on their own orders). The approver is resolved from the PIN on the server and audited (`sale.item_voided`, with `requested_by` and `approved_by`).
+
+**Request:** `{ "override_pin": "2222", "reason": "Customer changed their mind" }`
+
+- A line the kitchen has **not started** is cancelled and goes back to stock through the inventory ledger (`item_cancel` return).
+- A line **already preparing/ready** is voided: the original line is kept, a negative `void_adjustment` line is added so the bill nets out, and stock is **not** returned (the food was made).
+- Removing the last active line cancels the order (stock is returned once, never twice).
+- Order totals, discount, tax and an unpaid bill are recomputed in exact minor units.
+
+**Errors:** `403` approval required (`requiresApproval: true`) or invalid PIN · `404` order/item not found · `409` the item is already removed · `429` too many PIN attempts.
+
+---
+
 ## Order Discounts
 
 ### PATCH `/api/orders/:id/discount`
@@ -422,7 +442,8 @@ Apply order-level discount.
 - `discount_type`: must be `"percentage"` or `"amount"`
 - `discount_value`: must be positive; cannot exceed store limits (`discount_max_percentage`, `discount_max_amount`)
 - `discount_mode` setting is checked — if `'flat'`, percentage discounts are rejected; if `'percentage'`, flat discounts are rejected
-- If `discount_requires_approval` is true, `override_pin` (manager/owner PIN) is required
+- **Who may discount:** an owner/manager outright (permission `sales.discount`); a cashier or waiter only with a manager/owner `override_pin` — the approving user is whoever the PIN belongs to and is recorded in the `sale.discount_applied` audit event beside the requester. If `discount_requires_approval` is true, a PIN is required from everyone, managers included. Removing a discount (`discount_value: 0`) needs no approval.
+- Tax and the bill are recomputed in exact minor units; an unpaid bill is kept in step
 - Order must exist and not be completed/cancelled
 
 **Error (400):**
@@ -492,6 +513,28 @@ Mark bill as paid.
   "amount_tendered": 500
 }
 ```
+
+---
+
+### POST `/api/bills/:id/refund`
+Refund all or part of a paid bill. Owners/managers refund directly; a cashier must send a manager/owner `override_pin`, and the approving user is recorded against the refund. The original sale, bill and payments are never rewritten — a refund only adds records (refund row, payment event, inventory return, cash-drawer movement, ledger entries, audit events).
+
+**Headers:** `Authorization: Bearer <token>`, optional `Idempotency-Key` (a retry with the same key replays the stored result; the same key with a different request is `409`)
+
+**Request:**
+```json
+{ "reason": "Wrong item", "amount": 4.00, "items": [{ "order_item_id": 12, "quantity": 1 }], "override_pin": "2222" }
+```
+`reason` is required. `amount` is optional (omitted = everything still refundable). `items` is optional: listed lines are returned to stock through the inventory ledger (capped at what was sold and not yet returned).
+
+**Response (200):** `bill_id`, `amount_minor`, `refunds[]`, `payments[]`, `fully_refunded`, `refundable_remaining_minor`, `restocked[]`, `cash_drawer_recorded`, `loyalty_points_reversed`, `wallet_points_returned`, `idempotentReplay`.
+
+**Refunding by item.** Send `"amount_from_items": true` with `items` and the server sizes the refund from the returned lines: each unit is worth its share of what the customer actually paid (`bills.total`, so an order discount and payable rounding are carried through), and returning every remaining unit refunds exactly what is left, to the minor unit. Each item may carry `"restock": false` for a money-only return (damaged goods). The quantity per line is capped at what was sold minus what has already come back (tracked in `refund_lines`). Item refunds are refused on split checks — refund an amount instead. Without `amount_from_items`, `items` only decides which lines go back to stock and `amount` (or "everything left") decides the money.
+
+**Errors:** `400` invalid amount/items, amount above the unrefunded balance, or nothing left to refund · `403` approval required (`requiresApproval: true`) or invalid manager PIN · `404` bill not found · `409` idempotency-key reuse · `429` too many PIN attempts.
+
+### GET `/api/bills/:id/refunds`
+Refund history for a bill and what is still refundable (`refunds`, `payments`, `paid_minor`, `refunded_minor`, `refundable_minor`, `exponent`, `currency`) plus `items[]` — for each active line `order_item_id`, `name`, `quantity`, `refunded_quantity`, `refundable_quantity` and `unit_refund_minor` (what one returned unit refunds). This is what the till's partial-refund screen shows.
 
 ---
 
@@ -690,13 +733,46 @@ Daily/monthly sales report.
 
 ---
 
-### GET `/api/reports/x-report`
-X Report (current shift).
+### GET `/api/reports/x`
+X report: a read-only look at the open trading period (permission `reports.view`). See `docs/TRADING_REPORTS.md`.
+
+### POST `/api/reports/z`
+Close the trading period and store an immutable, numbered Z report (permission `reports.z`). `409 cash_session_open` while a drawer is open; `409 nothing_to_report` when nothing happened since the last Z.
+
+### GET `/api/reports/z` · `/api/reports/z/:id`
+List Z reports / read one (with `verified`, the seal check). CSV: `GET /api/reports/x/csv`, `GET /api/reports/z/:id/csv`. Print: `POST /api/reports/x/print`, `POST /api/reports/z/:id/print` (`{ "reprint": true }`).
+
+### GET `/api/reports/period?from=&to=&tz=&bucket=`
+Report for any date range, net of refunds. `from` is exclusive and `to` inclusive, both UTC `YYYY-MM-DD HH:MM:SS`; `tz` is an IANA zone for the series (unknown zones fall back to UTC); `bucket` is `day` (default) or `hour`. Returns the same `snapshot` as the X report plus `products` (units, gross, VAT, net, refunded, cost, profit, margin), `categories`, `staff` (sales, discounts given, refunds processed, items removed), `discounts`, `refunds`, `voids`, `series` and `checks`. All money is integer minor units. Permission `reports.view`.
+
+### GET `/api/reports/period/csv?section=&from=&to=`
+The same data as CSV. `section` is one of `summary`, `vat`, `products`, `categories`, `staff`, `discounts`, `refunds`, `voids`. Cells that could be read as a spreadsheet formula are neutralised.
 
 ---
 
-### GET `/api/reports/z-report`
-Z Report (close shift).
+## Inventory, stocktakes and stock import
+
+All quantities come from the inventory ledger (`inventory_movements`); nothing here edits a stock column directly.
+
+### GET `/api/inventory/movements?limit=&product_id=&type=&from=&to=`
+The ledger as a feed, newest first, with item, variant and person names (`inventory.view`).
+
+### GET `/api/inventory/valuation` · `/api/inventory/valuation/csv`
+Stock on hand at cost: ledger balance × cost, per tracked item or variant, with totals by category and the number of items in stock that have no cost (`inventory.view`).
+
+### POST `/api/inventory/import`
+`{ "csv": "sku,quantity\nABC,12", "mode": "set" | "add", "dry_run": true, "import_id": "...", "reason": "..." }` (`inventory.adjust`). Columns: `sku` and/or `barcode`, `quantity`, optional `reason`. `dry_run` is the default and posts nothing; it returns every row (`current`, `new_quantity`, `delta`, or the `error`). Applying needs a unique `import_id`; a file with ANY invalid row is refused whole (`422`, with the report). `set` states what is on the shelf (re-importing changes nothing); `add` states what arrived (exactly-once per `import_id` and row). Limit 100 KB / 10,000 rows.
+
+### Stocktakes — `/api/stocktakes` (`inventory.stocktake`: owner, manager)
+| Call | Purpose |
+| --- | --- |
+| `POST /` `{ name?, category_ids? }` | Start. A line for every tracked item/variant in scope; one open stocktake per location (`409` otherwise). |
+| `GET /` · `GET /:id` | History; one stocktake with its lines and variance summary (units and value at cost). |
+| `PUT /:id/lines` `{ product_id, variant_id?, quantity, mode: "set"\|"add" }` | Record a count. |
+| `POST /:id/scan` `{ code, quantity? }` | Add to the line whose barcode or SKU matches (default +1; `404 unknown_code`). |
+| `POST /:id/approve` `{ uncounted: "ignore"\|"zero", note? }` | Post one ledger adjustment per counted line, atomically. |
+| `POST /:id/cancel` | Discard; posts nothing. |
+A line's adjustment is `counted − balance when it was counted`, so sales made while counting are kept. A correction that would take stock below zero is clamped to zero and the line is flagged `clamped`. An approved or cancelled stocktake is final (`409`).
 
 ---
 
@@ -857,6 +933,20 @@ Print a kitchen order ticket for `orderId`. A caller may provide `stationName` a
 
 ---
 
+### POST `/api/printers/print-bill`
+Sends a bill's receipt to the default printer (this is the route that actually prints; `POST /api/bills/:id/print` only records a print-log entry). Body: `{ "billId": 12, "isReprint": false, "preview": false }`. `200 { success: true }` only when the printer transport accepted the job; `400` no default printer; `404` unknown bill; `502` print failed, with `detail` (the transport's reason, e.g. connection refused), `code`, `stage` and `correlation_id`.
+
+## Held carts
+
+Parked counter carts (not sales — no totals, stock or sync until resumed and rung up). Separate from the table-keyed `/api/held-orders`.
+
+- `POST /api/held-orders/carts` `{ "id": "h_ab12", "label": "Sam", "cart": { "items": [{ "pid": "p1", "qty": 2 }], … } }` — park (or update) a cart; `201` created, `200` updated.
+- `GET /api/held-orders/carts` — `{ carts: [{ id, label, cart, heldBy, heldAt }] }`.
+- `POST /api/held-orders/carts/:id/resume` — returns the cart and removes it in one step (`404` if another till already took it).
+- `DELETE /api/held-orders/carts/:id` — discard.
+
+---
+
 ## Mobile Pairing
 
 ### GET `/api/mobile/pairing-code`
@@ -922,6 +1012,14 @@ Each item in an order has its own status, allowing:
 
 ---
 
+## Offers
+
+See `docs/OFFERS.md` for the rules. `GET /api/offers` (owner, manager, cashier, waiter), `POST /api/offers`,
+`PUT /api/offers/:id`, `POST /api/offers/:id/active {active}`, `DELETE /api/offers/:id` (archives) need `offers.manage`
+(owner, manager). `POST /api/offers/preview {items:[{product_id, variant_id?, quantity}], customer_id?}` returns
+`{savings_minor, applications:[{offerId, name, savingsMinor, units}]}`. `GET /api/offers/usage?from=&to=` needs
+`reports.view`. An order's offer discount is `orders.discount_source = 'offer'`.
+
 ## Role-Based Access
 
 | Role | Access |
@@ -931,6 +1029,13 @@ Each item in an order has its own status, allowing:
 | `cashier` | POS, orders, bills |
 | `waiter` | Orders, tables |
 | `chef` | KDS only |
+
+**Supervisor** is not a separate role: it is a `cashier` account with `is_supervisor = 1` (`supervisor: true` in the
+sign-in response and the staff list; migration v103, additive). Every role-gated route still treats them as a cashier.
+On top of a cashier they may approve refunds, voids, discounts and price changes, signed in themselves or by entering
+their PIN on someone else's request, and nothing else (no reports, stock, staff, card settings or reconciliation).
+Only an owner can set the flag (`POST /api/staff` / `PUT /api/staff/:id` with `"supervisor": true`); a supervisor
+may hold a PIN, an ordinary cashier may not, and removing the flag or changing the role also removes the PIN.
 
 ---
 

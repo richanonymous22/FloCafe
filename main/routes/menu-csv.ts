@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, generateShortId, getSettingValue } from '../db';
 import { v4 as uuidv4 } from 'uuid';
@@ -390,7 +391,7 @@ router.post('/import/products', requireRole('owner', 'manager'), (req: Request, 
     const catMap: Record<string, string> = {};
     for (const c of catRows) catMap[c.name.toLowerCase()] = c.id;
 
-    const country = getSettingValue('country') || 'IN';
+    const country = getSettingValue('country') || DEFAULT_COUNTRY;
     const businessType = getSettingValue('business_type') || 'restaurant';
     const activePack = getActiveCountryPack(country);
     const taxCategoriesConfigured = hasConfiguredTaxCategories(activePack, businessType);
@@ -723,4 +724,4 @@ router.post('/import/addons', requireRole('owner', 'manager'), (req: Request, re
   }
 });
 
-export { router as menuCsvRoutes };
+export { router as menuCsvRoutes, parseCSV, toObjects, CsvImportError };

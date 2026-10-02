@@ -48,3 +48,4 @@ specs/
 # Plemmo sync device key material and cloud dev database — never track
 plemmo-sync-device-key.pem*
 plemmo-cloud-dev*.sqlite*
+build-release/license-policy.json

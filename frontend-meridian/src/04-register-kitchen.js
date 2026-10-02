@@ -2,7 +2,7 @@
 /* =====================================================================
    REGISTER
    ===================================================================== */
-function cartTotals(c){c=c||U.cart;return totalsFor(c.items,c.discount);}
+function cartTotals(c){c=c||U.cart;return totalsFor(c.items,c.discount||offerFor(c));}
 function inCartQty(pid){return sum(U.cart.items.filter(l=>l.pid===pid),l=>l.qty);}
 let popCache={n:-1,ids:[]};
 function popularIds(){
@@ -56,19 +56,24 @@ function gridHTML(){
   }
   return list.map(p=>{
     const c=catOf(p.cat)||{color:'#888'},q=inCartQty(p.id);
-    const out=!p.available||(p.stock!=null&&p.stock<=0);
-    const low=p.stock!=null&&p.stock>0&&p.stock<=(p.low??5);
-    return`<button class="tile ${out?'off':''}" data-act="add" data-id="${p.id}" style="--c:${c.color}" ${out?'aria-disabled="true"':''} aria-label="${esc(p.name)}, ${money(p.price)}${q?`, ${q} in order`:''}">
+    const vs=p.variants&&p.variants.length;
+    const out=!p.available||(vs?p.variants.every(v=>v.stock!=null&&v.stock<=0):(p.stock!=null&&p.stock<=0));
+    const low=!vs&&p.stock!=null&&p.stock>0&&p.stock<=(p.low??5);
+    const lo=vs?Math.min(...p.variants.map(v=>v.price)):p.price,priceTxt=vs&&p.variants.some(v=>v.price!==lo)?'from '+money(lo):money(lo);
+    return`<button class="tile ${out?'off':''}" data-act="add" data-id="${p.id}" style="--c:${c.color}" ${out?'aria-disabled="true"':''} aria-label="${esc(p.name)}, ${priceTxt}${q?`, ${q} in order`:''}">
       <span class="tile-em" aria-hidden="true">${p.emoji||'•'}</span>
       <span class="tile-name">${esc(p.name)}</span>
-      <span class="tile-price num">${money(p.price)}${low?`<span class="tile-stock">${p.stock} left</span>`:''}</span>
+      <span class="tile-price num">${priceTxt}${low?`<span class="tile-stock">${p.stock} left</span>`:''}</span>
       ${q&&!out?`<span class="tile-q num">${q}</span>`:''}
     </button>`;}).join('');
 }
 function cartHTML(){
-  const c=U.cart,t=cartTotals(),cu=c.custId?cust(c.custId):null,o=c.orderId?orderOf(c.orderId):null,tb=c.table?tableOf(c.table):null;
+  if(typeof scheduleCartOffers==='function')scheduleCartOffers();
+  const c=U.cart,t=cartTotals(),dd=c.discount||offerFor(c),cu=c.custId?cust(c.custId):null,o=c.orderId?orderOf(c.orderId):null,tb=c.table?tableOf(c.table):null;
   const hosp=hospitality(),L=S.settings.loyalty;
-  const canRedeem=cu&&L.on&&cu.points>=L.redeemPts&&!(c.discount&&c.discount.pts);
+  // With the till server connected, points are the server's cashback wallet and are spent as a
+  // payment (Wallet tender), not as a locally calculated discount.
+  const canRedeem=cu&&L.on&&cu.points>=L.redeemPts&&!(c.discount&&c.discount.pts)&&!live();
   const lines=c.items.map(lineHTML).join('');
   return`<div class="tape-head">
     <div class="th-row"><div class="th-title"><b>${o?'Order '+o.no:'New order'}</b><span>${typeLabel(c.type)}${tb?`, table ${esc(tb.name)}`:''}${c.items.length?`, ${t.count} item${t.count===1?'':'s'}`:''}</span></div>
@@ -85,7 +90,7 @@ function cartHTML(){
    <div class="tape-foot">
     <div class="tots">
      <div class="tot-row"><span>Subtotal</span><span class="num">${money(t.subtotal)}</span></div>
-     ${t.disc?`<div class="tot-row disc"><span>${esc(c.discount.reason)} ${c.discount.kind==='pct'?c.discount.value+'%':''} <button class="linkx" data-act="rmDisc">Remove</button></span><span class="num">−${money(t.disc)}</span></div>`:''}
+     ${t.disc?`<div class="tot-row disc"><span>${esc(dd.reason)} ${dd.kind==='pct'?dd.value+'%':''} ${dd.auto?'':'<button class="linkx" data-act="rmDisc">Remove</button>'}</span><span class="num">−${money(t.disc)}</span></div>`:''}
      <div class="tot-row"><span>${esc(S.settings.taxName)} ${S.settings.taxRate}%${S.settings.taxInclusive?' included':''}</span><span class="num">${money(t.tax)}</span></div>
      <div class="tot-big"><span>Total</span><span class="num">${money(t.total)}</span></div>
     </div>
@@ -104,13 +109,14 @@ function cartHTML(){
 function lineHTML(l){
   const sel=U.selLine===l.uid,p=prod(l.pid);
   return`<div class="pl ${sel?'sel':''} ${l.uid===U.newLine?'new':''}" data-act="lineSel" data-id="${l.uid}" role="button" tabindex="0" aria-expanded="${sel}">
-    <span class="q num">${l.qty}×</span><span class="n">${esc(l.name)}${l.sent?'<i class="sent-tag">sent</i>':''}</span><span class="num">${money(lineTotal(l))}</span>
+    <span class="q num">${l.qty}×</span><span class="n">${esc(l.name)}${l.sent?'<i class="sent-tag">sent</i>':''}${l.override?'<i class="sent-tag" title="'+esc(l.override.reason)+'">price changed</i>':''}</span><span class="num">${money(lineTotal(l))}</span>
     ${l.mods.length?`<span class="m">${l.mods.map(m=>esc(m.n)+(m.p?' +'+money(m.p):'')).join(', ')}</span>`:''}
     ${l.note?`<span class="m note">“${esc(l.note)}”</span>`:''}
     ${sel?`<div class="pl-ctrl" data-stop>
       <button class="qb" data-act="lineQty" data-id="${l.uid}" data-d="-1" aria-label="One fewer">${ic('minus',16)}</button><b class="num">${l.qty}</b><button class="qb" data-act="lineQty" data-id="${l.uid}" data-d="1" aria-label="One more">${ic('plus',16)}</button>
       <span class="spacer"></span>
       ${p&&p.mods&&p.mods.length?`<button class="btn btn-sm" data-act="lineEdit" data-id="${l.uid}">Options</button>`:''}
+      ${live()&&!l.sent?`<button class="btn btn-sm" data-act="linePrice" data-id="${l.uid}">${l.override?'Change price':'Price'}</button>`:''}${l.override&&!l.sent?`<button class="btn btn-sm" data-act="linePriceReset" data-id="${l.uid}">Reset price</button>`:''}
       <button class="btn btn-sm" data-act="lineNote" data-id="${l.uid}">Note</button>
       <button class="btn btn-sm btn-icon" data-act="lineDel" data-id="${l.uid}" aria-label="Remove ${esc(l.name)}">${ic('trash',16)}</button></div>`:''}
   </div>`;
@@ -123,16 +129,65 @@ function refreshPos(opts={}){
   const mb=$('#mobBar');if(mb){mb.innerHTML=mobBarHTML();mb.hidden=!U.cart.items.length;}
   U.newLine=null;
 }
+/* ---------- Till operations on the authoritative backend ---------- */
+// True when this till is signed in to Plemmo: money/stock/print actions then go
+// to the backend and the UI only shows what the backend answered.
+const live=()=>!!(window.PlemmoTill&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated());
+const billIdsOf=o=>o.plemmoBillIds&&o.plemmoBillIds.length?o.plemmoBillIds:(o.plemmoBillId?[o.plemmoBillId]:[]);
+// What a failed call says. A refused/invalid manager PIN gets its own words.
+function tillError(e,fallback){
+  if(e&&e.data&&e.data.requiresApproval)return(e.data.error&&/Invalid/.test(e.data.error))?'That manager PIN wasn’t accepted.':'A manager’s approval is needed for this.';
+  if(e&&e.status===429)return PlemmoTill.errorMessage(e);
+  if(PlemmoTill.isNetworkError(e))return'Can’t reach the till server. Nothing was changed.';
+  return PlemmoTill.errorMessage(e,fallback);
+}
+// Re-read an order from the backend and overwrite the parts of the local cache
+// that the backend owns. Best effort: if it can't be reached the old cache stays.
+async function refreshOrderFromPlemmo(o){
+  if(!o||!o.plemmoOrderId)return false;
+  try{
+    const m=PlemmoOrders.mapPlemmoOrder(await PlemmoTill.fetchOrder(o.plemmoOrderId));
+    Object.assign(o,{status:m.status,payments:m.payments,tip:m.tip,refund:m.refund,refundedAmt:m.refundedAmt,plemmoBillIds:m.plemmoBillIds,printed:m.printed||o.printed});
+    if(m.plemmoBillId!==undefined)o.plemmoBillId=m.plemmoBillId;
+    try{saveNow();}catch(e){}
+    return true;
+  }catch(e){return false;}
+}
+// Stock, loyalty and customer numbers are backend-owned too.
+function refreshCatalogueSoon(){
+  if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).then(()=>{if(['items','home','customers','pos'].includes(U.view))renderView();}).catch(()=>{});
+}
+async function refreshHeld(){
+  if(!live())return;
+  try{S.held=await PlemmoTill.held.list();}catch(e){/* keep the last list */}
+  if(U.view==='pos'){const sp=$('#posStrip');if(sp)sp.innerHTML=posStripHTML();}
+}
+
+function inCartVariantQty(pid,vid){return sum(U.cart.items.filter(l=>l.pid===pid&&l.vid===vid),l=>l.qty);}
+// A product with options (sizes, colours …) is sold as one of them: the cashier picks, each has its own price and stock.
+function addVariant(p,v){
+  if(v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0){toast(`No ${p.name} (${v.name}) left in stock`,'warn');return;}
+  const key=p.id+'|v:'+v.id;
+  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!l.override);
+  if(ex){ex.qty+=1;U.newLine=null;}
+  else{const l={key,pid:p.id,vid:v.id,name:`${p.name} (${v.name})`,price:v.price,cost:v.cost,qty:1,mods:[],note:'',uid:uid('l'),sent:false};U.cart.items.push(l);U.newLine=l.uid;}
+  U.selLine=null;refreshPos({scrollEnd:true});
+}
+function openVariants(p){
+  const L=modal({title:esc(p.name),sub:'Choose an option',cls:'narrow',body:`<div class="vgrid" style="display:grid;gap:8px">${p.variants.map(v=>{const out=v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0;return`<button class="btn" style="justify-content:space-between;padding:14px 16px" data-vid="${esc(v.id)}" ${out?'disabled':''}><span>${esc(v.name)}${v.stock!=null?`<small class="muted" style="margin-left:8px">${out?'out of stock':v.stock+' left'}</small>`:''}</span><b class="num">${money(v.price)}</b></button>`;}).join('')}</div>`,foot:`<button class="btn" data-act="closeTop">Cancel</button>`});
+  L.el.addEventListener('click',e=>{const b=e.target.closest('[data-vid]');if(!b||b.disabled)return;const v=p.variants.find(x=>x.id===b.dataset.vid);if(!v)return;L.close();addVariant(p,v);});
+}
 function addProduct(pid){
   const p=prod(pid);if(!p)return;
   if(!p.available){toast(`${p.name} is marked sold out`,'warn');return;}
+  if(p.variants&&p.variants.length){openVariants(p);return;}
   if(p.stock!=null&&p.stock-inCartQty(pid)<=0){toast(`No ${p.name} left in stock`,'warn');return;}
   if(p.mods&&p.mods.length){openMods(p);return;}
   addLine(p,[],1,'');
 }
 function addLine(p,mods,qty,note){
   const key=p.id+'|'+mods.map(m=>m.n).join(',');
-  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!note);
+  const ex=U.cart.items.find(l=>l.key===key&&!l.sent&&!l.note&&!note&&!l.override);
   if(ex){ex.qty+=qty;U.newLine=null;}
   else{const l={key,pid:p.id,name:p.name,price:p.price,cost:p.cost,qty,mods,note:note||'',uid:uid('l'),sent:false};U.cart.items.push(l);U.newLine=l.uid;}
   U.selLine=null;
@@ -141,6 +196,47 @@ function addLine(p,mods,qty,note){
 }
 A.posCat=d=>{U.pos.cat=d.id;U.pos.q='';const i=$('#posQ');if(i)i.value='';$$('.cat-btn').forEach(b=>b.classList.toggle('on',b.dataset.id===d.id));$('#posGrid').innerHTML=gridHTML();$('#posGrid').scrollTop=0;};
 IN.posQ=v=>{U.pos.q=v;$('#posGrid').innerHTML=gridHTML();};
+
+/* ---------- Barcode scanning (keyboard-wedge scanners) ---------- */
+// A scanner types the code within a few milliseconds and ends with Enter/Tab. The
+// detector turns exactly that pattern into ONE lookup through the backend
+// (/retail/lookup); ordinary typing, including Enter in the search box, is left
+// alone. Scans are queued so rapid scans are resolved in order and none is lost
+// or added twice.
+const SCANNER=window.PlemmoScan?PlemmoScan.create():null;
+let scanQueue=Promise.resolve();
+function noteScan(code,ok,info){U.lastScan={code,ok,name:info&&info.name,message:info&&info.message,at:Date.now()};}
+async function handleScan(code){
+  try{
+    const r=await PlemmoTill.lookupBarcode(code);
+    const p=r.product&&prod(r.product.id);
+    if(!p){noteScan(code,false,{message:'not on this till’s menu'});toast(`${r.product?r.product.name:'That item'} isn’t on this till’s menu`,'warn');return;}
+    if(r.variant){
+      const v=(p.variants||[]).find(x=>x.id===r.variant.id);
+      if(!v){noteScan(code,false,{message:'option not loaded'});toast(`${p.name} (${r.variant.name||'option'}) isn’t on this till’s menu`,'warn');return;}
+      noteScan(code,true,{name:`${p.name} (${v.name})`});addVariant(p,v);return;
+    }
+    if(p.variants&&p.variants.length){noteScan(code,false,{message:'choose an option'});openVariants(p);return;}
+    noteScan(code,true,{name:p.name});
+    addProduct(p.id);
+  }catch(e){
+    if(e&&e.status===404){noteScan(code,false,{message:'no match'});toast(`No item matches barcode ${code}`,'warn');}
+    else if(e&&e.status===403){noteScan(code,false,{message:'not allowed'});toast('Your role can’t look up barcodes','warn');}
+    else{noteScan(code,false,{message:'lookup failed'});toast(`Couldn’t look up ${code}: ${tillError(e)}`,'warn');}
+  }
+}
+document.addEventListener('keydown',e=>{
+  if(!SCANNER||U.view!=='pos'||!U.user||!live()||$('#app').hidden||topLayer())return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const tg=e.target,tag=tg&&tg.tagName;
+  if(tag==='TEXTAREA'||tag==='SELECT'||(tag==='INPUT'&&tg.id!=='posQ')||(tg&&tg.isContentEditable))return;
+  const r=SCANNER.key({key:e.key,ts:Date.now(),value:tag==='INPUT'?tg.value:''});
+  if(!r.scan)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  U.lastAct=Date.now();
+  if(tg&&tg.id==='posQ'){tg.value=r.restore;U.pos.q=r.restore;const g=$('#posGrid');if(g)g.innerHTML=gridHTML();}
+  scanQueue=scanQueue.then(()=>handleScan(r.scan));
+},true);
 A.add=d=>addProduct(d.id);
 A.setType=async d=>{
   if(d.t==='dine'&&!U.cart.table&&S.settings.tables){const t=await pickTable();if(!t)return;U.cart.table=t;}
@@ -149,41 +245,139 @@ A.setType=async d=>{
   refreshPos({grid:false});
 };
 A.lineSel=d=>{U.selLine=U.selLine===d.id?null:d.id;refreshPos({grid:false});};
+// An item the kitchen already has is part of an order the till server holds (stock taken,
+// ticket sent, bill pending), so removing it is done THERE: the backend checks the approval
+// (manager/owner, or a manager PIN), returns stock for an item not yet started, keeps an
+// in-progress item on the bill as a void, recomputes the bill and audits it. The cart is then
+// re-read from the server — the screen never just drops the line.
+const onBackendOrder=()=>{if(!live()||!U.cart.orderId)return false;const o=orderOf(U.cart.orderId);return !!(o&&o.plemmoOrderId);};
+async function removeSentLine(l){
+  const o=orderOf(U.cart.orderId);
+  if(!o||l.itemId==null){toast('That item can’t be removed from this screen. Void the whole order instead.','warn');return;}
+  const by=await approveServer('refunds',`Removing ${l.name} from an order the kitchen has`);if(!by)return;
+  if(!await confirmBox({title:`Remove ${l.name}?`,text:'It comes off the bill. If the kitchen has not started it, it goes back into stock.',ok:'Remove item',danger:true}))return;
+  try{await PlemmoTill.cancelItem(o.plemmoOrderId,l.itemId,{pin:by.pin,reason:'Removed at the till'});}
+  catch(e){toast(`${l.name} was not removed: ${tillError(e,'the till server refused it')}`,'warn');return;}
+  let fresh=null;
+  try{fresh=PlemmoOrders.mapPlemmoOrder(await PlemmoTill.fetchOrder(o.plemmoOrderId));}catch(e){}
+  if(fresh){
+    Object.assign(o,{items:fresh.items,subtotal:fresh.subtotal,tax:fresh.tax,discAmt:fresh.discAmt,total:fresh.total,status:fresh.status});
+    if(fresh.status==='void'){U.cart=newCart();U.selLine=null;save();refreshCatalogueSoon();renderView();renderRail();toast(`Order ${o.no} had no items left and was voided`);return;}
+    U.cart.items=[...fresh.items,...U.cart.items.filter(x=>!x.sent)];
+  }else{U.cart.items=U.cart.items.filter(x=>x!==l);}
+  U.selLine=null;save();refreshCatalogueSoon();refreshPos();toast(`Removed ${l.name}`);
+}
 A.lineQty=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
   const n=l.qty+(+d.d);
-  if(+d.d>0){const p=prod(l.pid);if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
-  if(l.sent&&+d.d<0){const ok=await approve('refunds','Taking back an item the kitchen already has');if(!ok)return;}
+  if(+d.d>0){const p=prod(l.pid),v=l.vid&&p?(p.variants||[]).find(x=>x.id===l.vid):null;if(v){if(v.stock!=null&&v.stock-inCartVariantQty(p.id,v.id)<=0){toast(`No more ${l.name} in stock`,'warn');return;}}else if(p&&p.stock!=null&&p.stock-inCartQty(p.id)<=0){toast(`No more ${p.name} in stock`,'warn');return;}}
+  if(l.sent&&+d.d<0){
+    if(onBackendOrder()){
+      if(l.qty===1){await removeSentLine(l);return;}
+      toast('To take one off a line the kitchen already has, remove the line and add the quantity you still want.','warn',{ms:5200});return;
+    }
+    const ok=await approve('refunds','Taking back an item the kitchen already has');if(!ok)return;
+  }
   if(n<=0){U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;}else l.qty=n;
   refreshPos();
 };
 A.lineDel=async d=>{
   const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;
-  if(l.sent){const ok=await approve('refunds','Removing an item the kitchen already has');if(!ok)return;}
+  if(l.sent){
+    if(onBackendOrder()){await removeSentLine(l);return;}
+    const ok=await approve('refunds','Removing an item the kitchen already has');if(!ok)return;
+  }
   U.cart.items=U.cart.items.filter(x=>x!==l);U.selLine=null;refreshPos();
   toast(`Removed ${l.name}`,'',{action:'Undo',onAction:()=>{U.cart.items.push(l);refreshPos();}});
 };
 A.lineNote=async d=>{const l=U.cart.items.find(x=>x.uid===d.id);if(!l)return;const v=await promptBox({title:'Note for the kitchen',label:l.name,value:l.note,placeholder:'For example, no onions',ok:'Save note'});if(v===null)return;l.note=v.trim();refreshPos({grid:false});};
+// Change the price of an item that has not gone to the kitchen yet. The request
+// is approved (own permission, or a manager PIN) and then sent with the order;
+// the BACKEND re-checks it, keeps the catalogue price beside the new one, and
+// audits it. Nothing about the master product price changes.
+const PRICE_REASONS=['Damaged or marked','Price match','Manager discretion','Staff or friends','Wrong price on the menu','Other'];
+A.linePrice=async d=>{
+  const l=U.cart.items.find(x=>x.uid===d.id);if(!l||!live())return;
+  if(l.sent){toast('The kitchen already has this item, so its price can’t be changed here.','warn');return;}
+  const by=await approveServer('priceOverride',`Changing the price of ${l.name}`);if(!by)return;
+  const list=l.listPrice!=null?l.listPrice:l.price;
+  const r=await new Promise(res=>{let done=false;
+    const L=modal({title:`Price for ${esc(l.name)}`,cls:'narrow',body:`<p class="muted">Catalogue price ${money(list)} each. The catalogue itself isn’t changed.</p>
+      <label class="field mt"><span>Price each</span><input class="input num" id="lpP" type="number" min="0" step="0.01" value="${l.price}" inputmode="decimal" autofocus></label>
+      <label class="field mt"><span>Reason</span><select class="input" id="lpR">${PRICE_REASONS.map(x=>`<option>${x}</option>`).join('')}</select></label>
+      <p class="pin-err" id="lpE" aria-live="polite"></p>`,
+      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="lpGo">Apply price</button>`,onClose:()=>{if(!done)res(null);}});
+    L.el.querySelector('#lpGo').onclick=()=>{
+      const v=parseFloat(L.el.querySelector('#lpP').value);
+      if(!isFinite(v)||v<0||v>1e7){L.el.querySelector('#lpE').textContent='Enter a price of 0 or more.';return;}
+      done=true;const reason=L.el.querySelector('#lpR').value;L.close();res({price:r2(v),reason});
+    };
+  });
+  if(!r)return;
+  if(r.price===r2(list)){delete l.override;delete l.listPrice;l.price=r2(list);refreshPos({grid:false});return;}
+  l.listPrice=list;l.price=r.price;l.override={reason:r.reason};
+  if(by.pin)PlemmoOrders.setOverridePin(by.pin);
+  refreshPos({grid:false});
+  toast(`${l.name} is now ${money(r.price)}. The change is checked when you send or charge.`,'info',{ms:2600});
+};
+A.linePriceReset=d=>{const l=U.cart.items.find(x=>x.uid===d.id);if(!l||!l.override)return;l.price=l.listPrice;delete l.listPrice;delete l.override;refreshPos({grid:false});};
 A.lineEdit=d=>{const l=U.cart.items.find(x=>x.uid===d.id);const p=l&&prod(l.pid);if(p)openMods(p,l);};
 A.orderNote=async()=>{const v=await promptBox({title:'Order note',label:'Shown on the receipt and kitchen ticket',value:U.cart.note,placeholder:'For example, birthday, bring candles',ok:'Save note'});if(v===null)return;U.cart.note=v.trim();refreshPos({grid:false});};
 A.mobCart=()=>{U.mobCart=!U.mobCart;$('#pos').classList.toggle('cart-open',U.mobCart);};
 A.hideDrawerHint=()=>{U.hideDrawerHint=true;refreshPos({grid:false});};
-A.rmDisc=()=>{U.cart.discount=null;refreshPos({grid:false});};
+A.rmDisc=()=>{discPin=null;U.cart.discount=null;refreshPos({grid:false});};
 A.rmCust=()=>{U.cart.custId=null;if(U.cart.discount&&U.cart.discount.pts)U.cart.discount=null;refreshPos({grid:false});};
 A.redeem=()=>{const L=S.settings.loyalty;U.cart.discount={kind:'amt',value:L.redeemVal,reason:'Loyalty reward',pts:L.redeemPts};refreshPos({grid:false});toast(`${money(L.redeemVal)} reward applied`);};
 A.clearCart=async()=>{
+  if(window.PlemmoOrders)PlemmoOrders.setOverridePin(null);   // an approval PIN never outlives its cart
   if(U.cart.orderId){U.cart=newCart();U.selLine=null;refreshPos();toast('Order closed. It’s still open on its table.');return;}
   if(!U.cart.items.length)return;
   const saved=clone(U.cart);U.cart=newCart();U.selLine=null;refreshPos();
   toast('Order cleared','',{action:'Undo',onAction:()=>{U.cart=saved;refreshPos();}});
 };
-A.hold=()=>{
+// A held cart lives on the backend (held_carts) so it survives a reload and is
+// visible on every till. A failed hold leaves the cart exactly where it is.
+function heldLabel(c){const cu=c.custId?cust(c.custId):null,tb=c.table?tableOf(c.table):null;return cu?first(cu.name):tb?'Table '+tb.name:'Held '+fmtT(Date.now());}
+const restoreCart=c=>({items:(c.items||[]).map(l=>({...l,sent:false,uid:l.uid||PlemmoTill.newId('l'),mods:l.mods||[]})),type:c.type||'takeaway',table:c.table||null,custId:c.custId||null,discount:c.discount||null,orderId:null,note:c.note||''});
+let heldBusy=false;   // a double tap must not hold (or resume) the same cart twice
+A.hold=async()=>{
   const c=U.cart;if(!c.items.length)return;
+  if(live()){
+    if(heldBusy)return;heldBusy=true;
+    try{
+      try{await PlemmoTill.held.hold(PlemmoTill.newId('h'),heldLabel(c),c);}
+      catch(e){toast(`Couldn’t hold this order: ${tillError(e,'the till server refused it')}`,'warn');return;}
+      U.cart=newCart();U.selLine=null;PlemmoOrders.setOverridePin(null);
+      await refreshHeld();refreshPos();toast('Order held. Tap it above the menu to pick it up again.');
+    }finally{heldBusy=false;}
+    return;
+  }
   const cu=c.custId?cust(c.custId):null,tb=c.table?tableOf(c.table):null;
   S.held.push({id:uid('h'),ts:Date.now(),by:U.user,label:cu?first(cu.name):tb?'Table '+tb.name:'Held '+fmtT(Date.now()),cart:clone(c)});
   U.cart=newCart();U.selLine=null;save();refreshPos();toast('Order held. Tap it above the menu to pick it up again.');
 };
-A.resume=d=>{
+A.resume=async d=>{
+  if(live()){
+    const h=S.held.find(x=>x.id===d.id);if(!h||heldBusy)return;heldBusy=true;
+    try{
+      // Park the current, unsent cart first so taking the other one back can't lose it.
+      if(U.cart.items.length&&!U.cart.orderId){
+        try{await PlemmoTill.held.hold(PlemmoTill.newId('h'),heldLabel(U.cart),U.cart);}
+        catch(e){toast(`Couldn’t hold your current order: ${tillError(e)}`,'warn');return;}
+        U.cart=newCart();toast('Your current order was held so you can pick up this one');
+      }
+      let got;
+      try{got=await PlemmoTill.held.resume(d.id);}
+      catch(e){
+        await refreshHeld();refreshPos();
+        toast(e&&e.status===404?'That held order was already picked up on another till.':`Couldn’t resume it: ${tillError(e)}`,'warn');return;
+      }
+      U.cart=restoreCart(got.cart);U.selLine=null;
+      await refreshHeld();
+      if(U.view!=='pos')go('pos');else{renderView();}
+    }finally{heldBusy=false;}
+    return;
+  }
   const h=S.held.find(x=>x.id===d.id);if(!h)return;
   if(U.cart.items.length&&!U.cart.orderId){const cu=U.cart.custId?cust(U.cart.custId):null;S.held.push({id:uid('h'),ts:Date.now(),by:U.user,label:cu?first(cu.name):'Held '+fmtT(Date.now()),cart:clone(U.cart)});toast('Your current order was held so you can pick up this one');}
   S.held=S.held.filter(x=>x!==h);U.cart=h.cart;U.selLine=null;save();
@@ -198,11 +392,37 @@ A.cartMenu=(d,el)=>{
    ${c.items.length&&!c.orderId?`<button class="pop-i" data-act="hold">${ic('pause',18)} Hold for later</button>`:''}
    ${c.orderId?`<div class="pop-sep"></div><button class="pop-i danger" data-act="voidOpen">${ic('ban',18)} Void this table’s order</button>`:''}`);
 };
-A.changeTable=async()=>{const t=await pickTable(U.cart.table);if(!t)return;U.cart.table=t;U.cart.type='dine';if(U.cart.orderId){const o=orderOf(U.cart.orderId);if(o){o.table=t;save();}}renderView();toast(`Moved to table ${tableOf(t).name}`);};
+A.changeTable=async()=>{
+  const from=U.cart.table,t=await pickTable(from);if(!t)return;
+  const o=U.cart.orderId?orderOf(U.cart.orderId):null;
+  // An order the server holds is moved there (it checks the target is free and updates both tables);
+  // only a cart that has not been sent yet changes table on this screen alone.
+  if(o&&o.plemmoOrderId&&live()&&from){
+    try{await PlemmoAPI.post('/tables/'+encodeURIComponent(from)+'/move-order',{target_table_id:t,order_id:o.plemmoOrderId},{idempotent:false});}
+    catch(e){toast(`The order was not moved: ${(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):(e&&e.message))}`,'warn');return;}
+    try{if(window.PlemmoTables)await PlemmoTables.load(S);}catch(e){/* the floor plan refreshes on the next load */}
+  }
+  U.cart.table=t;U.cart.type='dine';if(o){o.table=t;save();}renderView();toast(`Moved to table ${tableOf(t).name}`);
+};
 A.voidOpen=async()=>{
   const o=orderOf(U.cart.orderId);if(!o)return;
-  const ok=await approve('refunds','Voiding an open order');if(!ok)return;
+  // An order the backend knows about is cancelled THERE (stock back, audit, KDS);
+  // an order that only ever existed on this device is voided locally.
+  const remote=live()&&!!o.plemmoOrderId;
+  const ok=await(remote?approveServer:approve)('refunds','Voiding an open order');if(!ok)return;
   if(!await confirmBox({title:`Void order ${o.no}?`,text:'The table becomes free and the order is kept in history as voided. Nothing is charged.',ok:'Void order',danger:true}))return;
+  if(remote){
+    try{await PlemmoTill.cancelOrder(o.plemmoOrderId,{reason:'Voided at table',overridePin:ok.pin});}
+    catch(e){
+      toast(`Order ${o.no} was not voided: ${tillError(e,'the till server refused it')}`,'warn');
+      if(!PlemmoTill.isNetworkError(e)){await refreshOrderFromPlemmo(o);renderView();renderRail();}
+      return;
+    }
+    await refreshOrderFromPlemmo(o);
+    S.tickets.forEach(t=>{if(t.orderId===o.id&&t.status!=='done'){t.status='done';t.doneTs=Date.now();}});
+    U.cart=newCart();U.selLine=null;save();refreshCatalogueSoon();renderView();renderRail();toast(`Order ${o.no} voided`);
+    return;
+  }
   o.status='void';o.refund={ts:Date.now(),by:ok.id,reason:'Voided at table',restock:false};
   S.tickets.forEach(t=>{if(t.orderId===o.id&&t.status!=='done'){t.status='done';t.doneTs=Date.now();}});
   U.cart=newCart();save();renderView();renderRail();toast(`Order ${o.no} voided`);
@@ -278,7 +498,7 @@ function renderDisc(){
    <div class="change-line mt" id="dscPrev"><span>New total</span><span class="num">${money(t.total)} (saves ${money(t.disc)})</span></div>
    ${needsDiscApproval()?`<p class="hint mt">${ic('lock',14)} A manager will need to approve this discount.</p>`:''}`;
 }
-function needsDiscApproval(){if(!can('discounts'))return true;const e=me();return e.role==='staff'&&DSC.kind==='pct'&&DSC.value>20;}
+function needsDiscApproval(){if(live())return me().role!=='owner'&&me().role!=='manager';if(!can('discounts'))return true;const e=me();return e.role==='staff'&&DSC.kind==='pct'&&DSC.value>20;}
 A.dscPick=d=>{DSC.kind='pct';DSC.value=+d.v;DSC.reason=d.r;renderDisc();};
 A.dscKind=d=>{DSC.kind=d.k;DSC.value=d.k==='pct'?10:2;renderDisc();};
 A.dscReason=d=>{DSC.reason=d.r;renderDisc();};
@@ -286,7 +506,12 @@ IN.dscVal=v=>{DSC.value=Math.max(0,+v||0);if(DSC.kind==='pct')DSC.value=Math.min
 A.applyDisc=async()=>{
   if(!DSC.value){toast('Enter a discount above zero','warn');return;}
   let by=me();
-  if(needsDiscApproval()){by=await approve(me().role==='staff'&&can('discounts')?'refunds':'discounts',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!by)return;}
+  if(live()){
+    // The backend decides who may discount and records the real approver; here we only
+    // collect a PIN up front when the signed-in user is not a manager/owner.
+    discPin=null;
+    if(me().role!=='owner'&&me().role!=='manager'){const got=await approveServer('priceOverride',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!got)return;discPin=got.pin||null;}
+  }else if(needsDiscApproval()){by=await approve(me().role==='staff'&&can('discounts')?'refunds':'discounts',`A ${DSC.kind==='pct'?DSC.value+'%':money(DSC.value)} discount`);if(!by)return;}
   U.cart.discount={kind:DSC.kind,value:DSC.value,reason:DSC.reason,by:by.id};
   DSC.L.close();refreshPos({grid:false});toast('Discount applied');
 };
@@ -309,7 +534,13 @@ A.sendKitchen=async()=>{
   // the real KDS. On failure, save locally so the kitchen still gets it.
   if(window.PlemmoOrders&&PlemmoAPI.isAuthenticated()){
     try{ await sendKitchenPlemmo(c,unsent); return; }
-    catch(e){ toast('Could not reach Plemmo — order saved locally','warn'); }
+    catch(e){
+      // The server answered and said no (price change not approved, permission,
+      // validation): show its reason and keep the cart — do NOT quietly save a
+      // local-only order the backend has never seen.
+      if(!PlemmoTill.isNetworkError(e)){toast(tillError(e,'The till server refused this order'),'warn');return;}
+      toast('Could not reach Plemmo — order saved locally','warn');
+    }
   }
   let o=c.orderId?orderOf(c.orderId):null;
   if(!o){o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0};S.orders.push(o);}
@@ -325,8 +556,7 @@ async function sendKitchenPlemmo(c,unsent){
   let o=c.orderId?orderOf(c.orderId):null;
   if(o&&o.plemmoOrderId){
     // Append the new items to the existing authoritative order.
-    const items=unsent.map(l=>PlemmoOrders.cartLineToItem(l,S._plemmoAddons));
-    await PlemmoAPI.post('/orders/'+encodeURIComponent(o.plemmoOrderId)+'/items',{items:items},{idempotent:true});
+    await PlemmoOrders.addItems(o.plemmoOrderId,unsent,S._plemmoAddons);
   }else{
     const order=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:unsent},S._plemmoAddons);
     o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,ts:Date.now(),opened:Date.now(),empId:U.user,source:'pos',status:'open',tip:0,payments:[],pts:0,
@@ -348,23 +578,121 @@ function loadOrderToCart(o){
 
 /* ---------- Payment ---------- */
 let PAY=null;
+// A sale the backend is authoritative for: a fresh counter sale, or a dine-in order that
+// already exists there. (A device-only order from an offline moment pays locally.)
+function plemmoSaleMode(){
+  const c=U.cart,existing=c.orderId?orderOf(c.orderId):null;
+  return !!(window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId)));
+}
 A.charge=()=>{
   if(!U.cart.items.length){toast('Add an item first','warn');return;}
   const t=cartTotals();
   PAY={due:t.total,tip:0,tipPct:0,method:'card',tendered:'',splitAmt:'',payments:[],stage:'idle'};
-  PAY.L=modal({title:'Take payment',cls:'xl',body:`<div id="payBody"></div>`,dismiss:false,onClose:()=>{if(PAY&&PAY.payments.length&&!PAY.done)toast('Payment cancelled. Money already taken is shown on the order when you charge again.','warn');}});
-  renderPay();
+  const remote=plemmoSaleMode();
+  PAY.L=modal({title:'Take payment',cls:'xl',body:`<div id="payBody"></div>`,dismiss:false,onClose:()=>{
+    if(PAY&&PAY.payments.length&&!PAY.done)toast('Payment cancelled. Money already taken is shown on the order when you charge again.','warn');
+    if(PAY&&!PAY.done){cancelCardAttempt(PAY);releasePreparedSale(PAY);}
+  }});
+  if(remote){PAY.remote=true;PAY.stage='prep';renderPay();preparePlemmoSale(PAY);}
+  else renderPay();
 };
+// Before any money is taken the backend creates the order, applies the discount (asking for a
+// manager PIN when it says so) and generates the bill; the pay screen then charges the BACKEND's
+// total, never a locally computed one. Everything here is safe to repeat: PAY.saved remembers
+// what already exists so a retry never creates a second order.
+let discPin=null;
+async function ensurePlemmoBill(p){
+  const c=U.cart,existing=c.orderId?orderOf(c.orderId):null,sv=p.saved||(p.saved={});
+  if(!sv.orderId){
+    if(existing&&existing.plemmoOrderId){sv.orderId=existing.plemmoOrderId;sv.created=false;}
+    else{const r=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);sv.orderId=r.id;sv.orderResp=r;sv.created=true;}
+  }
+  if(c.discount&&!sv.discounted){
+    let pin=discPin;
+    for(let tries=0;;tries++){
+      try{await PlemmoTill.applyDiscount(sv.orderId,{kind:c.discount.kind,value:c.discount.value,reason:c.discount.reason,pin});sv.discounted=true;break;}
+      catch(e){
+        if(!(e&&e.data&&e.data.requiresApproval)||tries>=2)throw e;
+        const got=await pinCollect({title:'Manager approval',text:`${esc(c.discount.kind==='pct'?c.discount.value+'%':money(c.discount.value))} discount needs a manager. Hand over the till and ask them to enter their PIN.`});
+        if(!got||!got.pin)throw Object.assign(new Error('Discount approval cancelled'),{cancelled:true});
+        pin=got.pin;
+      }
+    }
+    discPin=null;
+  }
+  if(!sv.bill){
+    let bill;
+    try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:sv.orderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
+    if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(sv.orderId));bill=b&&b.bill;}
+    if(!bill)throw new Error('No bill for order');
+    sv.bill=bill;
+  }
+  return sv;
+}
+// The wallet balance is the server's: re-read it before offering it and after a sale changed it.
+async function refreshWallet(custId){
+  if(!custId)return;
+  try{const w=await PlemmoAPI.get('/customers/'+encodeURIComponent(custId)+'/wallet');const cu=cust(custId);if(cu&&w&&w.balance!=null)cu.points=Number(w.balance)||0;}catch(e){/* keep the last known balance */}
+}
+async function preparePlemmoSale(p){
+  try{
+    await ensurePlemmoBill(p);
+    await refreshWallet(U.cart.custId);
+    await refreshCardConfig();
+    if(PAY!==p||(p.L&&p.L.closed)){releasePreparedSale(p);return;}
+    p.due=Number(p.saved.bill.total);p.stage='idle';renderPay();
+  }catch(e){
+    await releasePreparedSale(p,true);
+    const msg=e&&e.cancelled?'Discount not approved. Nothing was charged.'
+      :(e&&e.status===403&&!(e.data&&e.data.requiresApproval))?'You don’t have permission to take payment'
+      :`The sale could not be prepared: ${tillError(e,'the till server did not respond')}. Nothing was charged.`;
+    toast(msg,'warn');
+    if(PAY===p&&p.L&&!p.L.closed){p.done=true;p.L.close();PAY=null;}
+  }
+}
+// Abandoned checkout with nothing paid: put the stock back by voiding the order WE created.
+async function releasePreparedSale(p,force){
+  const sv=p&&p.saved;if(!sv||!sv.orderId||!sv.created||sv.released)return;
+  if(p.payments&&p.payments.length)return;
+  if(!force&&sv.orderId==null)return;
+  sv.released=true;
+  try{await PlemmoTill.cancelOrder(sv.orderId,{reason:'Checkout cancelled'});refreshCatalogueSoon();}
+  catch(e){toast('Checkout cancelled, but the open order could not be voided automatically. Void it from Orders.','warn');}
+}
 function payRem(){return r2(PAY.due+PAY.tip-sum(PAY.payments,p=>p.a));}
 function cashSuggest(rem){const c=[rem,Math.ceil(rem),Math.ceil(rem/5)*5,Math.ceil(rem/10)*10,Math.ceil(rem/20)*20,50];return[...new Set(c.map(r2))].filter(v=>v>=rem).slice(0,4);}
+// The pay modal's own body: an earlier modal that is still fading out can hold an element with the same id.
+function payBodyEl(){return(PAY&&PAY.L&&PAY.L.el&&PAY.L.el.querySelector('#payBody'))||$('#payBody');}
 function renderPay(){
+  if(PAY.stage==='prep'){payBodyEl().innerHTML=`<div class="reader wait" style="margin:40px auto;max-width:420px"><b>Preparing the bill…</b><small>Checking prices, tax and any discount with the till server.</small></div>`;return;}
   const rem=payRem(),paidAny=PAY.payments.length>0,tips=S.settings.tipping;
   const tipBtns=[0,10,12.5,15].map(p=>`<button class="chip ${PAY.tipPct===p&&!PAY.tipCustom?'on':''}" data-act="payTip" data-p="${p}" ${paidAny?'disabled':''}>${p?p+'%':'No tip'}</button>`).join('')+`<button class="chip ${PAY.tipCustom?'on':''}" data-act="payTipCustom" ${paidAny?'disabled':''}>Other</button>`;
   let pane='';
-  if(PAY.method==='card'){
+  const lastCard=[...PAY.payments].reverse().find(p=>p.m==='card'&&!p.attemptId);
+  if(rem<=0.004&&paidAny&&PAY.stage==='idle'){
+    pane=`<div class="reader idle"><div class="rd-ic">${ic('check',30)}</div><b>Payment taken</b><small>The sale has not been saved yet. Nothing more is charged when you try again.</small></div>
+      ${lastCard?`<label class="field"><span>Terminal reference <span class="faint">(optional, fix it if it was mistyped)</span></span><input id="payRef2" maxlength="64" autocomplete="off" value="${esc(lastCard.ref||'')}"></label>`:''}
+      <button class="btn btn-primary btn-lg btn-block" data-act="payRetry">Save the sale</button>`;
+  }else if(PAY.method==='card'){
     const amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
-    pane=`<div class="reader ${PAY.stage}">${PAY.stage==='ok'?`<div class="rd-ic">${ic('check',32)}</div><b>Approved</b><small>Visa ending 4417</small>`:PAY.stage==='wait'?`<div class="rd-ic">${ic('contactless',32)}</div><b>${money(amt)}</b><small>Ask the customer to tap, insert or swipe</small>`:`<div class="rd-ic">${ic('card',30)}</div><b>Card reader ready</b><small>Connected, battery 82%</small>`}</div>
-      <button class="btn btn-primary btn-lg btn-block" data-act="payCard" ${PAY.stage!=='idle'?'disabled':''}>${PAY.stage==='idle'?`Send ${money(amt)} to the reader`:PAY.stage==='wait'?'Waiting for the card…':'Approved'}</button>`;
+    if(PAY.stage==='cardwait'){pane=cardWaitHTML();}
+    else if(PAY.stage==='wait'){
+      const ca=money(PAY.cardAmt||amt);
+      pane=`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>Enter this amount on your card terminal and let the customer pay. Then confirm the result below.</small></div>
+        <label class="field"><span>Terminal receipt or authorisation number <span class="faint">(optional)</span></span><input id="payRef" maxlength="64" autocomplete="off" placeholder="e.g. 004217"></label>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCardOk">Payment approved on the terminal</button>
+        <button class="btn btn-block" data-act="payCardNo">Declined or cancelled</button>`;
+    }else{
+      pane=cardProviderOn()?`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>${money(amt)} is sent to the card terminal${S._card.simulated?'. This is a simulated terminal: no real card is charged':''}. The sale is only recorded once the terminal approves it.</small></div>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Send ${money(amt)} to the terminal</button>
+        <button class="btn btn-block" data-act="payCardManual">Terminal not working? Record a card by hand</button>`
+      :`<div class="reader idle"><div class="rd-ic">${ic('card',30)}</div><b>Card payment</b><small>Take ${money(amt)} on your card terminal, then confirm the result here. No card terminal is set up for this till${live()?' (set one up in Settings, Card payments)':''}, so this is recorded as an unverified card payment.</small></div>
+        <button class="btn btn-primary btn-lg btn-block" data-act="payCard">Take ${money(amt)} by card</button>`;
+    }
+  }else if(PAY.method==='wallet'){
+    const use=Math.min(walletMinor(),Math.round(rem*100));
+    pane=`<div class="reader idle"><div class="rd-ic">${ic('star',30)}</div><b>Wallet balance ${money(walletMinor()/100)}</b><small>${esc(cust(U.cart.custId).name)}’s cashback. Spending it takes it off their wallet straight away.</small></div>
+      <button class="btn btn-primary btn-lg btn-block" data-act="payWallet" ${use>0?'':'disabled'}>Use ${money(use/100)} from the wallet</button>`;
   }else if(PAY.method==='cash'){
     const ten=+PAY.tendered||0,ch=r2(ten-rem);
     pane=`<div class="tender num" aria-live="polite">${PAY.tendered?S.settings.currency+PAY.tendered:`<span class="faint">${money(rem)}</span>`}</div>
@@ -380,19 +708,19 @@ function renderPay(){
       ${keypadHTML('money','wide')}
       <div class="fgrid"><button class="btn btn-lg" data-act="paySplitCard" ${n>0?'':'disabled'}>${ic('card',18)} Card</button><button class="btn btn-lg" data-act="paySplitCash" ${n>0?'':'disabled'}>${ic('cash',18)} Cash</button></div>`;
   }
-  $('#payBody').innerHTML=`<div class="pay">
+  payBodyEl().innerHTML=`<div class="pay">
    <div class="pay-sum">
-    <div><span class="muted" style="font-weight:600">${paidAny?'Left to pay':'Amount due'}</span><div class="pay-big num">${money(rem)}</div><p class="pay-sub">Order ${money(PAY.due)}${PAY.tip?`, tip ${money(PAY.tip)}`:''}${U.cart.custId?`, ${esc(first(cust(U.cart.custId).name))} earns ${Math.floor(PAY.due*S.settings.loyalty.earn)} points`:''}</p></div>
+    <div><span class="muted" style="font-weight:600">${paidAny?'Left to pay':'Amount due'}</span><div class="pay-big num">${money(rem)}</div><p class="pay-sub">Order ${money(PAY.due)}${PAY.tip?`, tip ${money(PAY.tip)}`:''}${U.cart.custId&&!PAY.remote?`, ${esc(first(cust(U.cart.custId).name))} earns ${Math.floor(PAY.due*S.settings.loyalty.earn)} points`:''}</p></div>
     ${tips?`<div class="field"><span>Tip</span><div class="chips">${tipBtns}</div></div>`:''}
-    ${paidAny?`<div class="pay-taken">${PAY.payments.map(p=>`<div><span>${p.m==='cash'?'Cash':'Card'}</span><span class="num">${money(p.a)}</span></div>`).join('')}</div>`:''}
+    ${paidAny?`<div class="pay-taken">${PAY.payments.map(p=>`<div><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Wallet':'Card'}</span><span class="num">${money(p.a)}</span></div>`).join('')}</div>`:''}
     <div class="spacer"></div>
     <button class="btn btn-ghost" data-act="payCancel" ${PAY.stage==='wait'?'disabled':''}>${paidAny?'Cancel remaining payment':'Back to the order'}</button>
    </div>
    <div class="pay-pane">
-    <div class="seg">${[['card','Card','card'],['cash','Cash','cash'],['split','Split','split']].map(([k,l,i])=>`<button class="${PAY.method===k?'on':''}" data-act="payMethod" data-m="${k}" ${PAY.stage!=='idle'?'disabled':''}>${ic(i,16)}${l}</button>`).join('')}</div>
+    <div class="seg">${[['card','Card','card'],['cash','Cash','cash'],...(walletMinor()>0?[['wallet','Wallet','star']]:[]),['split','Split','split']].map(([k,l,i])=>`<button class="${PAY.method===k?'on':''}" data-act="payMethod" data-m="${k}" ${PAY.stage!=='idle'?'disabled':''}>${ic(i,16)}${l}</button>`).join('')}</div>
     ${pane}
    </div></div>`;
-  if(PAY.method!=='card')bindPad($('#payBody'),payKey);
+  if(PAY.method!=='card')bindPad(payBodyEl(),payKey);
 }
 function payKey(k){
   const f=PAY.method==='cash'?'tendered':'splitAmt';let v=PAY[f];
@@ -401,6 +729,18 @@ function payKey(k){
   else if(/^\d$/.test(k)){if(v.includes('.')&&v.split('.')[1].length>=2)return;if(v.replace('.','').length>=7)return;v=v==='0'?k:v+k;}
   PAY[f]=v;renderPay();
 }
+// The cashback wallet is held by the till server in points; 1 point is 1 minor unit (1p), and the
+// server refuses a wallet payment above the real balance. Only offered for a server-backed sale.
+function walletMinor(){
+  if(!PAY||!PAY.remote||!U.cart.custId)return 0;
+  const c=cust(U.cart.custId);return c?Math.max(0,Math.floor(Number(c.points)||0)):0;
+}
+A.payWallet=()=>{
+  const rem=payRem(),use=Math.min(walletMinor(),Math.round(rem*100));
+  if(use<=0)return;
+  pushPay({m:'wallet',a:r2(use/100)});
+  afterPayment();
+};
 A.payMethod=d=>{PAY.method=d.m;PAY.splitMode=d.m==='split';if(d.m!=='split')PAY.splitAmt='';renderPay();};
 A.payTip=d=>{PAY.tipPct=+d.p;PAY.tipCustom=false;PAY.tip=r2(PAY.due*PAY.tipPct/100);renderPay();};
 A.payTipCustom=async()=>{const v=await promptBox({title:'Add a tip',label:'Tip amount',value:PAY.tip||'',type:'number',ok:'Add tip'});if(v===null)return;PAY.tip=Math.max(0,r2(+v||0));PAY.tipCustom=true;PAY.tipPct=-1;renderPay();};
@@ -408,31 +748,130 @@ A.payNote=d=>{PAY.tendered=String(d.v);renderPay();};
 A.paySplitEven=d=>{PAY.splitAmt=String(r2(Math.ceil((PAY.due+PAY.tip)/+d.n*100)/100));const rem=payRem();if(+PAY.splitAmt>rem)PAY.splitAmt=String(rem);renderPay();};
 A.paySplitRest=()=>{PAY.splitAmt=String(payRem());renderPay();};
 A.payCancel=()=>{PAY.L.close();};
-async function cardFlow(amount){
-  PAY.stage='wait';renderPay();
-  await sleep(1700);
-  if(!PAY||PAY.L.closed)return false;
-  PAY.stage='ok';renderPay();
-  await sleep(650);
-  if(!PAY||PAY.L.closed)return false;
-  PAY.payments.push({m:'card',a:r2(amount)});PAY.stage='idle';
-  return true;
+// The till is not connected to a card terminal: staff take the amount on their own
+// terminal and tell the till what happened. Nothing here pretends to talk to a reader;
+// the backend records the result as an unverified ("captured") manual card payment.
+function cardFlow(amount){
+  PAY.stage='wait';PAY.cardAmt=r2(amount);
+  return new Promise(resolve=>{PAY.cardResolve=resolve;renderPay();});
 }
-A.payCard=async()=>{
+// The tip is shared out over the payments in the order they are taken (never onto the wallet), so each card
+// line carries exactly the tip its terminal charge included.
+function tipShareFor(amount){
+  const given=sum(PAY.payments,p=>p.tipShare||0);
+  return r2(Math.max(0,Math.min(PAY.tip-given,amount-0.01)));
+}
+function pushPay(p){p.tipShare=p.m==='wallet'?0:tipShareFor(p.a);PAY.payments.push(p);}
+// A card terminal is connected when the till server says so; the card is then asked for on the terminal and
+// the sale is only recorded after the provider approves it. Without one, staff record the card by hand.
+async function refreshCardConfig(){
+  if(!(window.PlemmoAPI&&PlemmoAPI.isAuthenticated())){S._card=null;return;}
+  try{S._card=await PlemmoAPI.get('/card/config');}catch(e){S._card=null;}
+}
+function cardProviderOn(){return !!(S._card&&S._card.enabled&&PAY&&PAY.remote&&PAY.saved&&PAY.saved.bill);}
+function takeCard(amount){return cardProviderOn()?providerCardFlow(amount):cardFlow(amount);}
+function stopCardPoll(){if(PAY&&PAY.cardTimer){clearInterval(PAY.cardTimer);PAY.cardTimer=null;}}
+function providerCardFlow(amount){
+  const share=tipShareFor(amount);
+  PAY.stage='cardwait';PAY.cardAmt=r2(amount);PAY.cardShare=share;PAY.cardAtt=null;PAY.cardErr=null;
+  return new Promise(resolve=>{PAY.cardResolve=resolve;renderPay();startCardAttempt();});
+}
+async function startCardAttempt(){
+  const p=PAY;if(!p)return;
+  p.cardAtt=null;p.cardErr=null;renderPay();
+  try{
+    const net=r2(p.cardAmt-p.cardShare);
+    const body={bill_id:p.saved.bill.id,amount:net};
+    if(p.cardShare>0)body.tip=p.cardShare;
+    const a=await PlemmoAPI.post('/card/attempts',body,{idempotent:false});
+    if(PAY!==p)return;
+    p.cardAtt=a;renderPay();
+    stopCardPoll();p.cardTimer=setInterval(()=>pollCardAttempt(p),1500);
+  }catch(e){
+    if(PAY!==p)return;
+    p.cardErr=(e&&e.data&&e.data.error)||'The card terminal could not be started. Nothing was charged.';renderPay();
+  }
+}
+async function pollCardAttempt(p){
+  if(PAY!==p||!p.cardAtt||p.cardPolling)return;
+  p.cardPolling=true;
+  try{
+    const a=await PlemmoAPI.get('/card/attempts/'+encodeURIComponent(p.cardAtt.id));
+    if(PAY!==p)return;
+    p.cardAtt=a;
+    if(a.state==='approved'){
+      stopCardPoll();
+      const net=r2(p.cardAmt-p.cardShare);
+      pushPay({m:'card',a:r2(net+(a.tip_minor||0)/100),attemptId:a.id,l4:a.card_last4||undefined,sim:!!a.simulated});
+      toast('Card approved'+(a.card_last4?' (ending '+a.card_last4+')':''),'ok',{ms:1800});
+      endCardFlow(true);return;
+    }
+    if(a.state!=='pending')stopCardPoll();
+    renderPay();
+  }catch(e){/* keep waiting; the terminal result is not lost */}
+  finally{p.cardPolling=false;}
+}
+function cardWaitHTML(){
+  const ca=money(PAY.cardAmt),a=PAY.cardAtt,sim=S._card&&S._card.simulated;
+  const simNote=sim?'<small class="faint">Simulated terminal: no real card is charged.</small>':'';
+  const again='<button class="btn btn-primary btn-lg btn-block" data-act="payCardRetry">Try again</button><button class="btn btn-block" data-act="payCardBack">Choose another way to pay</button>';
+  if(PAY.cardErr)return`<div class="reader idle"><div class="rd-ic">${ic('x',30)}</div><b>Not sent</b><small>${esc(PAY.cardErr)}</small></div>${again}`;
+  if(!a)return`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>Contacting the card terminal…</small></div>`;
+  if(a.state==='pending')return`<div class="reader wait"><div class="rd-ic">${ic('contactless',32)}</div><b>${ca}</b><small>${esc(a.message||'Waiting for the customer to pay on the terminal…')}</small>${simNote}</div>
+    <button class="btn btn-block" data-act="payCardCancel">Cancel this card payment</button>`;
+  const why={declined:'The card was declined.',cancelled:'The card payment was cancelled.',timed_out:'The customer did not use the terminal in time.',failed:'The card payment failed.'}[a.state]||'The card payment did not complete.';
+  return`<div class="reader idle"><div class="rd-ic">${ic('x',30)}</div><b>No payment taken</b><small>${esc(a.message||why)} Nothing was charged on this sale.</small></div>${again}`;
+}
+async function cancelCardAttempt(p){
+  stopCardPoll();
+  const a=p&&p.cardAtt;
+  if(a&&a.state==='pending'){try{await PlemmoAPI.post('/card/attempts/'+encodeURIComponent(a.id)+'/cancel',{},{idempotent:false});}catch(e){toast('The terminal could not be reached to cancel. Cancel on the terminal itself.','warn',{ms:5000});}}
+}
+A.payCardRetry=()=>{if(PAY&&PAY.stage==='cardwait')startCardAttempt();};
+A.payCardBack=async()=>{if(!PAY)return;await cancelCardAttempt(PAY);if(!PAY)return;endCardFlow(false);renderPay();};
+A.payCardCancel=async()=>{if(!PAY)return;await cancelCardAttempt(PAY);if(!PAY)return;toast('Card payment cancelled. Nothing was charged.','info');endCardFlow(false);renderPay();};
+A.payCardManual=async()=>{
   const rem=payRem(),amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
   if(!(await cardFlow(amt)))return;
+  PAY.splitAmt='';afterPayment();
+};
+function endCardFlow(result){
+  const res=PAY&&PAY.cardResolve;if(!res)return;
+  PAY.cardResolve=null;PAY.stage='idle';res(result);
+}
+A.payRetry=()=>{
+  if(!PAY||PAY.saving)return;
+  const el=$('#payRef2');
+  if(el){const lc=[...PAY.payments].reverse().find(p=>p.m==='card'&&!p.attemptId);if(lc){const v=(el.value||'').trim().slice(0,64);lc.ref=v||undefined;}}
+  finishSale();
+};
+A.payCardOk=()=>{
+  if(!PAY||!PAY.cardResolve)return;
+  const el=$('#payRef'),ref=(el&&el.value||'').trim().slice(0,64);
+  const amount=PAY.cardAmt;
+  pushPay({m:'card',a:r2(amount),ref:ref||undefined});
+  endCardFlow(true);
+};
+A.payCardNo=()=>{
+  if(!PAY||!PAY.cardResolve)return;
+  toast('Card payment not taken. Nothing was recorded on the till.','warn');
+  endCardFlow(false);renderPay();
+};
+A.payCard=async()=>{
+  const rem=payRem(),amt=PAY.splitMode&&+PAY.splitAmt?Math.min(+PAY.splitAmt,rem):rem;
+  if(!(await takeCard(amt)))return;
   PAY.splitAmt='';afterPayment();
 };
 A.payCash=()=>{
   const rem=payRem(),ten=PAY.tendered?+PAY.tendered:rem;
   if(ten<=0){toast('Enter the cash you were given','warn');return;}
-  const take=Math.min(ten,rem);PAY.payments.push({m:'cash',a:r2(take)});
+  const take=Math.min(ten,rem);pushPay({m:'cash',a:r2(take)});
   PAY.change=r2(Math.max(0,ten-rem));PAY.tendered='';
   if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});
   afterPayment();
 };
-A.paySplitCard=async()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.method='card';if(!(await cardFlow(amt)))return;PAY.method='split';PAY.splitAmt='';afterPayment();};
-A.paySplitCash=()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.payments.push({m:'cash',a:r2(amt)});PAY.splitAmt='';if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});afterPayment();};
+A.paySplitCard=async()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;PAY.method='card';if(!(await takeCard(amt)))return;PAY.method='split';PAY.splitAmt='';afterPayment();};
+A.paySplitCash=()=>{const rem=payRem(),amt=Math.min(+PAY.splitAmt||0,rem);if(!amt)return;pushPay({m:'cash',a:r2(amt)});PAY.splitAmt='';if(S.drawer.open)toast('Cash drawer opened','info',{ms:1600});afterPayment();};
 function afterPayment(){if(payRem()<=0.004)finishSale();else renderPay();}
 // Plemmo is authoritative for prices/tax/totals/stock/loyalty. A fresh counter
 // sale commits to Plemmo (order → bill → payments incl. tip). Dine-in orders
@@ -444,9 +883,23 @@ function finishSale(){
   const existing=c.orderId?orderOf(c.orderId):null;
   // Use the authoritative path for a fresh sale, or a dine-in order already
   // opened in Plemmo. A local-only order (Plemmo unreachable at send) pays local.
-  const usePlemmo=window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId));
+  const usePlemmo=PAY.remote||(window.PlemmoOrders&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()&&(!c.orderId||(existing&&existing.plemmoOrderId)));
   if(usePlemmo){finishSalePlemmo().catch((e)=>{
-    const msg=(e&&e.status===403)?'You don’t have permission to take payment':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+    const msg=(e&&e.data&&e.data.requiresApproval)?'The manager approval for a price change wasn’t accepted. Change the price again with a manager PIN.'
+      :(e&&e.status===403)?'You don’t have permission to take payment'
+      :(e&&e.status===409&&/transaction_id/i.test(String((e.data&&e.data.error)||e.message||'')))?'That terminal reference was already used on another sale. Check the number on the terminal receipt.':'Could not record the sale on Plemmo — money not confirmed. Try again.';
+    // The server refused the wallet part (balance changed since it was read): take the wallet
+    // line back out so the cashier can pick another way to pay, rather than looping on "Save".
+    const errText=String((e&&e.data&&e.data.error)||(e&&e.message)||'');
+    if(e&&e.status===409&&/card payment|terminal/i.test(errText)&&PAY&&PAY.payments.some(p=>p.attemptId)){
+      PAY.payments=PAY.payments.filter(p=>!p.attemptId);PAY.payKeyFor=null;PAY.stage='idle';renderPay();
+      toast(`That card payment could not be used: ${errText}`,'warn',{ms:6000});return;
+    }
+    if(e&&e.status===400&&/wallet/i.test(errText)&&PAY){
+      PAY.payments=PAY.payments.filter(p=>p.m!=='wallet');PAY.payKeyFor=null;
+      refreshWallet(U.cart.custId).then(()=>{if(PAY){PAY.stage='idle';renderPay();}});
+      toast(`The wallet payment was refused: ${errText}`,'warn');return;
+    }
     toast(msg,'warn');
     if(PAY){PAY.stage='idle';renderPay();}
   });return;}
@@ -455,24 +908,27 @@ function finishSale(){
 async function finishSalePlemmo(){
   const c=U.cart;
   const existing=c.orderId?orderOf(c.orderId):null;
-  // 1. Authoritative order — reuse a dine-in order already opened in Plemmo,
-  // else create one now (Plemmo computes totals + deducts stock).
-  let plemmoOrderId,orderResp=null;
-  if(existing&&existing.plemmoOrderId){plemmoOrderId=existing.plemmoOrderId;}
-  else{orderResp=await PlemmoOrders.createOrder({type:c.type,table:c.table,customerId:c.custId,items:c.items},S._plemmoAddons);plemmoOrderId=orderResp.id;}
-  // 2. Bill for the order.
-  let bill;
-  try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:plemmoOrderId},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-  if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(plemmoOrderId));bill=b&&b.bill;}
-  if(!bill)throw new Error('No bill for order');
+  // 1+2. Order, discount and bill already exist from the prepare step (or are created now if
+  // this path is reached without it); ensurePlemmoBill never duplicates anything.
+  const sv=await ensurePlemmoBill(PAY);
+  const plemmoOrderId=sv.orderId,orderResp=sv.orderResp||null,bill=sv.bill;
   // 3. Payments (tip on the first line; cash tendered carries the change).
   const lines=PAY.payments.map((p,i)=>{
-    const line={method:p.m==='card'?'card':'cash',amount:r2(p.a)};
-    if(i===0&&PAY.tip)line.tip=r2(PAY.tip);
+    const share=p.tipShare||0;
+    // A card line's amount is the bill's share only; the terminal's tip travels beside it.
+    const line={method:p.m==='card'?'card':p.m==='wallet'?'wallet':'cash',amount:r2(p.m==='card'?p.a-share:p.a)};
+    if(share>0)line.tip=r2(share);
+    if(p.m==='card'&&p.attemptId)line.card_attempt_id=p.attemptId;
+    if(p.m==='card'&&p.ref)line.transaction_id=p.ref;
     if(p.m==='cash'&&i===PAY.payments.length-1&&PAY.change)line.tendered=r2(p.a+PAY.change);
     return line;
   });
-  await PlemmoPayments.paySplit(bill.id,lines,c.custId);
+  // Same lines -> same idempotency key (a lost response replays instead of charging twice);
+  // changed lines (e.g. a corrected terminal reference) -> a fresh key.
+  const sig=JSON.stringify(lines);
+  if(PAY.payKeyFor!==sig){PAY.payKeyFor=sig;PAY.payKey=PlemmoAPI.idempotencyKey();}
+  const payRes=await PlemmoPayments.paySplit(bill.id,lines,c.custId,PAY.payKey);
+  await refreshWallet(c.custId);
   // 4. Build/patch the local display order from the AUTHORITATIVE bill (receipt
   // + history cache). No local stock/loyalty mutation — Plemmo already did both.
   const o=existing||{id:uid('o'),opened:Date.now(),source:'pos'};
@@ -481,7 +937,7 @@ async function finishSalePlemmo(){
     items:c.items.map(l=>({...l,sent:true})),
     subtotal:Number(bill.subtotal)||cartTotals(c).subtotal,tax:Number(bill.tax_amount)||0,
     discAmt:Number(bill.discount_amount)||0,total:Number(bill.total)||0,
-    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a})),status:'paid',pts:0,discount:c.discount||null});
+    tip:PAY.tip||0,payments:PAY.payments.map(p=>({m:p.m,a:p.a,l4:p.l4,sim:p.sim})),status:'paid',pts:Number(payRes&&payRes.loyaltyPointsEarned)||0,discount:c.discount||(Number(bill.discount_amount)>0?{reason:bill.discount_reason||'Discount'}:null)});
   if(!existing)S.orders.push(o);
   const change=PAY.change||0;
   PAY.done=true;PAY.L.close();PAY=null;
@@ -536,8 +992,9 @@ function receiptHTML(o,{cls=''}={}){
    <div class="kv b"><span>Total</span><span>${money(o.total)}</span></div>
    ${o.tip?`<div class="kv"><span>Tip, thank you</span><span>${money(o.tip)}</span></div><div class="kv b"><span>Paid</span><span>${money(grand)}</span></div>`:''}
    <div class="rule"></div>
-   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':'Card, contactless'}</span><span>${money(p.a)}</span></div>`).join('')}
+   ${o.status==='open'?'<div class="kv"><span>Not paid yet</span></div>':o.payments.map(p=>`<div class="kv"><span>${p.m==='cash'?'Cash':p.m==='wallet'?'Loyalty wallet':'Card'+(p.l4?' ····'+esc(p.l4):'')+(p.sim?' (simulated)':'')}</span><span>${money(p.a)}</span></div>`).join('')}
    ${o.status==='refunded'?`<div class="rule"></div><div class="kv b"><span>REFUNDED</span><span>${fmtT(o.refund.ts)}</span></div>`:''}
+   ${o.status!=='refunded'&&o.refundedAmt>0?`<div class="rule"></div><div class="kv b"><span>Part refunded</span><span>−${money(o.refundedAmt)}</span></div>`:''}
    ${o.status==='void'?`<div class="rule"></div><div class="kv b"><span>VOIDED</span></div>`:''}
    ${cu?`<div class="rule"></div><div class="pm">${esc(cu.name)}: +${o.pts||0} points, balance ${cu.points}</div>`:''}
    ${o.note?`<div class="rule"></div><div class="pm">Note: ${esc(o.note)}</div>`:''}
@@ -550,7 +1007,26 @@ function showReceipt(o,{change=0,fresh=false}={}){
   modal({title:fresh?'Payment complete':`Order ${o.no}`,cls:'rc-modal',body:`${change>0?`<div class="change-due">Give ${money(change)} change</div>`:''}${receiptHTML(o,{cls:fresh?'rc-print':''})}`,
     foot:`<button class="btn" data-act="printRc" data-id="${o.id}">${ic('printer',18)} Print</button><button class="btn" data-act="emailRc" data-id="${o.id}">${ic('mail',18)} Email</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop" autofocus>${fresh?'Start the next sale':'Done'}</button>`});
 }
-A.printRc=()=>toast('Sent to the receipt printer');
+// Real print: the backend builds the receipt for the configured printer
+// (58/80 mm profile) and reports whether the printer transport accepted it.
+// Success is only announced after that; a failure says why and offers Retry.
+const printing=new Set();
+A.printRc=async d=>{
+  const o=orderOf(d.id);if(!o)return;
+  if(!live()){toast('Sign in to the till to print receipts.','warn');return;}
+  const ids=billIdsOf(o);
+  if(!ids.length){toast('This sale hasn’t reached the till server yet, so it can’t be printed.','warn');return;}
+  if(printing.has(o.id))return;printing.add(o.id);
+  const btn=document.querySelector('[data-act="printRc"]');if(btn)btn.disabled=true;
+  try{
+    for(const id of ids)await PlemmoTill.printBill(id,{reprint:!!o.printed});
+    o.printed=true;
+    toast('Receipt sent to the printer','ok');
+  }catch(e){
+    const detail=e&&e.data&&e.data.detail;
+    toast(detail?`Couldn’t print: ${detail}`:`Couldn’t print: ${tillError(e,'the printer did not respond')}`,'warn',{action:'Retry',onAction:()=>A.printRc(d),ms:7000});
+  }finally{printing.delete(o.id);if(btn)btn.disabled=false;}
+};
 A.emailRc=async d=>{
   const o=orderOf(d.id),cu=o&&o.custId?cust(o.custId):null;
   let to=cu&&cu.email?cu.email:null;
@@ -730,7 +1206,29 @@ A.floorEdit=()=>{
 /* =====================================================================
    KITCHEN DISPLAY
    ===================================================================== */
+// Connected to a till server, orders go to the kitchen display STATION (a separate screen the server
+// runs and keeps in step), not to a board inside this app — so this screen says how to open it, with the
+// server's own address and QR code, rather than showing an empty board that nothing feeds.
+async function loadKdsInfo(){
+  try{U.kdsInfo=await PlemmoKDS.board();}
+  catch(e){U.kdsInfo={error:(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'The kitchen display is not available.'):'The kitchen display is not available.')};}
+  U.kdsInfoLoading=false;if(U.view==='kitchen')renderView();
+}
+function kitchenLiveHTML(){
+  const k=U.kdsInfo;
+  let inner;
+  if(!k)inner='<p class="muted">Looking up the kitchen display…</p>';
+  else if(k.error)inner=`<p class="muted">${esc(k.error)}</p><p class="muted">If the kitchen display is turned off, switch it on in Settings → Features.</p>`;
+  else inner=`<div class="row" style="gap:24px;align-items:flex-start;flex-wrap:wrap">${k.qr_data_url?`<img src="${esc(k.qr_data_url)}" alt="QR code for the kitchen display" width="180" height="180" style="border-radius:12px;background:#fff;padding:8px">`:''}
+    <div><p style="margin:0 0 6px"><b>On a tablet or screen in the kitchen, open:</b></p>
+    <p class="num" style="margin:0 0 4px;font-size:18px">${esc(k.ip_url||'')}</p>
+    ${k.mdns_url?`<p class="muted" style="margin:0">or ${esc(k.mdns_url)}</p>`:''}
+    <p class="muted" style="margin:14px 0 0;max-width:420px">Orders sent from any till appear there as tickets; the cook marks them preparing and ready. The tablet must be on the same network as this till.</p></div></div>`;
+  return`<div class="page"><div class="page-head"><div><h2>Kitchen display</h2><p class="sub">Tickets are shown on the kitchen screen, not in this app.</p></div><div class="ph-actions"><button class="btn" data-act="kdsInfoRefresh">${ic('refund',16)} Refresh</button></div></div><div class="panel"><div class="panel-b">${inner}</div></div></div>`;
+}
+A.kdsInfoRefresh=()=>{U.kdsInfo=null;U.kdsInfoLoading=false;renderView();};
 VIEWS.kitchen=()=>{
+  if(live()&&window.PlemmoKDS){if(!U.kdsInfo&&!U.kdsInfoLoading){U.kdsInfoLoading=true;setTimeout(loadKdsInfo,0);}return kitchenLiveHTML();}
   const act=S.tickets.filter(t=>t.status!=='done');
   const t0=dayStart(0),doneToday=S.tickets.filter(t=>t.status==='done'&&t.doneTs&&t.doneTs>=t0);
   const avg=doneToday.length?sum(doneToday,t=>t.doneTs-t.ts)/doneToday.length:0;
@@ -807,12 +1305,91 @@ function openOrderDrawer(id){
    foot:`${o.status==='open'?`<button class="btn btn-primary" data-act="drOpenOrder" data-id="${o.id}">Open in register</button>`:''}${canRefund?`<button class="btn btn-danger" data-act="refund" data-id="${o.id}">${ic('refund',16)} Refund</button>`:''}<span class="spacer"></span><button class="btn" data-act="printRc" data-id="${o.id}">${ic('printer',16)} Reprint</button><button class="btn" data-act="emailRc" data-id="${o.id}">${ic('mail',16)} Email</button>`});
 }
 A.drOpenOrder=d=>{const o=orderOf(d.id);closeAll();loadOrderToCart(o);go('pos');};
+// Refund an order through the backend: permission/PIN check, an immutable refund
+// record against the ORIGINAL payment, stock back through the ledger, drawer and
+// loyalty effects, audit. Meridian then re-reads the order — it never flips the
+// status itself, and a failed refund leaves everything as it was.
+// Refund on the till server. `plan` = {reason, restock, mode:'whole'|'items', lines:[{id,qty}], info}.
+// Whole order: everything still refundable, returning only the quantities that have not already
+// come back. Items: the value of the chosen lines (the server works it out from what the customer
+// actually paid). Every retry of the same refund reuses its idempotency key.
+async function refundOrderOnPlemmo(o,by,plan){
+  const ids=billIdsOf(o);
+  o._rfKey=o._rfKey||PlemmoAPI.idempotencyKey();
+  let items=[],amountFromItems=false;
+  if(plan.mode==='items'){amountFromItems=true;items=plan.lines.map(l=>({id:l.id,qty:l.qty,restock:plan.restock}));}
+  else if(plan.restock&&plan.info&&plan.info.items)items=plan.info.items.filter(l=>l.refundable_quantity>0).map(l=>({id:l.order_item_id,qty:l.refundable_quantity,restock:true}));
+  let done=0,lastRes=null;
+  try{
+    for(let i=0;i<ids.length;i++){
+      lastRes=await PlemmoTill.refundBill(ids[i],{reason:plan.reason,items:i===0?items:[],amountFromItems:i===0&&amountFromItems,overridePin:by.pin,key:o._rfKey+':'+ids[i]});
+      done++;
+      if(amountFromItems)break;
+    }
+  }catch(e){
+    toast(`Order ${o.no} was not refunded${done?' in full':''}: ${tillError(e,'the till server refused it')}`,'warn');
+    if(!PlemmoTill.isNetworkError(e)){await refreshOrderFromPlemmo(o);renderView();}
+    return false;
+  }
+  delete o._rfKey;
+  await refreshOrderFromPlemmo(o);
+  refreshCatalogueSoon();
+  closeAll();if(U.view==='orders'||U.view==='home')renderView();renderRail();
+  const part=lastRes&&lastRes.fully_refunded===false;
+  toast(part?`Refunded ${money((lastRes.amount_minor||0)/Math.pow(10,(plan.info&&plan.info.exponent!=null)?plan.info.exponent:2))} from order ${o.no}`:`Order ${o.no} refunded`);
+  return true;
+}
+// The refund dialog. In "choose items" mode the cashier sets how many of each line come back;
+// the amount shown is the server's own per-unit value, so what is displayed is what is refunded.
+let RF=null;
+function rfAmountMinor(){return RF.mode==='whole'?RF.info.refundable_minor:RF.info.items.reduce((s,l)=>s+(RF.qty[l.order_item_id]||0)*l.unit_refund_minor,0);}
+function rfMoney(minor){return money(minor/Math.pow(10,RF.info.exponent!=null?RF.info.exponent:2));}
+function renderRefundDlg(){
+  const i=RF.info,canItems=RF.canItems,rows=i.items.filter(l=>l.refundable_quantity>0);
+  const amt=rfAmountMinor();
+  const list=RF.mode==='items'?`<div class="rf-lines mt">${rows.map(l=>`<div class="rf-line"><div><b>${esc(l.name)}</b><small class="muted">${l.refunded_quantity?`${l.refunded_quantity} already returned · `:''}${rfMoney(l.unit_refund_minor)} each</small></div>
+      <div class="k-step"><button data-act="rfQty" data-id="${l.order_item_id}" data-d="-1" aria-label="One fewer ${esc(l.name)}" ${(RF.qty[l.order_item_id]||0)<=0?'disabled':''}>${ic('minus',16)}</button><b class="num">${RF.qty[l.order_item_id]||0} / ${l.refundable_quantity}</b><button data-act="rfQty" data-id="${l.order_item_id}" data-d="1" aria-label="One more ${esc(l.name)}" ${(RF.qty[l.order_item_id]||0)>=l.refundable_quantity?'disabled':''}>${ic('plus',16)}</button></div></div>`).join('')}</div>`:'';
+  $('#rfBody').innerHTML=`${canItems?`<div class="seg"><button class="${RF.mode==='whole'?'on':''}" data-act="rfMode" data-m="whole">Whole order</button><button class="${RF.mode==='items'?'on':''}" data-act="rfMode" data-m="items">Choose items</button></div>`:''}
+    <p class="muted mt">${RF.mode==='whole'?`Everything still refundable (${rfMoney(i.refundable_minor)}) goes back the way it was paid.`:'Pick how many of each item are coming back. The money goes back the way it was paid.'}${RF.o.tip?' Tips are not refunded.':''}</p>
+    ${list}
+    <label class="field mt"><span>Reason</span><select class="input" id="rfR">${['Customer changed their mind','Wrong item','Quality problem','Charged twice','Other'].map(r=>`<option ${RF.reason===r?'selected':''}>${r}</option>`).join('')}</select></label>
+    <label class="switch mt"><input type="checkbox" id="rfS" ${RF.restock?'checked':''}><span class="tr"></span><span>Put the items back in stock</span></label>
+    <div class="change-line mt"><span>Refund</span><span class="num">${rfMoney(amt)}</span></div>`;
+  const go=$('#rfGo');if(go){go.disabled=amt<=0;go.textContent=`Refund ${rfMoney(amt)}`;}
+}
+const rfSync=()=>{if(!RF)return;const r=$('#rfR'),s=$('#rfS');if(r)RF.reason=r.value;if(s)RF.restock=s.checked;};
+A.rfMode=d=>{rfSync();RF.mode=d.m;renderRefundDlg();};
+A.rfQty=d=>{rfSync();const l=RF.info.items.find(x=>String(x.order_item_id)===String(d.id));if(!l)return;const n=Math.max(0,Math.min(l.refundable_quantity,(RF.qty[l.order_item_id]||0)+(+d.d)));RF.qty[l.order_item_id]=n;renderRefundDlg();};
+async function refundDialogRemote(o){
+  const ids=billIdsOf(o);
+  let info;
+  try{info=await PlemmoTill.refundInfo(ids[0]);}
+  catch(e){toast(`Could not read the refund details: ${tillError(e,'the till server did not respond')}`,'warn');return null;}
+  if(!(info.refundable_minor>0)){toast('Nothing left to refund on this sale.','warn');await refreshOrderFromPlemmo(o);renderView();return null;}
+  RF={o:o,info:info,mode:'whole',qty:{},reason:'Customer changed their mind',restock:true,canItems:ids.length===1&&info.items.some(l=>l.refundable_quantity>0)};
+  const R=RF;
+  const ok=await new Promise(res=>{let done=false;
+    const L=modal({title:'Refund order '+esc(o.no),cls:'narrow',body:`<div id="rfBody"></div>`,
+      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-danger-solid" id="rfGo">Refund</button>`,onClose:()=>{if(!done)res(false);}});
+    renderRefundDlg();
+    L.el.querySelector('#rfGo').onclick=()=>{rfSync();done=true;L.close();res(true);};
+  });
+  RF=null;
+  if(!ok)return null;
+  const lines=Object.keys(R.qty).filter(k=>R.qty[k]>0).map(k=>({id:Number(k),qty:R.qty[k]}));
+  if(R.mode==='items'&&!lines.length)return null;
+  return {reason:R.reason,restock:R.restock,mode:R.mode,lines:lines,info:info};
+}
 A.refund=async d=>{
   const o=orderOf(d.id);if(!o||o.status!=='paid')return;
-  const by=await approve('refunds',`Refunding order ${o.no}`);if(!by)return;
+  const remote=live();
+  if(remote&&!billIdsOf(o).length){toast('This sale only exists on this device — it never reached the till server — so it can’t be refunded here.','warn');return;}
+  const by=await(remote?approveServer:approve)('refunds',`Refunding order ${o.no}`);if(!by)return;
+  if(remote){const plan=await refundDialogRemote(o);if(plan)await refundOrderOnPlemmo(o,by,plan);return;}
   let reason='Customer changed their mind',restock=true;
+  const due=o.total+(o.tip||0);
   const ok=await new Promise(res=>{let done=false;
-    const L=modal({title:`Refund ${money(o.total+(o.tip||0))}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.</p>
+    const L=modal({title:`Refund ${money(due)}?`,cls:'narrow',body:`<p class="muted">The money goes back the way it was paid: ${payLabel(o).toLowerCase()}. Loyalty points from this order are taken back.</p>
       <label class="field mt"><span>Reason</span><select class="input" id="rfR">${['Customer changed their mind','Wrong item','Quality problem','Charged twice','Other'].map(r=>`<option>${r}</option>`).join('')}</select></label>
       <label class="switch mt"><input type="checkbox" id="rfS" checked><span class="tr"></span><span>Put the items back in stock</span></label>`,
      foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-danger-solid" id="rfGo">Refund order</button>`,onClose:()=>{if(!done)res(false);}});

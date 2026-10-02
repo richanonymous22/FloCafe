@@ -1,5 +1,9 @@
 # Plemmo Cloud — production deployment (SYNC-D)
 
+> **Start with `docs/CLOUD_HOSTING.md`** — hosting options, the environment reference, secrets handoff,
+> deploy/rollback, backups with a rehearsed restore, monitoring and the client-compatibility policy. This file
+> is the original design record.
+
 The standalone cloud sync service: an Express app (`cloud/server.ts`) over a
 `CloudStore`. In production the store is `PostgresCloudStore` on managed
 PostgreSQL. The desktop client never runs any of this — it only speaks the
@@ -49,6 +53,7 @@ Supabase is just one managed-Postgres provider via the same connection string.
 | `PORT` | cloud service | HTTP listen port. |
 | `PLEMMO_SYNC_URL` | desktop client | The cloud base URL the POS talks to. |
 | `PLEMMO_SYNC_ENV` | desktop client | `development` \| `staging` \| `production` (guards; production requires https). |
+| `PLEMMO_CLOUD_ADMIN_TOKEN` | cloud service | Shared bearer token authenticating the operator (admin) API `/admin/v1/*` that FloAdmin calls. **Unset → the entire admin surface is closed (503).** Never committed; supply via the secrets manager. |
 | `PLEMMO_LICENSE_SIGNING_KEY` | cloud service | Ed25519 **private** key (PKCS8 PEM) that signs `/sync/v1/license` payloads. Unset → payloads served unsigned (dev). |
 | `PLEMMO_LICENSE_PUBLIC_KEY` | desktop client | Ed25519 **public** key (SPKI PEM), pinned in the managed build. When set, the client rejects tampered/unsigned license payloads (B2). Unset → verification skipped (dev). |
 | `PLEMMO_EMAIL_TRANSPORT` | desktop client | `http` to enable digital-receipt email; unset/`none` records the request only (no send). |
@@ -73,6 +78,27 @@ return 2xx (optionally `{ id }` / `{ messageId }`); the client retries once on a
 network error or 5xx and records `sent` / `failed` per receipt.
 
 No production URL or secret is hardcoded anywhere in source.
+
+## Operator (admin) API — the FloAdmin backend contract
+
+The operator console is a **separate application (FloAdmin)**; this repository
+exposes only the backend it calls. All routes are gated by
+`PLEMMO_CLOUD_ADMIN_TOKEN` (a shared bearer token); when it is unset the surface
+is closed (`503 admin_api_disabled`) — never open by default. Send it as
+`Authorization: Bearer <PLEMMO_CLOUD_ADMIN_TOKEN>`.
+
+| Method + path | Purpose |
+|---|---|
+| `POST /admin/v1/licenses` | Issue/replace an org's license (idempotent upsert by `organization_uid`; body: `plan`, `status`, `expires_at`, `grace_days`, `device_limit`, `location_limit`, `features[]`). Stored unsigned; `GET /sync/v1/license` signs per-request. |
+| `GET /admin/v1/licenses/:org` | Read the org's stored license (404 if none). |
+| `POST /admin/v1/licenses/:org/status` | Transition status (`active`/`suspended`/`revoked`/`expired`/`unlicensed`); reactivating stamps `activated_at`. Requires an existing license. |
+| `POST /admin/v1/enrollment-tokens` | Issue a one-time device activation token scoped to `organization_uid` (+ optional `location_uid`, `register_uid`, `ttl_seconds`). Returns the plaintext token ONCE; only its hash is stored. The device redeems it at `POST /sync/v1/enroll`, and its org/location bind from the token, never from the device. |
+| `GET /admin/v1/organizations/:org/health` | Operational read model (device counts, last received, deficits) behind FloAdmin's status views. |
+
+Commercial plan definitions (names, durations, terminal/location limits, trial
+rules) are supplied by the caller in these request bodies — they are policy the
+operator/FloAdmin owns, not values hard-coded here, so the commercial model can
+be set without any code change.
 
 ## Deploy procedure (expand/contract)
 

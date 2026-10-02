@@ -14,13 +14,14 @@ import { app } from 'electron';
 import log from 'electron-log';
 import { ensureTelemetryAnonId, isTelemetryEnabled, getSettingValue, parseDbTimestamp, upsertTelemetryLastPing } from '../db';
 
-// PLEMMO FORK: upstream FloCafe telemetry endpoint. Retained (not replaced
-// with an invented Plemmo URL) because the delivery code and its tests are
-// still useful infrastructure and will be repointed when Plemmo has an
-// endpoint of its own. It is inert on Plemmo installs: telemetry_enabled and
+// PLEMMO FORK: the upstream FloCafe endpoint (telemetry.flopos.com) is gone. A
+// Plemmo build must never send data to FloPOS infrastructure, so the endpoint is
+// supplied by the operator via the PLEMMO_TELEMETRY_URL env var and defaults to
+// empty. When empty, telemetry is a hard no-op (see sendEvent) regardless of the
+// consent settings. It is doubly inert on Plemmo installs: telemetry_enabled and
 // anonymous_data_consent both default to 'false' and migration v67 clears any
 // previously-granted consent. See docs/PLEMMO_ARCHITECTURE.md § Deferred.
-export const TELEMETRY_URL = 'https://telemetry.flopos.com/collect';
+export const TELEMETRY_URL = (process.env.PLEMMO_TELEMETRY_URL || '').trim();
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const DAILY_PING_INTERVAL_MS = 60 * 60_000; // check hourly, send at most once/24h
@@ -30,6 +31,9 @@ let dailyPingTimer: ReturnType<typeof setInterval> | null = null;
 
 export async function sendEvent(eventType: string, payload?: Record<string, unknown>): Promise<boolean> {
   if (!isTelemetryEnabled()) return false;
+  // No endpoint configured → never emit. Guarantees a build with no
+  // PLEMMO_TELEMETRY_URL cannot contact any telemetry service (incl. FloPOS).
+  if (!TELEMETRY_URL) return false;
 
   try {
     const anonId = ensureTelemetryAnonId();
@@ -40,7 +44,7 @@ export async function sendEvent(eventType: string, payload?: Record<string, unkn
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         anon_id: anonId,
-        app: 'flocafe',
+        app: 'plemmo',
         app_version: app.getVersion(),
         event_type: eventType,
         platform: process.platform,

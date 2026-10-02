@@ -15,6 +15,9 @@ import { registerIpcHandlers } from './ipc';
 import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
 import { isAllowedLocalWindowUrl, isSafeExternalUrl } from './security/url-allowlist';
+import { getBrand } from './brand';
+import { startSyncService, stopSyncService } from './services/sync-service';
+import { attachUpdater, noteUpdaterEvent, installNow as installUpdateNow, finalizeUpdateOnBoot, startUpdateScheduler, stopUpdateScheduler, UpdateError } from './services/update-manager';
 
 // ── GPU compatibility ────────────────────────────────────────────────────────
 // On Windows, some systems hit "GPU process exited unexpectedly" (exit code
@@ -65,7 +68,14 @@ function setupAutoUpdater(): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
+  // The update manager decides WHEN an update may be installed (never mid-sale, always after a verified backup).
+  attachUpdater({
+    checkForUpdates: () => autoUpdater.checkForUpdates(),
+    quitAndInstall: () => { isQuitting = true; autoUpdater.quitAndInstall(); },
+  }, app.getVersion());
+
   autoUpdater.on('checking-for-update', () => {
+    noteUpdaterEvent('checking');
     console.log('[Update] Checking for updates...');
     mainWindow?.webContents.send('update-status', { status: 'checking' });
   });
@@ -75,6 +85,7 @@ function setupAutoUpdater(): void {
     // this fires on its own — no dialog, no manual download-update call needed.
     console.log('[Update] Update available, downloading silently:', info.version);
     updateAvailable = true;
+    noteUpdaterEvent('available', { version: info.version });
     mainWindow?.webContents.send('update-status', {
       status: 'available',
       version: info.version,
@@ -84,6 +95,7 @@ function setupAutoUpdater(): void {
   });
 
   autoUpdater.on('update-not-available', () => {
+    noteUpdaterEvent('not-available');
     console.log('[Update] No updates available');
     mainWindow?.webContents.send('update-status', { status: 'up-to-date' });
   });
@@ -101,6 +113,7 @@ function setupAutoUpdater(): void {
     // autoInstallOnAppQuit is disabled, only that explicit action installs it.
     console.log('[Update] Download complete:', info.version);
     updateDownloaded = true;
+    noteUpdaterEvent('downloaded', { version: info.version });
     mainWindow?.webContents.send('update-status', {
       status: 'ready-to-install',
       version: info.version
@@ -118,6 +131,7 @@ function setupAutoUpdater(): void {
       log.debug('[Update] Skipping update — no config or release artifacts:', err.message);
       mainWindow?.webContents.send('update-status', { status: 'up-to-date' });
     } else {
+      noteUpdaterEvent('error', { message: err.message });
       log.error('[Update] Error:', err);
       mainWindow?.webContents.send('update-status', { status: 'error', error: err.message });
     }
@@ -367,7 +381,7 @@ function createTray(): void {
         },
       ]);
 
-      tray.setToolTip('Flo Cafe');
+      tray.setToolTip(getBrand().productName);
       tray.setContextMenu(linuxMenu);
       // Single-click also shows the window on Linux (no double-click standard).
       tray.on('click', () => {
@@ -505,7 +519,7 @@ function createMenu(): void {
     {
       label: 'Window',
       submenu: [
-        { label: 'Flo Cafe', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+        { label: getBrand().productName, click: () => { mainWindow?.show(); mainWindow?.focus(); } },
         { type: 'separator' },
         { role: 'minimize' },
         ...(process.platform === 'darwin' ? [
@@ -573,11 +587,14 @@ async function initialize(): Promise<void> {
 
     console.log('[Flo] Initializing database...');
     initDatabase();
+    try { finalizeUpdateOnBoot(app.getVersion()); } catch (e) { console.error('[Flo] update verification failed to run:', e); }
+    startUpdateScheduler();
 
     console.log('[Flo] Starting local server...');
     await startServer();
 
     cloudSync.start();
+    startSyncService(); // cloud sync + licence refresh for an activated device (no-op until activated)
     telemetry.start();
     googleDrive.start();
 
@@ -607,13 +624,14 @@ async function initialize(): Promise<void> {
       checkForUpdates();
     });
 
-    ipcMain.handle('restart-and-install', () => {
+    ipcMain.handle('restart-and-install', async () => {
       if (!updateDownloaded) {
         log.warn('[Update] Ignoring install request before an update is downloaded');
-        return;
+        return { ok: false, error: 'There is no update ready to install.' };
       }
-      isQuitting = true;
-      autoUpdater.quitAndInstall();
+      // Same rules as the API: refused mid-sale, backed up and verified first.
+      try { await installUpdateNow(); return { ok: true }; }
+      catch (e) { return { ok: false, error: (e as Error).message, reasons: e instanceof UpdateError ? e.reasons : [] }; }
     });
 
     ipcMain.handle('get-status', () => {
@@ -701,6 +719,8 @@ function runCleanup(): void {
 
   // Tear down services — each wrapped so one failure doesn't block others
   try { cloudSync.stop(); } catch (e) { console.error('[Flo] cloudSync.stop error:', e); }
+  try { stopUpdateScheduler(); } catch (e) { console.error('[Flo] update scheduler stop error:', e); }
+  try { void stopSyncService(); } catch (e) { console.error('[Flo] syncService.stop error:', e); }
   try { telemetry.stop(); } catch (e) { console.error('[Flo] telemetry.stop error:', e); }
   try { googleDrive.stop(); } catch (e) { console.error('[Flo] googleDrive.stop error:', e); }
   try { stopMdns(); } catch (e) { console.error('[Flo] stopMdns error:', e); }

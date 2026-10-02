@@ -20,6 +20,11 @@ Module._load = function (request: string, parent: unknown, isMain: boolean) {
   return originalLoad.apply(this, arguments as any);
 };
 
+// The telemetry endpoint is env-configured (no hard-coded FloPOS default). Set a
+// test endpoint before importing so the module captures a non-empty URL; an
+// empty URL is a hard no-op, which is covered implicitly by the disabled case.
+process.env.PLEMMO_TELEMETRY_URL = 'https://telemetry.plemmo.test/collect';
+
 const { initDatabase, getDatabase, closeDatabase, now } = require('../main/db');
 const { sendEvent, TELEMETRY_URL } = require('../main/services/telemetry');
 
@@ -44,7 +49,7 @@ async function main() {
 
     assert.equal(await sendEvent('app_launch'), true, '2xx telemetry delivery succeeds');
     assert.equal(requestBody?.country, 'AR', 'telemetry sends the configured ISO country');
-    assert.equal(requestBody?.app, 'flocafe');
+    assert.equal(requestBody?.app, 'plemmo');
     assert.equal(requestBody?.app_version, '2.7.2-test');
 
     globalThis.fetch = (async () => new Response('rejected', { status: 503 })) as typeof fetch;

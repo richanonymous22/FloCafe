@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, withTxn, getSettingValue } from '../db';
 import { randomUUID } from 'crypto';
@@ -21,7 +22,7 @@ function invalidTaxBehavior(addons: any[] | undefined): string | null {
 
 function invalidTaxCategory(addons: any[] | undefined): string | null {
   if (!Array.isArray(addons)) return null;
-  const country = getSettingValue('country') || 'IN';
+  const country = getSettingValue('country') || DEFAULT_COUNTRY;
   const businessType = getSettingValue('business_type') || 'restaurant';
   const pack = getActiveCountryPack(country);
   for (const addon of addons) {

@@ -13,7 +13,7 @@ function stockCell(p){
 }
 VIEWS.items=()=>{
   const tab=U.items.tab,low=lowStock().length;
-  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history']].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
+  const tabs=`<div class="seg">${[['items','Items'],['cats','Categories'],['mods','Options'],['log','Stock history'],...(adminLive()?[['take','Stocktake'],['value','Stock value'],['import','Import stock'],['menu','Items file'],['offers','Offers'],['sup','Suppliers'],['po','Purchases']]:[])].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="itTab" data-t="${k}">${l}</button>`).join('')}</div>`;
   let body='';
   if(tab==='items'){
     const q=U.items.q.toLowerCase();
@@ -21,7 +21,7 @@ VIEWS.items=()=>{
     body=`<div class="row" style="margin-bottom:14px"><label class="search" style="max-width:340px">${ic('search',18)}<input data-in="itQ" value="${esc(U.items.q)}" placeholder="Search items or SKU"></label>
       <select class="input" style="width:auto" data-ch="itCat"><option value="all">All categories</option>${low?`<option value="low" ${U.items.cat==='low'?'selected':''}>Low stock (${low})</option>`:''}${S.categories.map(c=>`<option value="${c.id}" ${U.items.cat===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
      <div class="panel"><div class="tbl-wrap">${list.length?`<table class="tbl"><thead><tr><th>Item</th><th>Category</th><th class="r">Price</th><th class="r">Cost</th><th class="r">Margin</th><th>Stock</th><th>On sale</th><th></th></tr></thead><tbody>
-      ${list.map(p=>{const c=catOf(p.cat)||{name:'None',color:'#888'};return`<tr><td><div class="it-cell"><span class="it-em" style="--c:${c.color}">${p.emoji||'•'}</span><div><b>${esc(p.name)}</b><small class="num">${esc(p.sku||'')}</small></div></div></td><td>${esc(c.name)}</td><td class="r num">${money(p.price)}</td><td class="r num">${money(p.cost)}</td><td class="r">${marginBadge(marginOf(p))}</td><td style="min-width:170px">${stockCell(p)}</td><td>${sw(p.available,`data-ch="itAvail" data-id="${p.id}" aria-label="${esc(p.name)} on sale"`)}</td><td class="r" style="white-space:nowrap">${p.stock!=null?`<button class="btn btn-sm" data-act="stockAdj" data-id="${p.id}">Adjust stock</button> `:''}<button class="btn btn-sm btn-ghost btn-icon" data-act="itEdit" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">${ic('edit',16)}</button></td></tr>`;}).join('')}
+      ${list.map(p=>{const c=catOf(p.cat)||{name:'None',color:'#888'};return`<tr><td><div class="it-cell"><span class="it-em" style="--c:${c.color}">${p.emoji||'•'}</span><div><b>${esc(p.name)}</b><small class="num">${esc(p.sku||'')}</small></div></div></td><td>${esc(c.name)}</td><td class="r num">${money(p.price)}</td><td class="r num">${money(p.cost)}</td><td class="r">${marginBadge(marginOf(p))}</td><td style="min-width:170px">${p.variants&&p.variants.length?variantStockCell(p):stockCell(p)}</td><td>${sw(p.available,`data-ch="itAvail" data-id="${p.id}" aria-label="${esc(p.name)} on sale"`)}</td><td class="r" style="white-space:nowrap">${adminLive()?`<button class="btn btn-sm" data-act="varEdit" data-id="${p.id}">Options</button> `:''}${p.stock!=null&&!(p.variants&&p.variants.length)?`<button class="btn btn-sm" data-act="stockAdj" data-id="${p.id}">Adjust stock</button> `:''}<button class="btn btn-sm btn-ghost btn-icon" data-act="itEdit" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">${ic('edit',16)}</button></td></tr>`;}).join('')}
       </tbody></table>`:`<div class="empty"><div class="e-ic">${ic('box',24)}</div><h3>${S.products.length?'No items match':'No items yet'}</h3><p>${S.products.length?'Try another search or category.':'Add the things you sell. Each one gets a tile on the register.'}</p><button class="btn btn-primary" data-act="itEdit">${ic('plus',16)} Add an item</button></div>`}</div></div>`;
   }else if(tab==='cats'){
     body=`<div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Category</th><th class="r">Items</th><th class="r">Sales, last 30 days</th><th></th></tr></thead><tbody>
@@ -30,6 +30,10 @@ VIEWS.items=()=>{
   }else if(tab==='mods'){
     body=`<div class="cards">${S.modGroups.map(g=>{const used=S.products.filter(p=>(p.mods||[]).includes(g.id)).length;return`<div class="panel"><div class="panel-h"><h3>${esc(g.name)}</h3><button class="btn btn-sm btn-ghost btn-icon" data-act="modEdit" data-id="${g.id}" aria-label="Edit ${esc(g.name)}">${ic('edit',16)}</button></div><div class="panel-b"><div class="row" style="margin-bottom:10px"><span class="badge">${g.req?'Required':'Optional'}</span><span class="badge">${g.multi?'Choose any':'Choose one'}</span><span class="badge info">On ${used} item${used===1?'':'s'}</span></div>${g.opts.map(([n,p])=>`<div style="display:flex;justify-content:space-between;padding:4px 0"><span>${esc(n)}</span><span class="num muted">${p?'+'+money(p):'Free'}</span></div>`).join('')}</div></div>`;}).join('')}
      <button class="panel" data-act="modEdit" style="display:grid;place-items:center;min-height:160px;border-style:dashed;color:var(--muted);font-weight:600;gap:8px">${ic('plus',22)}New option group</button></div>`;
+  }else if(adminLive()&&['take','value','import','menu','offers','sup','po'].includes(tab)){
+    body=stockToolsBody(tab);
+  }else if(adminLive()&&tab==='log'){
+    body=liveLogBody();
   }else{
     const log=[...S.stockLog].sort((a,b)=>b.ts-a.ts).slice(0,150);
     body=`<div class="panel"><div class="tbl-wrap">${log.length?`<table class="tbl"><thead><tr><th>When</th><th>Item</th><th class="r">Change</th><th>Reason</th><th>By</th><th class="r">Stock after</th></tr></thead><tbody>${log.map(s=>`<tr><td class="num">${fmtDT(s.ts)}</td><td>${esc(s.name)}</td><td class="r num"><b style="color:${s.change<0?'var(--bad-text)':'var(--ok-text)'}">${s.change>0?'+':''}${s.change}</b></td><td>${esc(s.reason)}</td><td>${esc(first((emp(s.by)||{}).name||''))}</td><td class="r num">${s.after}</td></tr>`).join('')}</tbody></table>`:`<div class="empty"><h3>No stock movements yet</h3><p>Deliveries, waste and counts show up here.</p></div>`}</div></div>`;
@@ -38,22 +42,44 @@ VIEWS.items=()=>{
   return`<div class="page"><div class="page-head"><div><h2>Items & stock</h2><p class="sub">${S.products.length} items, ${tracked.length} with tracked stock${low?`, <b style="color:var(--warn-text)">${low} running low</b>`:''}</p></div>
    <div class="ph-actions">${tabs}${tab==='cats'?`<button class="btn btn-primary" data-act="catEdit">${ic('plus',16)} New category</button>`:tab==='items'?`<button class="btn btn-primary" data-act="itEdit">${ic('plus',16)} New item</button>`:''}</div></div>${body}</div>`;
 };
-A.itTab=d=>{U.items.tab=d.t;renderView();};
+A.itTab=d=>{U.items.tab=d.t;if(U.st)U.st[d.t+'Key']=0;renderView();};
 IN.itQ=debounce(v=>{U.items.q=v;const pos=$('[data-in="itQ"]').selectionStart;renderView();const i=$('[data-in="itQ"]');if(i){i.focus();i.setSelectionRange(pos,pos);}},180);
 function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 CH.itCat=v=>{U.items.cat=v;renderView();};
-CH.itAvail=(v,el)=>{const p=prod(el.dataset.id);if(!p)return;p.available=el.checked;save();renderRail();toast(`${p.name} is ${p.available?'back on sale':'marked sold out'}`);};
+const adminLive=()=>!!(window.PlemmoAdmin&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated());
+// The quantity on hand is the ledger's; the cached number can be a sale or two behind. Read it
+// from the server before showing or correcting it. Falls back to the cached value if unreachable.
+async function liveStock(p){
+  if(!p||p.stock==null||!window.PlemmoInventory)return p?p.stock:null;
+  try{const r=await PlemmoInventory.balance(p.id);if(r&&typeof r.balance==='number'){p.stock=r.balance;return r.balance;}}catch(e){/* use the cached figure */}
+  return p.stock;
+}
+// After the server accepted a catalogue change, take its version of the catalogue back.
+async function reloadCatalogue(){try{await PlemmoCatalogue.load(S);}catch(e){/* keep the last copy; the change itself is already saved on the server */}}
+CH.itAvail=async(v,el)=>{
+  const p=prod(el.dataset.id);if(!p)return;
+  const want=el.checked;
+  if(adminLive()){
+    try{await PlemmoAdmin.products.setActive(p.id,want);}
+    catch(e){el.checked=!want;toast(`${p.name} was not changed: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    await reloadCatalogue();renderRail();toast(`${p.name} is ${want?'back on sale':'marked sold out'}`);return;
+  }
+  p.available=want;save();renderRail();toast(`${p.name} is ${p.available?'back on sale':'marked sold out'}`);
+};
 A.itEdit=d=>editItem(d.id);
 let IT=null;
-function editItem(id){
+async function editItem(id){
   const p=id?prod(id):null;
-  IT={id,emoji:p?p.emoji:'🍽️',allergens:new Set(p?p.allergens:[]),mods:new Set(p?p.mods:[]),track:p?p.stock!=null:false};
+  IT={id,emoji:p?p.emoji:'🍽️',allergens:new Set(p?p.allergens:[]),mods:new Set(p?p.mods:[]),track:p?p.stock!=null:false,live:adminLive(),tax:null};
+  if(IT.live){try{IT.tax=await PlemmoAdmin.taxCategories();}catch(e){IT.tax=null;}await liveStock(p);}
   const cats=S.categories;
   const L=modal({title:p?esc(p.name):'New item',cls:'wide',body:`<div class="fgrid">
     <label class="field span2"><span>Name</span><input class="input" id="itN" value="${esc(p?p.name:'')}" placeholder="For example, Oat Flat White" autofocus></label>
-    <div class="field span2"><span>Picture on the register</span><div class="emoji-grid" role="listbox" aria-label="Choose an emoji">${EMOJIS.map(e=>`<button type="button" class="${IT.emoji===e?'on':''}" data-act="itEmoji" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}</div></div>
+    ${IT.live?'':`<div class="field span2"><span>Picture on the register</span><div class="emoji-grid" role="listbox" aria-label="Choose an emoji">${EMOJIS.map(e=>`<button type="button" class="${IT.emoji===e?'on':''}" data-act="itEmoji" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}</div></div>`}
     <label class="field"><span>Category</span><select class="input" id="itC">${cats.map(c=>`<option value="${c.id}" ${p&&p.cat===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}${cats.length?'':'<option value="">No categories yet</option>'}</select></label>
-    <label class="field"><span>SKU or barcode</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>
+    ${IT.live?`<label class="field"><span>SKU</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>
+    <label class="field"><span>Barcode</span><input class="input num" id="itBar" value="${esc(p?p.barcode||'':'')}" placeholder="Scan or type" autocomplete="off"></label>
+    ${IT.tax&&IT.tax.ready?`<label class="field span2"><span>${esc(S.settings.taxName)} rate</span><select class="input" id="itV">${IT.tax.list.map(c=>`<option value="${esc(c.id)}" ${((p&&p.taxCat)||IT.tax.defaultId)===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}</select></label>`:''}`:`<label class="field"><span>SKU or barcode</span><input class="input num" id="itSku" value="${esc(p?p.sku:'')}" placeholder="Optional"></label>`}
     <label class="field"><span>Price${S.settings.taxInclusive?' (incl. '+esc(S.settings.taxName)+')':''}</span><input class="input num" id="itP" type="number" min="0" step="0.05" value="${p?p.price:''}" data-in="itMargin"></label>
     <label class="field"><span>Cost to you</span><input class="input num" id="itCo" type="number" min="0" step="0.05" value="${p?p.cost:''}" data-in="itMargin"></label>
     <div class="span2" id="itMarg"></div>
@@ -62,7 +88,7 @@ function editItem(id){
     <div class="span2 fgrid" id="itStockF" ${IT.track?'':'hidden'}><label class="field"><span>In stock now</span><input class="input num" id="itS" type="number" min="0" value="${p&&p.stock!=null?p.stock:0}"></label><label class="field"><span>Warn me below</span><input class="input num" id="itL" type="number" min="0" value="${p&&p.low!=null?p.low:5}"></label></div>
     ${S.modGroups.length?`<div class="field span2"><span>Options customers can choose</span><div class="chips">${S.modGroups.map(g=>`<button type="button" class="chip ${IT.mods.has(g.id)?'on':''}" data-act="itMod" data-id="${g.id}">${esc(g.name)}</button>`).join('')}</div></div>`:''}
     <div class="field span2"><span>Allergens</span><div class="chips">${ALLERGENS.map(a=>`<button type="button" class="chip ${IT.allergens.has(a)?'on':''}" data-act="itAll" data-a="${a}">${a}</button>`).join('')}</div></div>
-    <div class="span2 row">${sw(p?p.available:true,'id="itA"','On sale')}${sw(p?p.kiosk!==false:true,'id="itK"','Show on the kiosk')}</div>
+    <div class="span2 row">${sw(p?p.available:true,'id="itA"','On sale')}${IT.live?'':sw(p?p.kiosk!==false:true,'id="itK"','Show on the kiosk')}</div>
    </div>`,
    foot:`${p?`<button class="btn btn-danger" data-act="itDel" data-id="${p.id}">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" data-act="itSave">${p?'Save changes':'Add item'}</button>`});
   IT.L=L;IN.itMargin();
@@ -72,10 +98,35 @@ A.itEmoji=(d,el)=>{IT.emoji=d.e;$$('.emoji-grid button').forEach(b=>b.classList.
 A.itMod=(d,el)=>{IT.mods.has(d.id)?IT.mods.delete(d.id):IT.mods.add(d.id);el.classList.toggle('on');};
 A.itAll=(d,el)=>{IT.allergens.has(d.a)?IT.allergens.delete(d.a):IT.allergens.add(d.a);el.classList.toggle('on');};
 CH.itTrack=(v,el)=>{IT.track=el.checked;$('#itStockF').hidden=!el.checked;};
-A.itSave=()=>{
+A.itSave=async()=>{
   const name=$('#itN').value.trim(),price=+$('#itP').value;
   if(!name){toast('Give the item a name','warn');$('#itN').focus();return;}
   if(!(price>=0)||$('#itP').value===''){toast('Add a price','warn');$('#itP').focus();return;}
+  if(IT.live){
+    const prev=IT.id?prod(IT.id):null;
+    const stockNow=IT.track?Math.max(0,Math.round(+$('#itS').value||0)):null;
+    const f={name,categoryId:$('#itC').value,sku:$('#itSku').value.trim(),barcode:($('#itBar')||{}).value?$('#itBar').value.trim():'',price:r2(price),cost:r2(+$('#itCo').value||0),
+      description:$('#itD').value.trim(),track:IT.track,stock:stockNow,low:IT.track?Math.max(0,Math.round(+$('#itL').value||0)):0,
+      groupIds:[...IT.mods],allergens:[...IT.allergens],available:$('#itA').checked};
+    if($('#itV'))f.taxCategoryId=$('#itV').value;
+    const btn=document.querySelector('[data-act="itSave"]');if(btn)btn.disabled=true;
+    try{
+      let saved;
+      if(prev){
+        saved=await PlemmoAdmin.products.update(prev.id,f);
+        // A different quantity is a stock adjustment on the ledger, with a reason — never a silent overwrite.
+        const cur=prev.stock!=null?await liveStock(prev):null;
+        if(IT.track&&cur!=null&&stockNow!==cur&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,cur,'Edited on the item');
+        else if(IT.track&&prev.stock==null&&stockNow>0&&window.PlemmoInventory)await PlemmoInventory.adjust('count',prev.id,stockNow,0,'Stock tracking switched on');
+      }else saved=await PlemmoAdmin.products.create(f);
+      await reloadCatalogue();
+      IT.L.close();renderView();renderRail();toast(prev?`${name} saved`:`${name} added to the register`);
+    }catch(e){
+      if(btn)btn.disabled=false;
+      toast(`${name} was not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');
+    }
+    return;
+  }
   let p=IT.id?prod(IT.id):null;const isNew=!p;
   if(!p){p={id:uid('p'),w:3};S.products.push(p);}
   const prevStock=p.stock;
@@ -83,7 +134,16 @@ A.itSave=()=>{
   if(IT.track&&p.stock!==prevStock)S.stockLog.push({id:uid('sl'),ts:Date.now(),pid:p.id,name:p.name,change:p.stock-(prevStock||0),kind:'count',reason:isNew?'Opening stock':'Edited on the item',by:U.user,after:p.stock});
   save();IT.L.close();renderView();renderRail();toast(isNew?`${name} added to the register`:`${name} saved`);
 };
-A.itDel=async d=>{const p=prod(d.id);if(!await confirmBox({title:`Delete ${p.name}?`,text:'It disappears from the register and kiosk. Past orders keep their record of it.',ok:'Delete item',danger:true}))return;S.products=S.products.filter(x=>x!==p);save();closeAll();renderView();renderRail();toast(`${p.name} deleted`);};
+A.itDel=async d=>{
+  const p=prod(d.id);
+  if(!await confirmBox({title:`Delete ${p.name}?`,text:'It disappears from the register and kiosk. Past orders keep their record of it.',ok:'Delete item',danger:true}))return;
+  if(adminLive()){
+    try{await PlemmoAdmin.products.remove(p.id);}
+    catch(e){toast(`${p.name} was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    await reloadCatalogue();closeAll();renderView();renderRail();toast(`${p.name} deleted`);return;
+  }
+  S.products=S.products.filter(x=>x!==p);save();closeAll();renderView();renderRail();toast(`${p.name} deleted`);
+};
 A.stockAdj=d=>{
   const p=prod(d.id);if(!p)return;
   const st={mode:'receive',qty:12,reason:'Delivery'};
@@ -121,8 +181,25 @@ A.catEdit=d=>{
     <div class="field mt"><span>Icon</span><div class="emoji-grid">${EMOJIS.map(e=>`<button type="button" class="${e===emoji?'on':''}" data-e="${e}">${e}</button>`).join('')}</div></div>`,
    foot:`${c?`<button class="btn btn-danger" id="cDel">Delete</button>`:''}<span class="spacer"></span><button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="cGo">${c?'Save':'Add category'}</button>`});
   L.el.addEventListener('click',e=>{const s=e.target.closest('[data-c]'),m=e.target.closest('[data-e]');if(s){color=s.dataset.c;$$('[data-c]',L.el).forEach(b=>b.classList.toggle('on',b===s));}if(m){emoji=m.dataset.e;$$('[data-e]',L.el).forEach(b=>b.classList.toggle('on',b===m));}});
-  L.el.querySelector('#cGo').onclick=()=>{const n=L.el.querySelector('#cN').value.trim();if(!n){toast('Name the category','warn');return;}if(c)Object.assign(c,{name:n,color,emoji});else S.categories.push({id:uid('c'),name:n,color,emoji});save();L.close();renderView();toast(c?'Category saved':`${n} added`);};
-  const del=L.el.querySelector('#cDel');if(del)del.onclick=()=>{if(S.products.some(p=>p.cat===c.id)){toast('Move or delete its items first','warn');return;}S.categories=S.categories.filter(x=>x!==c);save();L.close();renderView();toast('Category deleted');};
+  L.el.querySelector('#cGo').onclick=async()=>{
+    const n=L.el.querySelector('#cN').value.trim();if(!n){toast('Name the category','warn');return;}
+    if(adminLive()){
+      const btn=L.el.querySelector('#cGo');btn.disabled=true;
+      try{if(c)await PlemmoAdmin.categories.update(c.id,{name:n,color,emoji});else await PlemmoAdmin.categories.create({name:n,color,emoji});}
+      catch(e){btn.disabled=false;toast(`${n} was not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();renderRail();toast(c?'Category saved':`${n} added`);return;
+    }
+    if(c)Object.assign(c,{name:n,color,emoji});else S.categories.push({id:uid('c'),name:n,color,emoji});save();L.close();renderView();toast(c?'Category saved':`${n} added`);
+  };
+  const del=L.el.querySelector('#cDel');if(del)del.onclick=async()=>{
+    if(S.products.some(p=>p.cat===c.id)){toast('Move or delete its items first','warn');return;}
+    if(adminLive()){
+      try{await PlemmoAdmin.categories.remove(c.id);}
+      catch(e){toast(`${c.name} was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();renderRail();toast('Category deleted');return;
+    }
+    S.categories=S.categories.filter(x=>x!==c);save();L.close();renderView();toast('Category deleted');
+  };
 };
 A.modEdit=d=>{
   const g=d.id?S.modGroups.find(x=>x.id===d.id):null;
@@ -133,8 +210,26 @@ A.modEdit=d=>{
     <div class="row mt">${sw(st.req,'id="mgR"','Customer must choose')}${sw(st.multi,'id="mgM"','Allow more than one')}</div>
     <div class="field mt"><span>Choices and extra price</span><div class="opt-rows">${st.opts.map(([n,p],i)=>`<div class="opt-row"><input class="input on" value="${esc(n)}" placeholder="Choice"><input class="input op num" type="number" step="0.05" min="0" value="${p}"><button class="btn btn-icon btn-ghost" data-rm="${i}" aria-label="Remove">${ic('x',16)}</button></div>`).join('')}</div><button class="btn btn-sm" id="mgAdd" style="justify-self:start">${ic('plus',14)} Add a choice</button></div>`;};
   L.el.addEventListener('click',e=>{if(e.target.closest('#mgAdd')){read();st.opts.push(['',0]);draw();}const rm=e.target.closest('[data-rm]');if(rm){read();st.opts.splice(+rm.dataset.rm,1);draw();}});
-  L.el.querySelector('#mgGo').onclick=()=>{read();const opts=st.opts.filter(o=>o[0].trim()).map(o=>[o[0].trim(),r2(o[1])]);if(!st.name.trim()||!opts.length){toast('Add a name and at least one choice','warn');return;}if(g)Object.assign(g,{name:st.name.trim(),req:st.req,multi:st.multi,opts});else S.modGroups.push({id:uid('m'),name:st.name.trim(),req:st.req,multi:st.multi,opts});save();L.close();renderView();toast('Options saved');};
-  const del=L.el.querySelector('#mgDel');if(del)del.onclick=()=>{S.modGroups=S.modGroups.filter(x=>x!==g);S.products.forEach(p=>p.mods=(p.mods||[]).filter(x=>x!==g.id));save();L.close();renderView();toast('Option group deleted');};
+  L.el.querySelector('#mgGo').onclick=async()=>{
+    read();const opts=st.opts.filter(o=>o[0].trim()).map(o=>[o[0].trim(),r2(o[1])]);
+    if(!st.name.trim()||!opts.length){toast('Add a name and at least one choice','warn');return;}
+    if(adminLive()){
+      const btn=L.el.querySelector('#mgGo');btn.disabled=true;
+      const body={name:st.name.trim(),req:st.req,multi:st.multi,opts};
+      try{if(g)await PlemmoAdmin.optionGroups.update(g.id,body);else await PlemmoAdmin.optionGroups.create(body);}
+      catch(e){btn.disabled=false;toast(`The options were not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();toast('Options saved');return;
+    }
+    if(g)Object.assign(g,{name:st.name.trim(),req:st.req,multi:st.multi,opts});else S.modGroups.push({id:uid('m'),name:st.name.trim(),req:st.req,multi:st.multi,opts});save();L.close();renderView();toast('Options saved');
+  };
+  const del=L.el.querySelector('#mgDel');if(del)del.onclick=async()=>{
+    if(adminLive()){
+      try{await PlemmoAdmin.optionGroups.remove(g.id);}
+      catch(e){toast(`The option group was not deleted: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+      await reloadCatalogue();L.close();renderView();toast('Option group deleted');return;
+    }
+    S.modGroups=S.modGroups.filter(x=>x!==g);S.products.forEach(p=>p.mods=(p.mods||[]).filter(x=>x!==g.id));save();L.close();renderView();toast('Option group deleted');
+  };
   draw();
 };
 
@@ -180,7 +275,18 @@ function openCustDrawer(id){
 }
 A.custSale=d=>{closeAll();if(U.cart.items.length&&!U.cart.orderId)A.hold();U.cart=newCart();U.cart.custId=d.id;go('pos');};
 A.custEdit=d=>{closeAll();editCustomer(d.id);};
-A.custPts=async d=>{const c=cust(d.id);const v=await promptBox({title:'Adjust points',label:`${c.name} has ${c.points}. Add or remove (use a minus sign)`,type:'number',value:'',ok:'Adjust'});if(v===null||v==='')return;c.points=Math.max(0,c.points+Math.round(+v||0));save();closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);};
+A.custPts=async d=>{const c=cust(d.id);
+  if(adminLive()){
+    // The wallet is the server's ledger: a correction is a ledger entry with a reason, by a manager.
+    const v=await promptBox({title:'Adjust wallet points',label:`${c.name} has ${c.points} points (100 points = £1). Add or remove (use a minus sign)`,type:'number',value:'',ok:'Next'});if(v===null||v==='')return;
+    const pts=Math.round(+v||0);if(!pts){toast('Enter a number of points','warn');return;}
+    const why=await promptBox({title:'Reason',label:'Why is the wallet being changed?',value:'',placeholder:'For example, goodwill credit',ok:pts>0?'Add points':'Remove points'});if(why===null)return;
+    if(!String(why).trim()){toast('A reason is needed','warn');return;}
+    try{const r=await PlemmoAdmin.customers.adjustWallet(c.id,pts,String(why).trim());c.points=Number(r.balance)||0;}
+    catch(e){toast(`The wallet was not changed: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;}
+    closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);return;
+  }
+  const v=await promptBox({title:'Adjust points',label:`${c.name} has ${c.points}. Add or remove (use a minus sign)`,type:'number',value:'',ok:'Adjust'});if(v===null||v==='')return;c.points=Math.max(0,c.points+Math.round(+v||0));save();closeAll();openCustDrawer(c.id);toast(`${first(c.name)} now has ${c.points} points`);};
 function editCustomer(id,after){
   const c=id?cust(id):null;
   const L=modal({title:c?'Edit customer':'New customer',body:`<div class="fgrid"><label class="field span2"><span>Name</span><input class="input" id="cuN" value="${esc(c?c.name:'')}" autofocus autocomplete="off"></label><label class="field"><span>Mobile</span><input class="input num" id="cuP" type="tel" value="${esc(c?c.phone:'')}"></label><label class="field"><span>Email, for receipts</span><input class="input" id="cuE" type="email" value="${esc(c?c.email:'')}"></label><label class="field span2"><span>Notes</span><input class="input" id="cuNo" value="${esc(c?c.notes:'')}" placeholder="For example, prefers oat milk"></label></div>`,
@@ -214,7 +320,7 @@ VIEWS.team=()=>{
   let body='';
   if(tab==='team'){
     body=`<div class="cards">${S.employees.map(e=>{const sh=onShift(e.id),h=hoursIn(e.id,ws,we),so=salesBy(e.id,ws,we);return`<div class="panel person" style="${e.active===false?'opacity:.55':''}">
-      <div class="person-top"><span class="av lg" style="--c:${e.color}">${initials(e.name)}</span><div class="pt"><b>${esc(e.name)}</b><small>${esc(e.position||'')}</small></div><span class="badge ${e.role==='owner'?'accent':e.role==='manager'?'info':''}">${esc(roleLabel(e.role))}</span></div>
+      <div class="person-top"><span class="av lg" style="--c:${e.color}">${initials(e.name)}</span><div class="pt"><b>${esc(e.name)}</b><small>${esc(e.position||'')}</small></div><span class="badge ${e.role==='owner'?'accent':e.role==='manager'?'info':e.supervisor?'info':''}">${esc(personRole(e))}</span></div>
       <div class="shift-line">${sh?`<i class="dot ok"></i>On shift since ${fmtT(sh.in)}, <span data-since="${sh.in}" data-fmt="dur">${fmtHrs((Date.now()-sh.in)/HOUR)}</span>`:`<i class="dot"></i>${e.active===false?'Inactive':'Off shift'}`}</div>
       <div class="pstats"><div><b class="num">${fmtHrs(h)}</b><span>This week</span></div><div><b class="num">${moneyK(sum(so,o=>o.total))}</b><span>Sales</span></div><div><b class="num">${so.length}</b><span>Orders</span></div></div>
       <div class="row">${can('team')&&e.active!==false?`<button class="btn btn-sm" data-act="tmClock" data-id="${e.id}">${sh?'Clock out':'Clock in'}</button>`:''}<span class="spacer"></span>${(e.role!=='owner'||me().role==='owner')?`<button class="btn btn-sm btn-ghost" data-act="tmEdit" data-id="${e.id}">${ic('edit',16)} Edit</button>`:''}</div></div>`;}).join('')}
@@ -229,6 +335,19 @@ VIEWS.team=()=>{
      <div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Team member</th>${days.map(d=>`<th class="r">${new Date(d).toLocaleDateString('en-GB',{weekday:'short',day:'numeric'})}</th>`).join('')}<th class="r">Hours</th><th class="r">Rate</th><th class="r">Wages</th></tr></thead><tbody>
      ${rows.map(r=>`<tr><td><div class="it-cell"><span class="av" style="--c:${r.e.color}">${initials(r.e.name)}</span><b>${esc(r.e.name)}</b></div></td>${r.hs.map(h=>`<td class="r num ${h?'':'faint'}">${h?h.toFixed(1):'–'}</td>`).join('')}<td class="r num"><b>${r.tot.toFixed(1)}</b></td><td class="r num">${r.e.rate?money(r.e.rate):'<span class="faint">–</span>'}</td><td class="r num">${money(r.cost)}</td></tr>`).join('')}
      </tbody><tfoot><tr><td>Total</td>${days.map((d,i)=>`<td class="r num">${sum(rows,r=>r.hs[i]).toFixed(1)}</td>`).join('')}<td class="r num">${sum(rows,r=>r.tot).toFixed(1)}</td><td></td><td class="r num">${money(wages)}</td></tr></tfoot></table></div></div>`;
+  }else if(live()){
+    // The till server decides by role. These toggles used to change a local table the server never read,
+    // so connected tills describe the real, fixed rules instead.
+    const guide=[
+      ['Owner','Everything, including cloud and licence settings and deleting data.','',''],
+      ['Manager','Items and prices, reports, team, settings, closing the cash drawer, refunds, voids and discounts. Approves other people’s refunds, voids, discounts and price changes with their PIN.','',''],
+      ['Supervisor','Everything a cashier does, and approves refunds, removing an item the kitchen has, discounts and price changes: signed in themselves, or by entering their PIN on someone else’s till screen. Only owners can make someone a supervisor.','','Edit items or settings, see reports, close the drawer, manage the team.'],
+      ['Cashier','Sell and take payment, add and edit customers, open the cash drawer and record paid in/out, look up stock, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, close the drawer, manage the team.'],
+      ['Waiter','Take and edit their own orders, move an order to another table, clock in and out.','Refunds, removing an item the kitchen has, discounts and price changes.','Edit items or settings, see reports, manage the team.'],
+      ['Chef','Use the kitchen display.','','Anything at the till.'],
+    ];
+    body=`<p class="muted" style="margin-bottom:14px">Permissions follow the person’s role and are enforced by the till server, so they hold on every till. Choosing individual permissions per person is not available in this version.</p>
+     <div class="grid g-2">${guide.map(([r,can,pin,no])=>`<div class="panel"><div class="panel-b"><b>${r}</b><p style="margin:8px 0 0">${can}</p>${pin?`<p class="muted" style="margin:8px 0 0"><b>Needs a manager’s or supervisor’s PIN:</b> ${pin}</p>`:''}${no?`<p class="muted" style="margin:8px 0 0"><b>Cannot:</b> ${no}</p>`:''}</div></div>`).join('')}</div>`;
   }else{
     const roles=['manager','staff'];
     body=`<p class="muted" style="margin-bottom:14px">Owners can always do everything. When someone lacks a permission, the till asks for a manager’s PIN instead of blocking them.</p>
@@ -245,12 +364,14 @@ A.tmClock=async d=>{const e=emp(d.id);const wasOn=onShift(e.id);
   // Plemmo's timeclock is self-service: the signed-in operator clocks through
   // the authoritative API. Clocking a different team member stays local (an
   // admin clock endpoint would be needed to make that authoritative too).
-  if(e.id===U.user&&typeof plemmoClockSelf==='function'&&window.PlemmoStaff&&PlemmoAPI.isAuthenticated()){
-    await plemmoClockSelf(!wasOn);toast(`${first(e.name)} clocked ${wasOn?'out':'in'}`);renderView();return;
+  if(typeof plemmoClockSelf==='function'&&window.PlemmoStaff&&PlemmoAPI.isAuthenticated()){
+    if(e.id!==U.user){toast('Each person clocks themselves in and out when they sign in. The till server keeps the timeclock.','warn',{ms:5200});return;}
+    const r=await plemmoClockSelf(!wasOn);if(r==='ok'){toast(`${first(e.name)} clocked ${wasOn?'out':'in'}`);renderView();}return;
   }
   if(wasOn){clockOut(e.id);toast(`${first(e.name)} clocked out`);}else{clockIn(e.id);toast(`${first(e.name)} clocked in`);}renderView();};
 CH.perm=(v,el)=>{const r=S.roles[el.dataset.r],p=el.dataset.p;if(el.checked){if(!r.perms.includes(p))r.perms.push(p);}else r.perms=r.perms.filter(x=>x!==p);save();toast(`${r.label}s ${el.checked?'can now':'can no longer'} ${permLabel(p).toLowerCase()}`);};
 A.tmEdit=d=>{
+  if(adminLive())return teamEditLive(d);
   const e=d.id?emp(d.id):null;let color=e?e.color:EMP_COLORS[S.employees.length%EMP_COLORS.length];
   const L=modal({title:e?esc(e.name):'Add a team member',body:`<div class="fgrid">
     <label class="field span2"><span>Full name</span><input class="input" id="eN" value="${esc(e?e.name:'')}" autofocus autocomplete="off"></label>
@@ -395,7 +516,7 @@ A.zFor=d=>showZ(+d.t);
 /* =====================================================================
    SETTINGS
    ===================================================================== */
-const SET_TABS=[['business','Business','home'],['tax','Tax & receipts','receipt'],['features','Features','tables'],['loyalty','Loyalty','heart'],['kiosk','Kiosk','kiosk'],['look','Appearance','sun'],['devices','Devices','printer'],['data','Data','box']];
+const SET_TABS=[['business','Business','home'],['tax','Tax & receipts','receipt'],['features','Features','tables'],['loyalty','Loyalty','heart'],['kiosk','Kiosk','kiosk'],['look','Appearance','sun'],['devices','Devices','printer'],['data','Data','box'],['cards','Card payments','card'],['licence','Licence & cloud','lock'],['updates','Updates','download']];
 VIEWS.settings=()=>{
   const s=S.settings,t=U.set.tab;
   const row=(title,sub,ctrl)=>`<div class="set-row"><div class="sr-t"><b>${title}</b>${sub?`<small>${sub}</small>`:''}</div>${ctrl}</div>`;
@@ -406,9 +527,16 @@ VIEWS.settings=()=>{
     <label class="field span2"><span>Address</span><input class="input" data-ch="set" data-k="address" value="${esc(s.address)}"></label>
     <label class="field"><span>Phone</span><input class="input" data-ch="set" data-k="phone" value="${esc(s.phone)}"></label>
     <label class="field"><span>${esc(s.taxName)} registration number</span><input class="input" data-ch="set" data-k="vatNo" value="${esc(s.vatNo)}" placeholder="Shown on receipts"></label>
-    <label class="field"><span>Opens at</span><select class="input" data-ch="set" data-k="openHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h}" ${s.openHour===h?'selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('')}</select></label>
-    <label class="field"><span>Closes at</span><select class="input" data-ch="set" data-k="closeHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h+1}" ${s.closeHour===h+1?'selected':''}>${String(h+1).padStart(2,'0')}:00</option>`).join('')}</select></label>
+    ${live()?'':`<label class="field"><span>Opens at</span><select class="input" data-ch="set" data-k="openHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h}" ${s.openHour===h?'selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('')}</select></label>
+    <label class="field"><span>Closes at</span><select class="input" data-ch="set" data-k="closeHour" data-t="num">${[...Array(24)].map((_,h)=>`<option value="${h+1}" ${s.closeHour===h+1?'selected':''}>${String(h+1).padStart(2,'0')}:00</option>`).join('')}</select></label>`}
    </div></div></div>`;
+  else if(t==='tax'&&live())b=`<div class="grid g-73"><div class="panel"><div class="panel-b"><div class="fgrid">
+    <div class="field span2"><span>Currency</span><div class="muted">${esc(s.currency.trim())} — set when the business was set up</div></div>
+    <div class="span2">${sw(!!s.vatRegistered,'data-ch="set" data-k="vatRegistered" data-t="bool"',`Registered for ${esc(s.taxName)} (charge ${esc(s.taxName)} on sales)`)}</div>
+    <p class="hint span2">${s.vatRegistered?`${esc(s.taxName)} is worked out by the till server for every sale, using the rate you choose on each item (Items → ${esc(s.taxName)} rate). Prices ${s.taxInclusive?'include':'do not include'} ${esc(s.taxName)}.`:`Not registered: no ${esc(s.taxName)} is added to sales. Turn this on once you are registered; your ${esc(s.taxName)} number is on the Business tab.`}</p>
+    <label class="field span2"><span>Receipt message</span><input class="input" data-ch="set" data-k="receiptFooter" value="${esc(s.receiptFooter)}"></label>
+    <div class="span2 row">${sw(s.showTaxLine,'data-ch="set" data-k="showTaxLine" data-t="bool"','Show the tax line on receipts')}</div>
+   </div></div></div><div style="background:var(--sunken);border-radius:var(--r-lg);padding:20px 20px 30px">${receiptHTML(S.orders.filter(o=>o.status==='paid').slice(-1)[0]||{no:S.seq,ts:Date.now(),items:[],subtotal:0,discAmt:0,tax:0,total:0,tip:0,payments:[],status:'paid',type:hospitality()?'takeaway':'instore'})}</div></div>`;
   else if(t==='tax')b=`<div class="grid g-73"><div class="panel"><div class="panel-b"><div class="fgrid">
     <label class="field span2"><span>Currency</span><select class="input" data-ch="set" data-k="currency">${CURRENCIES.map(([v,l])=>`<option value="${esc(v)}" ${s.currency===v?'selected':''}>${l}</option>`).join('')}</select></label>
     <label class="field"><span>Tax name</span><input class="input" data-ch="set" data-k="taxName" value="${esc(s.taxName)}"></label>
@@ -417,22 +545,28 @@ VIEWS.settings=()=>{
     <label class="field span2"><span>Receipt message</span><input class="input" data-ch="set" data-k="receiptFooter" value="${esc(s.receiptFooter)}"></label>
     <div class="span2 row">${sw(s.showTaxLine,'data-ch="set" data-k="showTaxLine" data-t="bool"','Show the tax line')}${sw(s.showBarcode,'data-ch="set" data-k="showBarcode" data-t="bool"','Print a barcode for returns')}</div>
    </div></div></div><div style="background:var(--sunken);border-radius:var(--r-lg);padding:20px 20px 30px">${receiptHTML(S.orders.filter(o=>o.status==='paid').slice(-1)[0]||{no:S.seq,ts:Date.now(),items:[],subtotal:0,discAmt:0,tax:0,total:0,tip:0,payments:[],status:'paid',type:hospitality()?'takeaway':'instore'})}</div></div>`;
-  else if(t==='features')b=`<div class="panel"><div class="panel-b">${tog('tables','Tables and floor plan','Seat parties, run tabs and send courses to the kitchen')}${tog('kitchen','Kitchen display','Orders appear as tickets for the kitchen to bump')}${tog('tipping','Ask for tips','Show tip options when a customer pays')}${tog('kioskEnabled','Customer kiosk','Let customers order and pay themselves')}
-    ${row('Lock the till when idle','Protects the till if someone walks away',`<select class="input" style="width:auto" data-ch="set" data-k="autoLock" data-t="num">${[[0,'Never'],[2,'After 2 minutes'],[5,'After 5 minutes'],[10,'After 10 minutes'],[30,'After 30 minutes']].map(([v,l])=>`<option value="${v}" ${s.autoLock===v?'selected':''}>${l}</option>`).join('')}</select>`)}
+  else if(t==='features')b=`<div class="panel"><div class="panel-b">${tog('tables','Tables and floor plan','Seat parties, run tabs and send courses to the kitchen')}${tog('kitchen','Kitchen display','Orders appear as tickets for the kitchen to bump')}${tog('tipping','Ask for tips','Show tip options when a customer pays')}${tog('kioskEnabled','Customer kiosk'+(live()?' (this till only)':''),'Let customers place an order and pay at the counter')}
+    ${row('Lock the till when idle'+(live()?' (this till only)':''),'Protects the till if someone walks away',`<select class="input" style="width:auto" data-ch="set" data-k="autoLock" data-t="num">${[[0,'Never'],[2,'After 2 minutes'],[5,'After 5 minutes'],[10,'After 10 minutes'],[30,'After 30 minutes']].map(([v,l])=>`<option value="${v}" ${s.autoLock===v?'selected':''}>${l}</option>`).join('')}</select>`)}
     ${row('Default cash float','Suggested when opening the drawer',`<input class="input num" style="width:120px" type="number" step="5" min="0" data-ch="set" data-k="defaultFloat" data-t="num" value="${s.defaultFloat}">`)}</div></div>`;
+  else if(t==='loyalty'&&live())b=`<div class="panel"><div class="panel-b">${tog('loyalty.on','Loyalty cashback','Customers earn cashback into a wallet they can spend as a payment')}
+    ${row('Cashback on every sale (%)','Used for items that have no cashback of their own. Each item can override it.',`<input class="input num" style="width:100px" type="number" min="0" max="100" step="0.5" data-ch="set" data-k="loyalty.cashback" data-t="num" value="${(s.loyalty&&s.loyalty.cashback)||0}">`)}
+    ${row('Tiers','Based on lifetime spend',`<div class="row"><span class="tier bronze">Bronze</span><span class="tier silver">Silver ${money(120,0)}+</span><span class="tier gold">Gold ${money(300,0)}+</span></div>`)}</div></div>`;
   else if(t==='loyalty')b=`<div class="panel"><div class="panel-b">${tog('loyalty.on','Loyalty points','Customers collect points on every order')}
     ${row(`Points per ${esc(s.currency.trim())}1 spent`,'',`<input class="input num" style="width:100px" type="number" min="0" step="1" data-ch="set" data-k="loyalty.earn" data-t="num" value="${s.loyalty.earn}">`)}
     ${row('Points for a reward','',`<input class="input num" style="width:100px" type="number" min="10" step="10" data-ch="set" data-k="loyalty.redeemPts" data-t="num" value="${s.loyalty.redeemPts}">`)}
     ${row('Reward value','Taken off the order total',`<input class="input num" style="width:100px" type="number" min="0.5" step="0.5" data-ch="set" data-k="loyalty.redeemVal" data-t="num" value="${s.loyalty.redeemVal}">`)}
     ${row('Tiers','Based on lifetime spend',`<div class="row"><span class="tier bronze">Bronze</span><span class="tier silver">Silver ${money(120,0)}+</span><span class="tier gold">Gold ${money(300,0)}+</span></div>`)}</div></div>`;
-  else if(t==='kiosk')b=`<div class="panel"><div class="panel-b">${tog('kioskEnabled','Kiosk on','Show the kiosk in the menu and on the lock screen')}
+  else if(t==='kiosk')b=`<div class="panel"><div class="panel-b">${live()?'<p class="hint" style="margin:0 0 8px">These settings apply to this till only.</p>':''}${tog('kioskEnabled','Kiosk on','Show the kiosk in the menu and on the lock screen')}
     ${row('Welcome headline','The first thing customers read',`<input class="input" style="max-width:280px" data-ch="set" data-k="kioskWelcome" value="${esc(s.kioskWelcome)}">`)}
     ${tog('kioskUpsell','Suggest add-ons','Offer a pastry or treat before payment')}${hospitality()?tog('kioskEatIn','Ask eat in or take away','Skip this if you only do takeaway'):''}
     <div class="set-row"><div class="sr-t"><b>Try it</b><small>Leave kiosk mode with any team member’s PIN</small></div><button class="btn btn-primary" data-act="nav" data-v="kiosk">${ic('kiosk',16)} Launch the kiosk</button></div></div></div>`;
   else if(t==='look')b=`<div class="panel"><div class="panel-b" style="display:grid;gap:22px"><div class="field"><span>Accent colour</span><div class="swatches">${Object.entries(ACCENTS).map(([k,a])=>`<button class="swatch ${s.accent===k?'on':''}" style="--sw:${a.c};--swi:${a.ink}" data-act="setAccent" data-v="${k}" aria-label="${a.name}" aria-pressed="${s.accent===k}">${s.accent===k?ic('check',20):''}</button>`).join('')}</div></div>
     <div class="field"><span>Appearance</span><div class="seg">${[['light','Light'],['dark','Dark'],['system','Match this device']].map(([k,l])=>`<button class="${s.theme===k?'on':''}" data-act="setTheme" data-v="${k}">${l}</button>`).join('')}</div></div></div></div>`;
-  else if(t==='devices')b=`<div class="panel"><div class="panel-b">${[['printer','Receipt printer','Thermal, 80mm, USB','ok','Connected','Print a test'],['card','Card reader','Contactless, chip and PIN, battery 82%','ok','Connected','Test a payment'],['drawer','Cash drawer','Opens with the receipt printer','ok','Connected','Open the drawer'],['chef','Kitchen printer','Backup for the kitchen display','warn','Not connected','Pair'],['wifi','Offline mode','Sales save on this device and sync when you’re back online','ok','Ready','']].map(([i,n,d,k,st,a])=>`<div class="device"><span class="dv-ic">${ic(i)}</span><div class="dv-t"><b>${n}</b><small>${d}</small></div><span class="badge ${k}">${st}</span>${a?`<button class="btn btn-sm" data-act="devTest" data-n="${n}">${a}</button>`:''}</div>`).join('')}</div></div>`;
-  else b=`<div class="panel"><div class="panel-b">
+  else if(t==='cards')b=cardsHTML();
+  else if(t==='licence')b=licenceHTML();
+  else if(t==='updates')b=updatesHTML();
+  else if(t==='devices')b=devicesHTML();
+  else b=live()?dataHTML():`<div class="panel"><div class="panel-b">
     <div class="set-row"><div class="sr-t"><b>Download a backup</b><small>Everything in one JSON file: items, orders, customers and team</small></div><button class="btn" data-act="backup">${ic('download',16)} Download</button></div>
     <div class="set-row"><div class="sr-t"><b>Run setup again</b><small>Start from the setup wizard. Your current data is replaced.</small></div><button class="btn" data-act="reOnboard">Start setup</button></div>
     <div class="set-row"><div class="sr-t"><b>Reset to the demo café</b><small>Replace everything with fresh sample data</small></div><button class="btn btn-danger" data-act="resetDemo">Reset</button></div>
@@ -440,19 +574,115 @@ VIEWS.settings=()=>{
   return`<div class="page"><div class="page-head"><div><h2>Settings</h2><p class="sub">Changes save as you make them.</p></div></div>
    <div class="set-layout"><nav class="set-nav" aria-label="Settings sections">${SET_TABS.map(([k,l,i])=>`<button class="${t===k?'on':''}" data-act="setTab" data-t="${k}">${ic(i,18)}${l}</button>`).join('')}</nav><div class="set-sec">${b}</div></div></div>`;
 };
-A.setTab=d=>{U.set.tab=d.t;renderView();};
-CH.set=(v,el)=>{
+A.setTab=d=>{U.set.tab=d.t;renderView();if(d.t==='devices')loadDevices();if(d.t==='cards')cardsLoad();if(d.t==='licence')licenceCheck();if(d.t==='updates')updatesCheck();};
+CH.set=async(v,el)=>{
   const k=el.dataset.k,t=el.dataset.t;let val=t==='bool'?el.checked:t==='num'?(+v||0):v;
   if(k==='name'&&!String(val).trim()){toast('Your business needs a name','warn');el.value=S.settings.name;return;}
+  // A SHARED setting is saved on the till server first and only changed on screen once it accepts it,
+  // so every terminal agrees. Anything else is "this till only".
+  if(adminLive()&&PlemmoAdmin.settings.isShared(k)){
+    const old=getPath(S.settings,k);
+    try{await PlemmoAdmin.settings.save(k,val,S.settings.country);}
+    catch(e){
+      if(t==='bool')el.checked=!val;else el.value=old==null?'':old;
+      toast(`Not saved: ${PlemmoAdmin.errorMessage(e,'the till server refused it')}`,'warn');return;
+    }
+    setPath(S.settings,k,val);
+    // Turning VAT on activates the tax pack: take its rates and the items' default VAT category back from the server.
+    if(k==='vatRegistered'){try{PlemmoAdmin.settings.apply(S,await PlemmoAdmin.settings.load());await reloadCatalogue();}catch(e){/* keep what we have */}}
+    save();
+    if(['tables','kitchen','name'].includes(k))renderRail();
+    if(k==='name')renderTopbar();
+    if(['vatRegistered','vatNo','receiptFooter','showTaxLine','name'].includes(k))renderView();
+    toast('Saved','',{ms:1400});return;
+  }
   setPath(S.settings,k,val);save();
   if(['tables','kitchen','kioskEnabled','name'].includes(k))renderRail();
   if(k==='name')renderTopbar();
   if(['currency','taxName','taxRate','taxInclusive','receiptFooter','showTaxLine','showBarcode','name'].includes(k)&&U.set.tab==='tax')renderView();
-  toast('Saved','',{ms:1400});
+  toast(adminLive()?'Saved on this till':'Saved','',{ms:1400});
 };
 A.setAccent=d=>{S.settings.accent=d.v;applyTheme();save();renderView();};
 A.setTheme=d=>{S.settings.theme=d.v;applyTheme();save();renderTopbar();renderView();};
-A.devTest=d=>toast(`${d.n}: test sent and confirmed`);
-A.backup=()=>offerDownload(`meridian-backup-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(S,null,1));
+/* ---------- Devices: only what the backend actually knows ---------- */
+function devicesHTML(){
+  if(!live())return`<div class="panel"><div class="panel-b"><div class="empty"><h3>Not connected to a till</h3><p>Sign in to see the printer, cash drawer and scanner status.</p></div></div></div>`;
+  const D=U.dev||(U.dev={loaded:false,error:null,printers:[],detected:[],stations:[],results:{},busy:null,offers:[]});
+  const rows=PlemmoTill.deviceRows({loaded:D.loaded,error:D.error,printers:D.printers,stations:D.stations,results:D.results,online:PlemmoAPI.isOnline(),lastScan:U.lastScan});
+  D.offers=PlemmoTill.detectedOffers(D.detected,D.printers);
+  return`<div class="panel"><div class="panel-b">
+   ${rows.map(r=>`<div class="device"><span class="dv-ic">${ic(r.icon)}</span><div class="dv-t"><b>${esc(r.name)}</b><small>${esc(r.detail)}</small></div><span class="badge ${r.badge.kind}">${esc(r.badge.text)}</span>${r.action?`<button class="btn btn-sm" data-act="devAct" data-a="${r.action.id}" data-id="${esc(r.action.printerId||'')}" ${D.busy?'disabled':''}>${D.busy===r.key?'Working…':esc(r.action.label)}</button>`:''}</div>`).join('')}
+   ${D.offers.map((o,i)=>`<div class="device"><span class="dv-ic">${ic('printer')}</span><div class="dv-t"><b>${esc(o.name)}</b><small>Found by this computer (${esc(o.connectionType)}${o.ipAddress?', '+esc(o.ipAddress):''}). Not added to the till yet.</small></div><span class="badge info">Detected</span><button class="btn btn-sm" data-act="devAddDetected" data-i="${i}">Add</button></div>`).join('')}
+   <div class="set-row"><div class="sr-t"><b>Add a network printer</b><small>For a receipt printer on your network. Most use port 9100.</small></div><button class="btn" data-act="devAddNet">Add printer</button></div>
+  </div></div>`;
+}
+async function loadDevices(){
+  if(!live())return;
+  const D=U.dev||(U.dev={loaded:false,error:null,printers:[],detected:[],stations:[],results:{},busy:null,offers:[]});
+  D.loaded=false;D.error=null;redrawDevices();
+  const [p,st]=await Promise.allSettled([PlemmoTill.hardware.printers(),PlemmoTill.hardware.stations()]);
+  if(p.status==='fulfilled'){D.printers=p.value;D.loaded=true;}else{D.error=tillError(p.reason,'Could not read the printers');}
+  D.stations=st.status==='fulfilled'?st.value:[];
+  redrawDevices();
+  PlemmoTill.hardware.detect().then(d=>{D.detected=d;redrawDevices();}).catch(()=>{});
+}
+function redrawDevices(){if(U.view==='settings'&&U.set.tab==='devices')renderView();}
+A.devAct=async d=>{
+  const D=U.dev;if(!D||D.busy)return;
+  const key=d.a==='test-printer'?'printer':'drawer';D.busy=key;redrawDevices();
+  try{
+    if(d.a==='test-printer'){await PlemmoTill.hardware.testPrinter(d.id);D.results.printer={ok:true,message:'test page delivered to the printer — check that it printed',at:Date.now()};}
+    else{await PlemmoTill.hardware.openDrawer();D.results.drawer={ok:true,message:'open pulse delivered to the printer — check that the drawer opened',at:Date.now()};}
+  }catch(e){D.results[key]={ok:false,message:(e&&e.data&&(e.data.detail||e.data.error))||tillError(e,'the test failed'),at:Date.now()};}
+  D.busy=null;redrawDevices();
+};
+A.devAddDetected=async d=>{
+  const o=(U.dev&&U.dev.offers||[])[+d.i];if(!o)return;
+  try{await PlemmoTill.hardware.addPrinter({name:o.name,connection_type:o.connectionType,ip_address:o.ipAddress||undefined,port:o.port||undefined,paper_width:o.paperWidth||undefined});toast(`${o.name} added`,'ok');}
+  catch(e){toast(`Couldn’t add ${o.name}: ${tillError(e)}`,'warn');return;}
+  loadDevices();
+};
+A.devAddNet=()=>{
+  const L=modal({title:'Add a network printer',cls:'narrow',body:`<div class="fgrid">
+    <label class="field span2"><span>Name</span><input class="input" id="dpN" value="Receipt printer" autofocus></label>
+    <label class="field"><span>IP address</span><input class="input" id="dpI" placeholder="192.168.1.50" inputmode="decimal"></label>
+    <label class="field"><span>Port</span><input class="input num" id="dpP" type="number" value="9100"></label>
+    <label class="field span2"><span>Paper width</span><select class="input" id="dpW"><option value="80mm">80 mm</option><option value="58mm">58 mm</option></select></label></div>
+    <p class="pin-err" id="dpE" aria-live="polite"></p>`,
+    foot:`<button class="btn" data-act="closeTop">Cancel</button><button class="btn btn-primary" id="dpGo">Add printer</button>`});
+  L.el.querySelector('#dpGo').onclick=async()=>{
+    const v=id=>L.el.querySelector(id).value.trim(),err=L.el.querySelector('#dpE');
+    const body={name:v('#dpN'),connection_type:'network',ip_address:v('#dpI'),port:parseInt(v('#dpP'),10),paper_width:v('#dpW')};
+    if(!body.name||!body.ip_address||!(body.port>0)){err.textContent='Enter a name, an IP address and a port.';return;}
+    try{await PlemmoTill.hardware.addPrinter(body);}catch(e){err.textContent=tillError(e,'The till server refused this printer');return;}
+    L.close();toast('Printer added. Press “Print a test” to check it.','ok');loadDevices();
+  };
+};
+// Data tab on a signed-in till. The only backup here is the REAL one: the
+// backend's consistent copy of the SQLite database (owner + Master PIN).
+function dataHTML(){
+  const owner=(me()&&me().plemmoRole)==='owner';
+  const lb=U.lastBackup;
+  return`<div class="panel"><div class="panel-b">
+    <div class="set-row"><div class="sr-t"><b>Back up the database</b><small>Saves a safe copy of this till’s database on this computer. Needs the owner’s Master PIN.${lb?` Last backup this session: ${esc(lb.filename)} at ${fmtT(lb.at)}.`:''}${owner?'':' Only the owner can do this.'}</small></div><button class="btn btn-primary" data-act="backup" ${owner&&!U.backingUp?'':'disabled'}>${ic('download',16)} ${U.backingUp?'Backing up…':'Back up now'}</button></div>
+    <div class="set-row"><div class="sr-t"><b>Where your data lives</b><small>Orders, items, customers and the team are stored in the till’s database and loaded from it. This screen only shows a working copy.</small></div></div></div></div>`;
+}
+A.backup=async()=>{
+  if(!live()){toast('Sign in to the till to make a backup.','warn');return;}
+  if(U.backingUp)return;
+  let st;
+  try{st=await PlemmoTill.masterPinStatus();}catch(e){toast(`Couldn’t check backup readiness: ${tillError(e)}`,'warn');return;}
+  if(!st.available){toast('Backups need this computer’s secure storage, which isn’t available here.','warn');return;}
+  if(!st.isSet){toast('Set a Master PIN before making a backup.','warn');return;}
+  const pin=await promptBox({title:'Back up the database',label:'Master PIN',type:'password',placeholder:'4 digits',ok:'Back up now'});
+  if(pin===null)return;
+  U.backingUp=true;renderView();
+  try{
+    const r=await PlemmoTill.createBackup(String(pin).trim());
+    U.lastBackup={filename:r.filename,at:Date.now()};
+    toast(`Backup saved: ${r.filename}`,'ok',{ms:5000});
+  }catch(e){toast(`Backup failed: ${tillError(e,'the till server could not make the backup')}`,'warn',{ms:6000});}
+  finally{U.backingUp=false;if(U.view==='settings')renderView();}
+};
 A.reOnboard=async()=>{if(!await confirmBox({title:'Run setup again?',text:'Everything on this device is replaced by what you set up. Download a backup first if you want to keep it.',ok:'Start setup',danger:true}))return;wipeState();U.user=null;U.cart=null;showOnboarding();};
 A.resetDemo=async()=>{if(!await confirmBox({title:'Reset to the demo café?',text:'All orders, items, customers and team members on this device are replaced with sample data.',ok:'Reset everything',danger:true}))return;const a=S.settings.accent,th=S.settings.theme;S=buildBusiness({name:'Ember & Oat',type:'cafe',address:'14 Market Row, Kingsbridge',currency:'£',taxName:'VAT',taxRate:20,taxInclusive:true,catalog:'sample',history:true,ownerName:'Jordan Reed',ownerPin:'1234',sampleStaff:true,accent:a,theme:th,demo:true});saveNow();U.cart=newCart();LK.sel=S.employees[0].id;showLock();toast('Demo café restored. Jordan’s PIN is 1234.','info');};

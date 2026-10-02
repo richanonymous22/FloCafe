@@ -1,9 +1,11 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now, attachEffectiveAddons, isKotPrintingEnabled, parseItemJson, deriveBillPaymentDetails } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { printViaNetwork, printViaUSB, buildTestPage, printReceiptDetailed, printKOTDetailed, detectConnectedPrinters, prepareReceipt, escPosToText } from '../printers/thermal';
 import { getSupportedPrinterProfiles, resolvePrinterProfile } from '../printers/profiles';
 import { requireRole } from '../middleware/security';
+import { getCountryByCode, getCurrencySymbol } from '../countries';
 
 const router = Router();
 
@@ -403,8 +405,9 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
       address: settings.business_address || '',
       phone: settings.business_phone || '',
       taxRegistrationNumber: settings.tax_registration_number || '',
-      currency_symbol: settings.currency_symbol || '₹',
-      country: settings.country || 'IN',
+      // The symbol follows the business currency; a stored symbol (or the legacy rupee default) is only a fallback.
+      currency_symbol: (settings.currency ? getCurrencySymbol(settings.currency, getCountryByCode(settings.country || '')?.locale) : '') || settings.currency_symbol || DEFAULT_CURRENCY_SYMBOL,
+      country: settings.country || DEFAULT_COUNTRY,
       instagram_handle: settings.instagram_handle || '',
       customer_name: customer?.name || '',
       customer_phone: customer?.phone
@@ -450,7 +453,9 @@ router.post('/print-bill', requireRole('owner', 'manager', 'cashier'), async (re
     if (result.ok) {
       res.json({ success: true, warnings: result.warnings || [] });
     } else {
-      res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, correlation_id: result.correlationId, stage: result.stage });
+      // `detail` is the printer-level reason (offline, refused, paper out, …) so
+      // the till can tell the operator WHY instead of a generic failure.
+      res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, correlation_id: result.correlationId, stage: result.stage, detail: (result as any).detail, failure_class: (result as any).failureClass });
     }
   } catch (error: any) {
     console.error('[Print Bill] Error:', error);

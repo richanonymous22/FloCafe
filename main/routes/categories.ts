@@ -145,9 +145,10 @@ router.delete('/:id', requireRole('owner', 'manager'), (req: Request, res: Respo
       } else if (action === 'delete_all') {
         db.prepare('UPDATE products SET deleted_at = ?, updated_at = ? WHERE category_id = ? AND deleted_at IS NULL')
           .run(now(), now(), req.params.id);
-      } else {
+      } else if (productCount > 0) {
         throw new Error('Invalid action. Must be reassign or delete_all.');
       }
+      // An empty category needs no action: nothing hangs off it.
       db.prepare('UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), req.params.id);
       snapshotCategory(db, String(req.params.id)); // PLATFORM-HARDENING — catalog deactivate sync
     });

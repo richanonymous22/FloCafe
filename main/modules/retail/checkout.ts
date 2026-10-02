@@ -18,6 +18,7 @@
  * docs/MILESTONE_3_VERTICALS_AND_RETAIL.md § Retail checkout.
  */
 
+import { DEFAULT_CURRENCY } from '../../core/defaults';
 import { createSale, SaleLineInput } from '../../core/sale';
 import { generateBillForOrder } from '../../routes/bills';
 import { tender, PaymentAdapterId } from '../../core/payment';
@@ -93,7 +94,7 @@ export function checkout(input: RetailCheckoutInput): RetailCheckoutResult {
   // Same fallback main/core/payment.ts's dual-write already uses, so one
   // install never sees two different default currencies across its two
   // payment paths.
-  const currency = (getSettingValue('currency') || 'INR').toUpperCase();
+  const currency = (getSettingValue('currency') || DEFAULT_CURRENCY).toUpperCase();
   const exponent = minorUnitExponent(currency);
   const amountMinor = toMinor(bill.balance ?? bill.total, exponent);
 

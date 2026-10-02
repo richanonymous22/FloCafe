@@ -115,6 +115,10 @@ async function bootstrapFromPlemmo() {
   S = buildBusiness(cfg);
   S.settings.language = biz.language || S.settings.language;
 
+  // The business settings (name, address, VAT number, tipping, kitchen, loyalty, receipt text…)
+  // are the server's, so every terminal agrees; read them rather than showing local defaults.
+  try { if (window.PlemmoAdmin) window.PlemmoAdmin.settings.apply(S, await window.PlemmoAdmin.settings.load()); } catch (e) { /* defaults until the server answers */ }
+
   // The signed-in Plemmo user is the current operator.
   const meRole = plemmoRoleToMeridian(user.role);
   S.employees = [{ id: user.id, name: user.name || 'Owner', role: meRole, plemmoRole: user.role,
@@ -127,14 +131,16 @@ async function bootstrapFromPlemmo() {
   try {
     if (window.PlemmoStaff) {
       const staff = await window.PlemmoStaff.list();
-      const merged = staff.map((s, i) => ({ id: s.id, name: s.name, role: plemmoRoleToMeridian(s.role), plemmoRole: s.role,
-        position: s.position, rate: s.rate || 0, pin: null, active: s.active, color: EMP_COLORS[i % EMP_COLORS.length] }));
+      const merged = staff.map((s, i) => ({ id: s.id, name: s.name, role: plemmoRoleToMeridian(s.role), plemmoRole: s.role, supervisor: !!s.supervisor, hasPin: !!s.hasPin, email: s.email || '',
+        position: s.supervisor ? 'Supervisor' : s.position, rate: s.rate || 0, pin: null, active: s.active, color: EMP_COLORS[i % EMP_COLORS.length] }));
       if (merged.length) S.employees = merged;
       if (!S.employees.find((e) => e.id === user.id)) S.employees.unshift({ id: user.id, name: user.name, role: meRole, plemmoRole: user.role, position: 'Owner', pin: null, rate: 0, color: '#E8912D', active: true });
     }
   } catch (e) { /* keep the single signed-in operator */ }
   try { if (window.PlemmoCatalogue) await window.PlemmoCatalogue.load(S); } catch (e) { /* offline cache */ }
   try { if (window.PlemmoTables && S.settings.tables) await window.PlemmoTables.load(S); } catch (e) { /* tables optional */ }
+  // Held carts live on the backend; the strip above the menu is a view of them.
+  try { if (window.PlemmoTill) S.held = await window.PlemmoTill.held.list(); } catch (e) { S.held = S.held || []; }
   // Hydrate recent authoritative order history so the home dashboard, reports,
   // Z-report and CSV export compute over real Plemmo data, not just this
   // session's sales. Bounded window; best-effort (offline keeps what we have).
@@ -174,7 +180,7 @@ function renderPlemmoAuth(msg) {
       <input class="input" type="password" name="password" id="plPass" required autocomplete="current-password" ${lastEmail ? 'autofocus' : ''}></label>
     <p class="pl-err" id="plErr">${msg ? esc(msg) : ''}</p>
     <button class="pl-btn" type="submit" id="plBtn">Sign in</button>
-    <p class="pl-foot">Meridian POS · powered by Plemmo</p>
+    <p class="pl-foot" data-brand="foot">${esc(brandFoot())}</p>
   </form>`;
   const form = $('#plForm');
   if (form) form.addEventListener('submit', onPlemmoLoginSubmit);
@@ -251,7 +257,7 @@ function renderPlemmoSetup(status) {
       <span>I accept the Terms &amp; Conditions, Privacy Policy and No-Warranty Disclaimer.</span></label>
     <p class="pl-err" id="plSetupErr"></p>
     <button class="pl-btn" type="submit" id="plSetupBtn">Create business</button>
-    <p class="pl-foot">Meridian POS · powered by Plemmo</p>
+    <p class="pl-foot" data-brand="foot">${esc(brandFoot())}</p>
   </form>`;
   const form = $('#plSetupForm');
   if (form) form.addEventListener('submit', onPlemmoSetupSubmit);
@@ -371,6 +377,7 @@ function pollPlemmoSync() {
 
 function startPlemmoStatus() {
   updatePlemmoStatus();
+  if (typeof licenceCheck === 'function') licenceCheck();
   PlemmoAPI.onConnectivity(() => updatePlemmoStatus());
   if (PlemmoSession._pollTimer) clearInterval(PlemmoSession._pollTimer);
   pollPlemmoSync();

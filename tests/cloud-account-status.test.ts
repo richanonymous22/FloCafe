@@ -56,6 +56,13 @@ async function run() {
     const manager = seedManagerUser(db);
     const app = createApp({ '/api/settings': settingsRoutes });
 
+    // There is no hard-coded cloud server URL any more (the FloPOS default was
+    // removed). A registered install always has an operator-configured endpoint,
+    // so seed a test one; without it the client is offline-only and makes no
+    // outbound calls, which is the correct behaviour but not what this suite
+    // exercises.
+    setSettings({ cloud_server_url: 'https://cloud.example.test' });
+
     const managerAccount = await request(app)
       .get('/api/settings/cloud/account')
       .set(manager.authHeader);

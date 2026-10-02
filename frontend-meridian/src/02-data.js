@@ -7,7 +7,22 @@
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,8)+(Date.now()%1e6).toString(36);
+// Identifiers (cart lines, idempotency keys, import ids) come from the platform's secure random source.
+const rnd6=()=>{const a=new Uint32Array(2);crypto.getRandomValues(a);return (a[0].toString(36)+a[1].toString(36)).slice(0,6);};
+const uid=(p='id')=>p+'_'+rnd6()+(Date.now()%1e6).toString(36);
+// The product's name and links come from the server's brand config (brand/brand.json), so nothing here is hard-wired.
+const BRAND_DEFAULT={productName:'Meridian POS',shortName:'Meridian',markLetter:'M',companyName:'Plemmo',poweredBy:'Plemmo',supportEmail:'',websiteUrl:'',termsUrl:'',privacyUrl:''};
+const BRAND=()=>window.__brand||BRAND_DEFAULT;
+const brandFoot=()=>{const b=BRAND();return b.productName+(b.poweredBy?' · powered by '+b.poweredBy:'');};
+function applyBrandDom(){
+  const b=BRAND();document.title=b.productName;
+  document.querySelectorAll('[data-brand]').forEach(el=>{const k=el.dataset.brand;el.textContent=k==='foot'?brandFoot():k==='mark'?b.markLetter:k==='name'?b.productName:b.shortName;});
+}
+function loadBrand(){
+  if(typeof window==='undefined'||typeof window.fetch!=='function')return;
+  window.fetch('/api/brand').then(r=>r.ok?r.json():null).then(j=>{if(j&&j.brand){window.__brand=Object.assign({},BRAND_DEFAULT,j.brand);applyBrandDom();}}).catch(()=>{/* the built-in names stay */});
+}
+loadBrand();
 const r2=n=>Math.round((Number(n)+Number.EPSILON)*100)/100;
 const sum=(a,f=x=>x)=>a.reduce((s,x)=>s+(Number(f(x))||0),0);
 const clamp=(n,a,b)=>Math.min(b,Math.max(a,n));
@@ -33,7 +48,16 @@ const initials=n=>String(n||'?').trim().split(/\s+/).map(w=>w[0]).slice(0,2).joi
 const first=n=>String(n||'').split(' ')[0];
 const isMac=/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent);
 function greeting(){const h=new Date().getHours();return h<12?'Good morning':h<18?'Good afternoon':'Good evening';}
-function setPath(o,p,v){const k=p.split('.');let x=o;for(let i=0;i<k.length-1;i++){x[k[i]]=x[k[i]]||{};x=x[k[i]];}x[k[k.length-1]]=v;}
+function setPath(o,p,v){
+  const k=p.split('.');let x=o;
+  for(let i=0;i<k.length;i++){
+    const key=k[i];
+    if(key==='__proto__'||key==='constructor'||key==='prototype')return;
+    if(i===k.length-1){x[key]=v;return;}
+    if(!Object.prototype.hasOwnProperty.call(x,key)||x[key]==null||typeof x[key]!=='object')x[key]={};
+    x=x[key];
+  }
+}
 function getPath(o,p){return p.split('.').reduce((x,k)=>x==null?x:x[k],o);}
 
 /* ---------- Icons ---------- */
@@ -201,7 +225,7 @@ function defaultTables(){return[
  ['t7','7',6,'rect','l',5,70],['t8','8',4,'square','m',26,70],
  ['t9','9',4,'round','m',66,8],['t10','10',4,'round','m',82,8],['t11','11',6,'rect','l',66,44],['t12','12',2,'round','s',84,76]
 ].map(([id,name,seats,shape,size,x,y])=>({id,name,seats,shape,size,x,y}));}
-const PERMS=[['pos','Take payments'],['discounts','Give discounts'],['refunds','Refund and void orders'],['kitchen','Use the kitchen display'],['orders','See order history'],['products','Edit items and stock'],['customers','Manage customers'],['cash','Open and close the cash drawer'],['reports','See reports'],['team','Manage the team'],['assistant','Ask the assistant'],['settings','Change settings']];
+const PERMS=[['pos','Take payments'],['discounts','Give discounts'],['refunds','Refund and void orders'],['priceOverride','Change item prices at the till'],['kitchen','Use the kitchen display'],['orders','See order history'],['products','Edit items and stock'],['customers','Manage customers'],['cash','Open and close the cash drawer'],['reports','See reports'],['team','Manage the team'],['assistant','Ask the assistant'],['settings','Change settings']];
 const permLabel=p=>(PERMS.find(x=>x[0]===p)||[p,p])[1];
 function defaultRoles(){const all=PERMS.map(p=>p[0]);return{owner:{label:'Owner',perms:all},manager:{label:'Manager',perms:all.filter(p=>p!=='settings')},staff:{label:'Staff',perms:['pos','kitchen','orders','customers','assistant']}};}
 const ACCENTS={
@@ -221,6 +245,16 @@ function totalsFor(items,discount,s){
   let disc=0;
   if(discount){disc=discount.kind==='pct'?r2(subtotal*discount.value/100):Math.min(subtotal,r2(discount.value));}
   const after=r2(subtotal-disc),rate=(+s.taxRate||0)/100;
+  // Connected to a till server: VAT follows each item's rate, grouped per rate, and is zero when the
+  // business is not registered. (A preview — the pay screen charges the server's own total.)
+  if(s._live){
+    if(!s.vatRegistered)return{subtotal,disc,tax:0,total:after,count:sum(items,l=>l.qty)};
+    const groups={},scale=subtotal?after/subtotal:1;
+    items.forEach(l=>{const p=typeof prod==='function'?prod(l.pid):null,pct=(S._vatRates&&p&&p.taxCat&&S._vatRates[p.taxCat]!=null)?S._vatRates[p.taxCat]:0;groups[pct]=(groups[pct]||0)+lineTotal(l)*scale;});
+    let tx=0;Object.keys(groups).forEach(k=>{const r=(+k)/100,g=groups[k];tx+=s.taxInclusive!==false?g-g/(1+r):g*r;});
+    tx=r2(tx);
+    return s.taxInclusive!==false?{subtotal,disc,tax:tx,total:after,count:sum(items,l=>l.qty)}:{subtotal,disc,tax:tx,total:r2(after+tx),count:sum(items,l=>l.qty)};
+  }
   let tax,total;
   if(s.taxInclusive!==false){total=after;tax=r2(after-after/(1+rate));}
   else{tax=r2(after*rate);total=r2(after+tax);}

@@ -1,3 +1,4 @@
+import { getBrand } from './brand';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
@@ -6,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import jwt from 'jsonwebtoken';
+import expressRateLimit from 'express-rate-limit';
 import { registerRoutes } from './routes';
 import { getJWTSecret } from './routes/auth';
 import { databaseMaintenanceMiddleware, getDbHealth, isDatabaseMaintenanceActive, isKdsEnabled } from './db';
@@ -28,7 +30,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
   // Only protect API routes — static files and SPA fallback must pass through
   if (!req.path.startsWith('/api')) { next(); return; }
   // Health check — unauthenticated
-  if (req.path === '/api/health') { next(); return; }
+  if (req.path === '/api/health' || req.path === '/api/brand') { next(); return; }
   // Auth routes handle their own token verification
   if (req.path.startsWith('/api/auth')) { next(); return; }
   // Allow unauthenticated GET requests for product images (so <img> tags work)
@@ -66,7 +68,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
     // Use the DB's current role rather than the JWT's role claim, so a role
     // change takes effect without waiting for the token to expire.
-    (req as any).user = { ...decoded, role: status.role };
+    (req as any).user = { ...decoded, role: status.role, supervisor: status.supervisor };
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' });
@@ -212,6 +214,9 @@ export function startServer(): Promise<void> {
     });
 
     // ── Auth middleware (skips /api/health and /api/auth) ─────────────
+    // A per-client ceiling in front of authentication (which reads the user table). Far above what a till or
+    // tablet generates; it exists to stop a runaway or hostile client on the LAN.
+    app.use('/api', expressRateLimit({ windowMs: 60 * 1000, limit: 6000, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Slow down and try again shortly.' } }));
     app.use(requireAuth);
 
     // ── API health check ───────────────────────────────────────────────
@@ -220,11 +225,14 @@ export function startServer(): Promise<void> {
       res.status(db.ok ? 200 : 503).json({
         status: db.ok ? 'ok' : 'error',
         db: db.ok ? 'ok' : db.error,
-        service: 'Flo Local API',
+        service: `${getBrand().productName} Local API`,
         version: process.env.npm_package_version || '2.4.7',
         timestamp: new Date().toISOString(),
       });
     });
+
+    // ── Brand (public: the sign-in screen needs the name before anyone has signed in) ──
+    app.get('/api/brand', (_req: Request, res: Response) => { res.json({ brand: getBrand() }); });
 
     // ── All API routes ─────────────────────────────────────────────────
     registerRoutes(app);

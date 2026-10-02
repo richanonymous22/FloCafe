@@ -204,6 +204,7 @@ select.input{appearance:none;-webkit-appearance:none;background-image:url("data:
 .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .g-hero{grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr)}
 .g-73{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}
+.g-2{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
 .stack{display:grid;gap:16px}
 .mt{margin-top:16px}
 .strip{display:grid;grid-template-columns:repeat(var(--n,4),minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
@@ -457,6 +458,13 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
 .quick-notes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .change-line{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-radius:12px;background:var(--ok-soft);color:var(--ok-text);font-weight:700}
 .change-line.short{background:var(--warn-soft);color:var(--warn-text)}
+.rf-lines{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;padding:0 12px}
+.rf-line{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.rf-line:last-child{border-bottom:0}
+.rf-line small{display:block}
+.rf-line .k-step{display:flex;align-items:center;gap:10px}
+.rf-line .k-step button{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center}
+.rf-line .k-step button:disabled{opacity:.4}
 .rc-modal .m-body{background:var(--sunken);padding-top:18px}
 .change-due{text-align:center;background:var(--ok-soft);color:var(--ok-text);border-radius:14px;padding:12px;font-family:var(--f-display);font-size:24px;font-weight:700;margin-bottom:14px}
 .rc-print{animation:print .7s cubic-bezier(.2,.8,.2,1) both}
@@ -882,6 +890,9 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
   .hero-stats{gap:18px}
 }
 /* ── Plemmo integration: auth gate + connection/licence status pill ──── */
+#pilot-chip{position:fixed;left:10px;bottom:10px;z-index:60;background:var(--warn-bg,#fdf1d6);color:var(--warn-text,#8a5a00);border:1px solid var(--warn,#c98a00);border-radius:99px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.03em;pointer-events:none}
+#licence-gate{position:fixed;inset:0;z-index:58;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg) 94%,transparent);padding:24px;overflow:auto}
+#licence-gate[hidden]{display:none}
 #plemmo-auth{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:24px;overflow:auto}
 .pl-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius,14px);padding:32px 28px;box-shadow:0 18px 48px rgba(0,0,0,.18)}
 .pl-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}

@@ -24,6 +24,7 @@
  */
 
 import { createPublicKey, verify as edVerify, KeyObject } from 'crypto';
+import { getPinnedKeys } from './license-policy';
 
 /** The subset of license fields covered by the signature (authenticated fields). */
 export interface SignableLicense {
@@ -61,16 +62,23 @@ export function canonicalLicense(l: SignableLicense): string {
   ].join('\n');
 }
 
-/** Reads the pinned license public key from the environment, or null if unset. */
+/**
+ * The single pinned licence public key, or null when none is pinned. (Kept for callers that only need to
+ * know whether enforcement is on; verification itself goes through `verifyPinnedLicense`, which understands
+ * key ids and rotation.)
+ */
 export function getLicensePublicKey(): KeyObject | null {
   const pem = process.env.PLEMMO_LICENSE_PUBLIC_KEY;
-  if (!pem || !pem.trim()) return null;
-  try {
-    // Accept a single-line env value that uses literal "\n" for newlines.
-    return createPublicKey(pem.includes('-----') ? pem.replace(/\\n/g, '\n') : pem);
-  } catch {
-    return null;
+  if (pem && pem.trim()) {
+    try {
+      // Accept a single-line env value that uses literal "\n" for newlines.
+      return createPublicKey(pem.includes('-----') ? pem.replace(/\\n/g, '\n') : pem);
+    } catch {
+      return null;
+    }
   }
+  const keys = getPinnedKeys();
+  return keys.size ? [...keys.values()][0] : null;
 }
 
 /**
@@ -91,5 +99,19 @@ export function verifyLicenseSignature(publicKey: KeyObject, l: SignableLicense,
  * key is pinned). When false, callers pass payloads through unverified.
  */
 export function licenseSignatureEnforced(): boolean {
-  return getLicensePublicKey() != null;
+  return getPinnedKeys().size > 0;
+}
+
+/**
+ * Verifies a licence against the keys this build pins. `keyId` selects the key (key rotation: the build lists
+ * old and new keys); with no key id, a build that pins exactly one key uses it. An unknown key id, a missing
+ * signature or a bad signature is `false`. When nothing is pinned this returns `true` (unmanaged build).
+ */
+export function verifyPinnedLicense(l: SignableLicense, signatureB64: string | null, keyId?: string | null): boolean {
+  const keys = getPinnedKeys();
+  if (keys.size === 0) return true;
+  // A build pinned only through PLEMMO_LICENSE_PUBLIC_KEY has one key and no rotation: any key id maps to it.
+  const only = keys.size === 1 && keys.has('env') ? keys.get('env') : undefined;
+  const key = keyId ? (keys.get(keyId) ?? only) : (keys.size === 1 ? [...keys.values()][0] : undefined);
+  return !!key && verifyLicenseSignature(key, l, signatureB64);
 }

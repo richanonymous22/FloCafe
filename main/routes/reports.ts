@@ -1,15 +1,134 @@
+import { DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import Decimal from 'decimal.js';
 import { getDatabase, getSettingValue, parseDbTimestamp, parseItemJson, utcDayBounds, utcTodayDate } from '../db';
 import { requirePermission } from '../middleware/authorize';
 import { aggregateTaxComponents } from '../services/tax-components';
 import { fromMinor, minorUnitExponent } from '../core/money';
+import { ReportError, buildXReport, generateZReport, getZReport, listZReports, tradingReportToCsv, verifyZReport } from '../core/trading-report';
+import { PERIOD_SECTIONS, buildPeriodReport, periodSectionToCsv, type PeriodSection } from '../core/period-report';
+import { getCurrentLocationId } from '../core/location';
+import { printTextLinesDetailed } from '../printers/thermal';
+import { formatTradingReport } from '../printers/report-format';
+import { getCountryByCode, getCurrencySymbol } from '../countries';
+import type { TradingSnapshot } from '../core/trading-report';
 
 function fromMinorAmount(amountMinor: number, currency: string): number {
   return fromMinor(amountMinor, minorUnitExponent(currency));
 }
 
 const router = Router();
+
+// Reports read the whole ledger and Z reports write to it; keep a generous per-client ceiling.
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
+
+function reportFailure(error: any, res: Response): void {
+  if (error instanceof ReportError) {
+    res.status(error.statusCode).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    return;
+  }
+  console.error('[API] Trading report failed:', error);
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+// ── X / Z trading reports ────────────────────────────────────────────────────
+// X: read-only look at the open trading period. Z: closes it, stores an immutable numbered snapshot.
+router.get('/x', requirePermission('reports.view'), (_req: Request, res: Response) => {
+  try { res.json({ report: buildXReport(getCurrentLocationId()) }); } catch (e) { reportFailure(e, res); }
+});
+
+router.post('/z', requirePermission('reports.z'), (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user as { userId: string };
+    const record = generateZReport({ locationId: getCurrentLocationId(), actorUserId: user.userId, allowEmpty: req.body?.allow_empty === true });
+    res.status(201).json({ report: record });
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try { res.json({ reports: listZReports(getCurrentLocationId(), Number(req.query.limit) || 60) }); } catch (e) { reportFailure(e, res); }
+});
+
+// Print an X or Z report on the default receipt printer. A Z that was already closed prints again as a REPRINT
+// of the stored figures (it is never recomputed).
+async function printReport(snapshot: TradingSnapshot, number: number | undefined, generatedAt: string | undefined, digest: string | undefined, reprint: boolean, userId: string, res: Response): Promise<void> {
+  const country = getSettingValue('country') || '';
+  const currency = (getSettingValue('currency') || snapshot.currency || 'GBP').toUpperCase();
+  const symbol = getCurrencySymbol(currency, getCountryByCode(country)?.locale) || currency;
+  const taxName = getCountryByCode(country)?.taxName || 'Tax';
+  const result = await printTextLinesDetailed((cols, prefix) => formatTradingReport(snapshot, {
+    businessName: getSettingValue('business_name') || '', address: getSettingValue('business_address') || '', taxName,
+    taxNumber: getSettingValue('tax_registration_number') || '', prefix: prefix(symbol).trim(), number, generatedAt, digest, reprint, printedBy: userId,
+  }, cols));
+  if (result.ok) { res.json({ success: true, warnings: result.warnings || [] }); return; }
+  res.status(502).json({ error: 'Print failed. Check printer connection and settings.', code: result.code, detail: result.detail, failure_class: result.failureClass });
+}
+
+router.post('/x/print', requirePermission('reports.view'), async (req: Request, res: Response) => {
+  try { await printReport(buildXReport(getCurrentLocationId()), undefined, undefined, undefined, false, String((req as any).user.userId), res); } catch (e) { reportFailure(e, res); }
+});
+
+router.post('/z/:id/print', requirePermission('reports.view'), async (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) { res.status(404).json({ error: 'Z report not found' }); return; }
+    await printReport(record.snapshot, record.number, record.generated_at, record.digest, req.body?.reprint === true, String((req as any).user.userId), res);
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/x/csv', requirePermission('reports.view'), (_req: Request, res: Response) => {
+  try {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="x-report.csv"');
+    res.send(tradingReportToCsv(buildXReport(getCurrentLocationId())));
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z/:id/csv', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) { res.status(404).json({ error: 'Z report not found' }); return; }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="z-report-${String(record.number).padStart(4, '0')}.csv"`);
+    res.send(tradingReportToCsv(record.snapshot, record.number));
+  } catch (e) { reportFailure(e, res); }
+});
+
+// ── Period reports: any date range, net of refunds (products, categories, staff, VAT, discounts, refunds, voids).
+// `from` is exclusive and `to` inclusive, both UTC `YYYY-MM-DD HH:MM:SS`; `tz` buckets the series.
+function periodFromQuery(req: Request) {
+  return buildPeriodReport(getCurrentLocationId(), String(req.query.from || ''), String(req.query.to || ''), {
+    tz: req.query.tz ? String(req.query.tz) : undefined, bucket: req.query.bucket === 'hour' ? 'hour' : 'day',
+  });
+}
+router.get('/period', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try { res.json({ report: periodFromQuery(req) }); } catch (e) { reportFailure(e, res); }
+});
+router.get('/period/csv', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const section = String(req.query.section || 'summary') as PeriodSection;
+    if (!PERIOD_SECTIONS.includes(section)) { res.status(400).json({ error: `section must be one of ${PERIOD_SECTIONS.join(', ')}` }); return; }
+    const report = periodFromQuery(req);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${section}-${report.from.slice(0, 10)}_${report.to.slice(0, 10)}.csv"`);
+    res.send(periodSectionToCsv(report, section));
+  } catch (e) { reportFailure(e, res); }
+});
+
+router.get('/z/:id', requirePermission('reports.view'), (req: Request, res: Response) => {
+  try {
+    const record = getZReport(String(req.params.id));
+    if (!record) return res.status(404).json({ error: 'Z report not found' });
+    res.json({ report: record, verified: verifyZReport(record.id).ok });
+  } catch (e) { reportFailure(e, res); }
+});
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -444,7 +563,7 @@ router.get('/insights', requirePermission('reports.view'), (req: Request, res: R
     // filters on the index. Day boundaries are UTC; the tenant timezone only
     // drives the hour/day-of-week bucketing below.
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const timeZone = getSettingValue('timezone') || 'Asia/Kolkata';
+    const timeZone = getSettingValue('timezone') || DEFAULT_TIMEZONE;
     const [windowStart] = utcDayBounds(startDate);
 
     // AOV — same revenue basis ("paid bills") as the existing daily-stats tile.

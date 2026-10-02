@@ -19,11 +19,17 @@
  * headers are emitted (this is a device-to-server API, never browser-origin).
  */
 
+import { hashToken } from './enrollment';
+import { CloudMerchant, CloudPlan, MerchantStatus, generateMerchantCode, isPlausibleEmail, licenceFromPlan, makeActivationCode, normaliseMerchantCode, organizationUidFor, parsePlan } from './commercial';
 import express, { Express, NextFunction, Request, Response } from 'express';
-import { CloudConflict, CloudDevice, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
+import { randomBytes } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { CloudConflict, CloudDevice, EnrollmentToken, CloudEntityType, CloudEvent, CloudInventoryDeficit, CloudLicense, CloudPullPage, ConflictResolutionInput, OrganizationHealth, StoreResult } from './store';
 import { authenticateDevice, AuthStore, clientAuthReason, DeviceAuthError, SignedRequestFields } from './auth';
 import { getLicenseSigningKey, signLicense } from './license-signing';
-import { enrollWithToken, EnrollStore, EnrollmentError } from './enrollment';
+import { enrollWithToken, issueEnrollmentToken, EnrollStore, EnrollmentError } from './enrollment';
+import { isAdminApiEnabled, bearerToken, operatorTokenMatches } from './admin-auth';
 
 /**
  * The store surface the sync server uses. Every method may be sync or async,
@@ -46,6 +52,19 @@ export interface ServerCloudStore extends AuthStore, EnrollStore {
   organizationHealth(organizationUid: string): OrganizationHealth | Promise<OrganizationHealth>;
   listDeficits(organizationUid: string): CloudInventoryDeficit[] | Promise<CloudInventoryDeficit[]>;
   getLicense(organizationUid: string): CloudLicense | null | Promise<CloudLicense | null>;
+  upsertLicense(license: CloudLicense, at: string): void | Promise<void>;
+  peekEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null | Promise<EnrollmentToken | null>;
+  // Commercial layer: plans and merchants.
+  listPlans(): CloudPlan[] | Promise<CloudPlan[]>;
+  getPlan(planId: string): CloudPlan | null | Promise<CloudPlan | null>;
+  upsertPlan(plan: CloudPlan, at: string): void | Promise<void>;
+  createMerchant(merchant: CloudMerchant): void | Promise<void>;
+  getMerchant(merchantCode: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  getMerchantByOrganization(organizationUid: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  listMerchants(search?: string): CloudMerchant[] | Promise<CloudMerchant[]>;
+  updateMerchant(merchantCode: string, fields: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): CloudMerchant | null | Promise<CloudMerchant | null>;
+  /** Shared fixed-window rate limit: true when this hit is allowed. Shared across instances (database-backed). */
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean | Promise<boolean>;
 }
 
 /**
@@ -71,6 +90,8 @@ export const PLEMMO_PROTOCOL_VERSION = '1';
 const MAX_BATCH = 500;
 const BODY_LIMIT = '1mb';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const ADMIN_RATE_LIMIT_MAX = 120; // operator calls per client address per minute, shared across instances
+const ENROLL_RATE_LIMIT_MAX = 20; // activation attempts per client address per minute, shared across instances
 const RATE_LIMIT_MAX = 240; // per device per minute — generous for batching, curbs storms
 
 interface UploadEvent {
@@ -151,6 +172,14 @@ function createRateLimiter(windowMs: number, max: number) {
 export interface CreateCloudServerOptions {
   /** Enables POST /sync/v1/dev/enroll. DEV/TEST ONLY — must be false in production. */
   enableDevEnroll?: boolean;
+  /** One JSON log line per request (method, path without query, status, duration, request id). Never bodies, headers or tokens. */
+  requestLog?: boolean | ((line: Record<string, unknown>) => void);
+}
+
+/** The lowest client protocol this deployment still serves (an operator raises it to retire old clients). */
+function minClientProtocol(): number {
+  const n = Number(process.env.PLEMMO_MIN_CLIENT_PROTOCOL);
+  return Number.isInteger(n) && n >= 1 ? n : 1;
 }
 
 export function createCloudServer(store: ServerCloudStore, options: CreateCloudServerOptions = {}): Express {
@@ -176,11 +205,63 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     next();
   });
 
+  // Behind a proxy or PaaS load balancer every request comes from the proxy's address; trust the stated number
+  // of hops so per-client rate limits and logs see the real client. 0 (default) = connect directly.
+  const hops = Number(process.env.PLEMMO_TRUST_PROXY_HOPS);
+  if (Number.isInteger(hops) && hops > 0) app.set('trust proxy', hops);
+
+  // Structured request log: one JSON line each, with a request id the client also receives.
+  if (options.requestLog) {
+    const sink = typeof options.requestLog === 'function' ? options.requestLog : (line: Record<string, unknown>) => console.log(JSON.stringify(line));
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const started = Date.now();
+      const id = `req_${randomBytes(6).toString('hex')}`;
+      res.setHeader('X-Request-Id', id);
+      res.on('finish', () => sink({ ts: new Date().toISOString(), level: res.statusCode >= 500 ? 'error' : 'info', msg: 'request', id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - started, device: req.header('x-plemmo-device') || undefined }));
+      next();
+    });
+  }
+
+  // Client compatibility: a client older than the deployment's minimum protocol is told to update rather than
+  // being served something it cannot parse. A client that sends no version is treated as protocol 1.
+  app.use('/sync/v1', (req: Request, res: Response, next: NextFunction) => {
+    const sent = Number(req.header('x-plemmo-protocol') || 1);
+    const min = minClientProtocol();
+    if (Number.isFinite(sent) && sent < min) {
+      res.status(426).json({ error: 'client_upgrade_required', min_protocol: min, protocol: PLEMMO_PROTOCOL_VERSION });
+      return;
+    }
+    next();
+  });
+
   // ── Production operations: health + readiness (Part A/H) ──────────────────
   // Liveness: the process is up. No auth, no DB — safe for a load balancer.
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', protocol: PLEMMO_PROTOCOL_VERSION });
   });
+  // ── Operator console (static files; every call it makes is the authenticated /admin/v1 API) ──────────────
+  // Served only when the operator API is switched on. No inline script or style, so a strict CSP applies.
+  const PANEL_FILES: Record<string, [string, string]> = {
+    '/operator': ['index.html', 'text/html; charset=utf-8'],
+    '/operator/panel.js': ['panel.js', 'text/javascript; charset=utf-8'],
+    '/operator/panel.css': ['panel.css', 'text/css; charset=utf-8'],
+  };
+  // The files are read once when the server is built, so a request does no file access of its own.
+  const panelBodies = new Map<string, Buffer>();
+  for (const [file] of Object.values(PANEL_FILES)) {
+    try { panelBodies.set(file, fs.readFileSync(path.join(__dirname, 'panel', file))); } catch { /* not shipped: the routes answer 404 */ }
+  }
+  for (const [route, [file, type]] of Object.entries(PANEL_FILES)) {
+    app.get(route, (_req: Request, res: Response) => {
+      const body = panelBodies.get(file);
+      if (!isAdminApiEnabled() || !body) { res.status(404).end(); return; }
+      res.set({
+        'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      });
+      res.send(body);
+    });
+  }
   // Readiness: the datastore is reachable. A trivial round-trip (returns null)
   // works identically over the SQLite dev store and the async Postgres store.
   app.get('/ready', async (_req: Request, res: Response) => {
@@ -235,8 +316,19 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
 
   // ── PRODUCTION enrollment via one-time activation token (Part F) ─────────
   app.post('/sync/v1/enroll', async (req: Request, res: Response) => {
+    if (!(await store.rateLimitHit(`enroll:${req.ip ?? 'anon'}`, RATE_LIMIT_WINDOW_MS, ENROLL_RATE_LIMIT_MAX, Date.now()))) return res.status(429).json({ error: 'rate limited' });
     const { token, device_uid, public_key } = req.body ?? {};
     try {
+      // The licence decides whether another device may join: refuse BEFORE the token is consumed, so a
+      // suspended merchant or a full plan does not burn a good activation token.
+      const claim = typeof token === 'string' ? await store.peekEnrollmentToken(hashToken(token), new Date().toISOString()) : null;
+      if (claim) {
+        const lic = await store.getLicense(claim.organization_uid);
+        if (lic && (lic.status === 'suspended' || lic.status === 'revoked')) return res.status(403).json({ error: 'enrollment_refused', reason: 'license_not_active' });
+        if (lic && lic.device_limit != null && (await store.organizationHealth(claim.organization_uid)).active_devices >= lic.device_limit) {
+          return res.status(403).json({ error: 'enrollment_refused', reason: 'device_limit_reached', device_limit: lic.device_limit });
+        }
+      }
       const enrolled = await enrollWithToken(store, { token, deviceUid: device_uid, publicKey: public_key });
       await store.logSync('enrolled', { deviceUid: enrolled.device_uid, organizationUid: enrolled.organization_uid }, new Date().toISOString());
       res.status(201).json({ enrolled: true, ...enrolled });
@@ -411,11 +503,273 @@ export function createCloudServer(store: ServerCloudStore, options: CreateCloudS
     if (license) {
       const signingKey = getLicenseSigningKey();
       if (signingKey) {
-        res.json({ license: { ...license, signature: signLicense(signingKey, license) } });
+        res.json({ license: { ...license, signature: signLicense(signingKey, license), key_id: process.env.PLEMMO_LICENSE_SIGNING_KEY_ID || 'k1' } });
         return;
       }
     }
     res.json({ license });
+  });
+
+  // ── Operator (admin) API — the backend contract FloAdmin calls ───────────
+  // Provisioning, license issuance/lifecycle and operational read models for
+  // the SEPARATE FloAdmin console. There is NO admin UI here. Every route is
+  // gated by the shared operator bearer token (PLEMMO_CLOUD_ADMIN_TOKEN); when
+  // it is unset the whole surface is closed (503), never open by default.
+  const LICENSE_STATUSES = new Set<CloudLicense['status']>(['active', 'expired', 'suspended', 'revoked', 'unlicensed']);
+
+  /** Rate-limits + authenticates an operator request. Returns true when the
+   *  caller may proceed, or false after having written the error response. */
+  async function requireOperator(req: Request, res: Response): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    if (!(await store.rateLimitHit(`admin:${req.ip ?? 'anon'}`, RATE_LIMIT_WINDOW_MS, ADMIN_RATE_LIMIT_MAX, Date.now()))) {
+      res.status(429).json({ error: 'rate limited' });
+      return false;
+    }
+    if (!isAdminApiEnabled()) {
+      // Not configured → the admin API does not exist for this deployment.
+      res.status(503).json({ error: 'admin_api_disabled' });
+      return false;
+    }
+    if (!operatorTokenMatches(bearerToken(req.header('authorization')))) {
+      await store.logSync('admin_auth_failure', { message: req.path }, nowIso);
+      res.status(401).json({ error: 'unauthenticated' });
+      return false;
+    }
+    return true;
+  }
+
+  // Issue or replace an organization's license (idempotent upsert by org).
+  // The stored payload is UNSIGNED; GET /sync/v1/license signs it per-request
+  // against the pinned key, so there is exactly one signing seam.
+  app.post('/admin/v1/licenses', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!b.organization_uid || typeof b.organization_uid !== 'string') {
+      return res.status(400).json({ error: 'organization_uid is required' });
+    }
+    const status = (b.status as CloudLicense['status']) ?? 'active';
+    if (!LICENSE_STATUSES.has(status)) return res.status(400).json({ error: 'invalid status' });
+    const nowIso = new Date().toISOString();
+    const license: CloudLicense = {
+      organization_uid: b.organization_uid,
+      status,
+      plan: typeof b.plan === 'string' ? b.plan : 'none',
+      issued_at: typeof b.issued_at === 'string' ? b.issued_at : nowIso,
+      activated_at: typeof b.activated_at === 'string' ? b.activated_at : (status === 'active' ? nowIso : null),
+      expires_at: typeof b.expires_at === 'string' ? b.expires_at : null,
+      grace_days: Number.isFinite(Number(b.grace_days)) ? Number(b.grace_days) : 0,
+      device_limit: b.device_limit == null ? null : Number(b.device_limit),
+      location_limit: b.location_limit == null ? null : Number(b.location_limit),
+      features: Array.isArray(b.features) ? (b.features as unknown[]).map(String) : [],
+      signature: null,
+    };
+    await store.upsertLicense(license, nowIso);
+    await store.logSync('license_issued', { organizationUid: license.organization_uid, message: status }, nowIso);
+    res.status(200).json({ license });
+  });
+
+  // Read an organization's current (stored, unsigned) license.
+  app.get('/admin/v1/licenses/:org', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const license = await store.getLicense(String(req.params.org));
+    if (!license) return res.status(404).json({ error: 'not_found' });
+    res.json({ license });
+  });
+
+  // Transition an organization's license status
+  // (activate/suspend/revoke/expire/reactivate). Reactivating stamps
+  // activated_at if it was never set. Requires an existing license.
+  app.post('/admin/v1/licenses/:org/status', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const status = (req.body ?? {}).status as CloudLicense['status'];
+    if (!LICENSE_STATUSES.has(status)) return res.status(400).json({ error: 'invalid status' });
+    const existing = await store.getLicense(String(req.params.org));
+    if (!existing) return res.status(404).json({ error: 'not_found' });
+    const nowIso = new Date().toISOString();
+    const updated: CloudLicense = {
+      ...existing,
+      status,
+      activated_at: status === 'active' ? (existing.activated_at ?? nowIso) : existing.activated_at,
+      signature: null,
+    };
+    await store.upsertLicense(updated, nowIso);
+    await store.logSync('license_status_changed', { organizationUid: String(req.params.org), message: status }, nowIso);
+    res.json({ license: updated });
+  });
+
+  // Issue a one-time device activation token scoped to an org/location/register.
+  // The PLAINTEXT token is returned ONCE; only its hash is stored. A device
+  // redeems it at POST /sync/v1/enroll — org/location/register bind from the
+  // token, never from anything the device claims.
+  app.post('/admin/v1/enrollment-tokens', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!b.organization_uid || typeof b.organization_uid !== 'string') {
+      return res.status(400).json({ error: 'organization_uid is required' });
+    }
+    const ttlMs = Number.isFinite(Number(b.ttl_seconds)) && Number(b.ttl_seconds) > 0
+      ? Number(b.ttl_seconds) * 1000 : undefined;
+    const { token } = await issueEnrollmentToken(store, {
+      organizationUid: b.organization_uid,
+      locationUid: typeof b.location_uid === 'string' ? b.location_uid : null,
+      registerUid: typeof b.register_uid === 'string' ? b.register_uid : null,
+      ttlMs,
+    });
+    await store.logSync('activation_token_issued', { organizationUid: b.organization_uid }, new Date().toISOString());
+    res.status(201).json({ token, organization_uid: b.organization_uid, activation_code: makeActivationCode(process.env.PLEMMO_CLOUD_PUBLIC_URL, token) });
+  });
+
+  // Operational health for an organization (device counts, last sync, deficits)
+  // — the read model behind FloAdmin's business/terminal status views.
+  app.get('/admin/v1/organizations/:org/health', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const health = await store.organizationHealth(String(req.params.org));
+    res.json(health);
+  });
+
+  // ── Commercial layer: plans and merchants (operator API) ─────────────────
+  // A plan is data; a merchant is a customer with a human-readable code. Creating a merchant creates its
+  // organisation and issues a licence derived from the plan, so "new merchant" is one call. Every change is
+  // audited in the sync log.
+  const merchantView = async (m: CloudMerchant) => ({ merchant: m, license: await store.getLicense(m.organization_uid) });
+  async function loadMerchant(req: Request, res: Response): Promise<CloudMerchant | null> {
+    const code = normaliseMerchantCode(String(req.params.code));
+    if (!code) { res.status(400).json({ error: 'invalid_merchant_code' }); return null; }
+    const m = await store.getMerchant(code);
+    if (!m) { res.status(404).json({ error: 'not_found' }); return null; }
+    return m;
+  }
+
+  app.get('/admin/v1/plans', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    res.json({ plans: await store.listPlans() });
+  });
+
+  app.put('/admin/v1/plans/:id', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const { plan, error } = parsePlan(String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    if (!plan) return res.status(400).json({ error });
+    const nowIso = new Date().toISOString();
+    await store.upsertPlan(plan, nowIso);
+    await store.logSync('plan_saved', { message: plan.plan_id }, nowIso);
+    res.json({ plan });
+  });
+
+  app.post('/admin/v1/merchants', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const name = typeof b.name === 'string' ? b.name.trim() : '';
+    if (!name || name.length > 120) return res.status(400).json({ error: 'name is required (120 characters at most)' });
+    const email = typeof b.contact_email === 'string' && b.contact_email.trim() ? b.contact_email.trim().slice(0, 200) : null;
+    if (email && !isPlausibleEmail(email)) return res.status(400).json({ error: 'contact_email is not a valid address' });
+    const plan = typeof b.plan_id === 'string' ? await store.getPlan(b.plan_id) : null;
+    if (!plan || !plan.is_active) return res.status(400).json({ error: 'plan_id must name an active plan' });
+    const termDays = b.term_days == null ? undefined : Number(b.term_days);
+    if (termDays !== undefined && (!Number.isInteger(termDays) || termDays < 1 || termDays > 3650)) return res.status(400).json({ error: 'term_days must be a whole number of days' });
+    const nowIso = new Date().toISOString();
+    const merchant: CloudMerchant = {
+      merchant_code: generateMerchantCode(), name, contact_email: email, organization_uid: organizationUidFor(), plan_id: plan.plan_id,
+      status: 'active', notes: typeof b.notes === 'string' ? b.notes.slice(0, 500) : null, created_at: nowIso, updated_at: nowIso,
+    };
+    await store.createMerchant(merchant);
+    await store.upsertLicense(licenceFromPlan(plan, merchant.organization_uid, nowIso, { termDays }), nowIso);
+    await store.logSync('merchant_created', { organizationUid: merchant.organization_uid, message: `${merchant.merchant_code} ${plan.plan_id}` }, nowIso);
+    res.status(201).json(await merchantView(merchant));
+  });
+
+  app.get('/admin/v1/merchants', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
+    const merchants = await store.listMerchants(q || undefined);
+    res.json({ merchants: await Promise.all(merchants.map(async (m) => ({ ...m, license_status: (await store.getLicense(m.organization_uid))?.status ?? null }))) });
+  });
+
+  app.get('/admin/v1/merchants/:code', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    res.json({ ...(await merchantView(m)), health: await store.organizationHealth(m.organization_uid) });
+  });
+
+  app.put('/admin/v1/merchants/:code', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const fields: Partial<CloudMerchant> = {};
+    if (typeof b.name === 'string') { const n = b.name.trim(); if (!n || n.length > 120) return res.status(400).json({ error: 'name must be 1–120 characters' }); fields.name = n; }
+    if (typeof b.contact_email === 'string') { const e = b.contact_email.trim(); if (e && !isPlausibleEmail(e)) return res.status(400).json({ error: 'contact_email is not a valid address' }); fields.contact_email = e || null; }
+    if (typeof b.notes === 'string') fields.notes = b.notes.slice(0, 500);
+    const nowIso = new Date().toISOString();
+    const updated = await store.updateMerchant(m.merchant_code, fields, nowIso);
+    await store.logSync('merchant_updated', { organizationUid: m.organization_uid, message: m.merchant_code }, nowIso);
+    res.json(await merchantView(updated as CloudMerchant));
+  });
+
+  // suspend / reactivate / close move the merchant AND its licence together.
+  const transitions: Record<string, { from: MerchantStatus[]; to: MerchantStatus; licence: CloudLicense['status'] }> = {
+    suspend: { from: ['active'], to: 'suspended', licence: 'suspended' },
+    reactivate: { from: ['suspended'], to: 'active', licence: 'active' },
+    close: { from: ['active', 'suspended'], to: 'closed', licence: 'revoked' },
+  };
+  for (const [action, t] of Object.entries(transitions)) {
+    app.post(`/admin/v1/merchants/:code/${action}`, async (req: Request, res: Response) => {
+      if (!(await requireOperator(req, res))) return;
+      const m = await loadMerchant(req, res); if (!m) return;
+      if (!t.from.includes(m.status)) return res.status(409).json({ error: `a ${m.status} merchant cannot be ${action === 'close' ? 'closed' : action + 'd'}`, status: m.status });
+      const nowIso = new Date().toISOString();
+      const lic = await store.getLicense(m.organization_uid);
+      if (lic) await store.upsertLicense({ ...lic, status: t.licence, activated_at: t.licence === 'active' ? (lic.activated_at ?? nowIso) : lic.activated_at, signature: null }, nowIso);
+      const updated = await store.updateMerchant(m.merchant_code, { status: t.to }, nowIso);
+      const reason = typeof (req.body ?? {}).reason === 'string' ? String(req.body.reason).slice(0, 200) : '';
+      await store.logSync(`merchant_${action}`, { organizationUid: m.organization_uid, message: `${m.merchant_code}${reason ? ' ' + reason : ''}` }, nowIso);
+      res.json(await merchantView(updated as CloudMerchant));
+    });
+  }
+
+  // Change plan: the licence is re-derived from the new plan; status, activation and expiry carry over.
+  app.post('/admin/v1/merchants/:code/plan', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    if (m.status === 'closed') return res.status(409).json({ error: 'a closed merchant cannot change plan' });
+    const plan = typeof (req.body ?? {}).plan_id === 'string' ? await store.getPlan(req.body.plan_id) : null;
+    if (!plan || !plan.is_active) return res.status(400).json({ error: 'plan_id must name an active plan' });
+    const nowIso = new Date().toISOString();
+    const lic = await store.getLicense(m.organization_uid);
+    const next = licenceFromPlan(plan, m.organization_uid, lic?.issued_at ?? nowIso, { status: lic?.status ?? 'active', activatedAt: lic?.activated_at ?? nowIso });
+    next.expires_at = lic?.expires_at ?? next.expires_at;
+    await store.upsertLicense(next, nowIso);
+    const updated = await store.updateMerchant(m.merchant_code, { plan_id: plan.plan_id }, nowIso);
+    await store.logSync('merchant_plan_changed', { organizationUid: m.organization_uid, message: `${m.merchant_code} ${m.plan_id}->${plan.plan_id}` }, nowIso);
+    res.json(await merchantView(updated as CloudMerchant));
+  });
+
+  // Renew: extend from the later of now and the current expiry, so renewing early never loses paid time.
+  app.post('/admin/v1/merchants/:code/renew', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    const days = Number((req.body ?? {}).term_days);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) return res.status(400).json({ error: 'term_days must be a whole number of days' });
+    const lic = await store.getLicense(m.organization_uid);
+    if (!lic || m.status === 'closed') return res.status(409).json({ error: 'nothing to renew' });
+    const nowIso = new Date().toISOString();
+    const base = Math.max(Date.now(), lic.expires_at ? Date.parse(lic.expires_at) : 0);
+    const status = lic.status === 'expired' ? 'active' : lic.status;
+    await store.upsertLicense({ ...lic, status, expires_at: new Date(base + days * 86_400_000).toISOString(), signature: null }, nowIso);
+    await store.logSync('merchant_renewed', { organizationUid: m.organization_uid, message: `${m.merchant_code} +${days}d` }, nowIso);
+    res.json(await merchantView(m));
+  });
+
+  app.post('/admin/v1/merchants/:code/activation-tokens', async (req: Request, res: Response) => {
+    if (!(await requireOperator(req, res))) return;
+    const m = await loadMerchant(req, res); if (!m) return;
+    if (m.status !== 'active') return res.status(409).json({ error: `a ${m.status} merchant cannot enrol devices` });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const ttlMs = Number.isFinite(Number(b.ttl_seconds)) && Number(b.ttl_seconds) > 0 ? Number(b.ttl_seconds) * 1000 : undefined;
+    const { token } = await issueEnrollmentToken(store, {
+      organizationUid: m.organization_uid, locationUid: typeof b.location_uid === 'string' ? b.location_uid : null,
+      registerUid: typeof b.register_uid === 'string' ? b.register_uid : null, ttlMs,
+    });
+    await store.logSync('activation_token_issued', { organizationUid: m.organization_uid, message: m.merchant_code }, new Date().toISOString());
+    res.status(201).json({ token, merchant_code: m.merchant_code, activation_code: makeActivationCode(process.env.PLEMMO_CLOUD_PUBLIC_URL, token) });
   });
 
   return app;

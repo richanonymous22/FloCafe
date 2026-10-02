@@ -1,0 +1,24 @@
+{
+  "name": "plemmo-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plemmo cloud sync and operator API — the service the tills connect to.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/serve.js",
+    "migrate": "node dist/run-migrations.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "@types/pg": "^8.21.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "typescript": "^5.4.5"
+  }
+}

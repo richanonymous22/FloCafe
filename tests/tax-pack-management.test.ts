@@ -65,6 +65,8 @@ async function main() {
   console.log('='.repeat(56));
 
   const db = initTestDb();
+  // These scenarios are about a store OUTSIDE the UK (India, then Thailand); a fresh install now defaults to GB.
+  db.prepare("UPDATE settings SET value = 'IN' WHERE key = 'country'").run();
   const owner = seedOwnerUser(db);
   const manager = seedManagerUser(db);
   seedCategory(db, 'tax-pack-products', 'Tax Pack Products');
@@ -81,9 +83,12 @@ async function main() {
     console.log('\n1. Fresh installs start generic; explicitly installed packs are readable');
     const freshListRes = await api(baseUrl, '/api/tax-packs', { headers: manager.authHeader });
     assertEqual(freshListRes.status, 200, 'manager can view installed packs');
-    assertEqual(freshListRes.data.packs.length, 1, 'only the generic pack is preinstalled');
-    assertEqual(freshListRes.data.packs[0].id, 'local-generic', 'the preinstalled pack is generic');
-    assertEqual(freshListRes.data.packs[0].active_for_store, true, 'generic no-tax behavior is active');
+    assertEqual(freshListRes.data.packs.length, 2, 'exactly the bundled packs are preinstalled (generic + UK VAT)');
+    const preGeneric = freshListRes.data.packs.find((p: any) => p.id === 'local-generic');
+    const preGb = freshListRes.data.packs.find((p: any) => p.id === 'meridian-gb-vat');
+    assert(!!preGeneric && !!preGb, 'the preinstalled packs are the generic pack and the UK VAT pack');
+    assertEqual(preGeneric.active_for_store, true, 'generic no-tax behavior is active for a store outside the UK');
+    assertEqual(preGb.active_for_store, false, 'the UK VAT pack is not active unless the store country is GB')
 
     installAndActivateTestTaxPack(db, testIndiaPack);
     installAndActivateTestTaxPack(db, testThailandPack);

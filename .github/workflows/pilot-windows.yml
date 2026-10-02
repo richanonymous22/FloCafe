@@ -1,0 +1,38 @@
+name: Pilot Windows installer
+
+# Builds an UNSIGNED Windows installer for a trusted tester (no licence enforced, simulated card terminal available,
+# marked PILOT in the till). Nothing is published: the installer is attached to this run as a downloadable artifact.
+# Run it from the Actions tab: Pilot Windows installer -> Run workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pilot-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build the pilot installer (unsigned)
+        run: npm run pilot:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-windows-installer
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 14

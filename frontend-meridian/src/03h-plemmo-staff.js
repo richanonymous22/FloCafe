@@ -21,6 +21,8 @@
       role: u.role || 'staff',
       position: u.position || (u.role ? u.role[0].toUpperCase() + u.role.slice(1) : ''),
       email: u.email || '',
+      supervisor: u.is_supervisor === 1 || u.is_supervisor === true,
+      hasPin: u.has_pin === 1 || u.has_pin === true,
       active: u.is_active == null ? true : !!u.is_active,
       rate: Number(u.pay_rate) || 0,
     };

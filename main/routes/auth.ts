@@ -1,4 +1,6 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
@@ -91,10 +93,10 @@ function buildLocalTenant(db: ReturnType<typeof getDatabase>, userRole: string) 
     slug: 'local',
     database_name: 'local',
     business_type: s.business_type || 'restaurant',
-    country: s.country || 'IN',
-    currency: s.currency || 'INR',
-    currency_symbol: getCurrencySymbol(s.currency || 'INR', getCountryByCode(s.country)?.locale) || '₹',
-    timezone: s.timezone || 'Asia/Kolkata',
+    country: s.country || DEFAULT_COUNTRY,
+    currency: s.currency || DEFAULT_CURRENCY,
+    currency_symbol: getCurrencySymbol(s.currency || DEFAULT_CURRENCY, getCountryByCode(s.country)?.locale) || DEFAULT_CURRENCY_SYMBOL,
+    timezone: s.timezone || DEFAULT_TIMEZONE,
     language: s.language || 'en',
     service_model: s.service_model || 'finedine',
     plan: 'desktop',
@@ -395,6 +397,7 @@ router.post('/login', authRateLimit(), async (req: Request, res: Response) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        supervisor: user.role === 'cashier' && user.is_supervisor === 1,
         category_ids: parseCategoryIds(user.category_ids),
       },
       // Single tenant — frontend auto-selects when tenants.length === 1
@@ -424,7 +427,7 @@ router.post('/tenants/select', (req: Request, res: Response) => {
     const decoded = jwt.verify(token, getJWTSecret()) as any;
 
     const db = getDatabase();
-    const user = db.prepare('SELECT id, name, email, role, is_active, tokens_valid_after FROM users WHERE id = ?').get(decoded.userId) as any;
+    const user = db.prepare('SELECT id, name, email, role, is_supervisor, is_active, tokens_valid_after FROM users WHERE id = ?').get(decoded.userId) as any;
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.is_active !== 1 || isTokenStale(decoded.iat, user.tokens_valid_after)) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -509,7 +512,10 @@ router.post('/refresh', (req: Request, res: Response) => {
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 
-router.get('/me', (req: Request, res: Response) => {
+// Called on every page load and token refresh, so the ceiling is generous; it only stops a runaway client.
+const meRateLimit = expressRateLimit({ windowMs: 60 * 1000, limit: 600, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Slow down and try again shortly.' } });
+
+router.get('/me', meRateLimit, (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -532,7 +538,7 @@ router.get('/me', (req: Request, res: Response) => {
     const tenant = buildLocalTenant(db, user.role);
 
     res.json({
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, supervisor: user.role === 'cashier' && user.is_supervisor === 1 },
       tenants: [tenant],
     });
   } catch {
@@ -729,10 +735,10 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
       language,
       business_name,
       store_name,
-      country = 'IN',
-      currency = 'INR',
+      country = DEFAULT_COUNTRY,
+      currency = DEFAULT_CURRENCY,
       currency_symbol,
-      timezone = 'Asia/Kolkata',
+      timezone = DEFAULT_TIMEZONE,
       business_address,
       address,
       business_phone,
@@ -753,7 +759,7 @@ router.post('/setup/initialize', (req: Request, res: Response) => {
     const normalizedBusinessType = String(business_type || 'restaurant').trim();
     const normalizedSetupProfile = String(setup_profile || 'express').trim().toLowerCase();
     const normalizedServiceModel = String(service_model || 'qsr').trim().toLowerCase();
-    const normalizedCurrency = String(currency || 'INR').trim().toUpperCase();
+    const normalizedCurrency = String(currency || DEFAULT_CURRENCY).trim().toUpperCase();
     const storeName = String(store_name || business_name || '').trim();
     const resolvedStoreName = storeName || 'Store';
     const outletAddress = String(business_address || address || '').trim();

@@ -1,5 +1,7 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { createHash } from 'crypto';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import { getDatabase, generateOrderNumber, now, parseItemJson, parseRowJson, withTxn, verifyPin, getSettingValue, insertOrderItemAddons, attachEffectiveAddons, utcDayBounds, utcTodayDate } from '../db';
 import {
   calculateConfiguredChargeTaxes,
@@ -16,8 +18,24 @@ import { createSale, addSaleItems, validateLineAddonGroupLimits } from '../core/
 import { requireRole } from '../middleware/security';
 import { requirePermission } from '../middleware/authorize';
 import { getCurrentLocationId } from '../core/location';
+import { recordAuditEvent } from '../core/audit';
+import { currencyExponent, quantiseMoney, sumMoney } from '../core/money-integrity';
+import { ApprovalError, resolveApprover } from '../core/approval';
+import { restockCancelledLine } from '../core/inventory';
+import { refreshOffers } from '../core/offers';
 
 const router = Router();
+
+// Every orders route reads or writes the sale ledger and is reachable from the LAN.
+// Per-client ceiling far above what a till or tablet generates (polling included);
+// it exists to stop a runaway or hostile client, in addition to the global API limiter.
+router.use(expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+}));
 const MAX_ORDER_IDEMPOTENCY_KEY_LENGTH = 128;
 
 function orderIdempotencyKey(req: Request): string | null {
@@ -257,6 +275,30 @@ router.get('/:id', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: R
   }
 });
 
+
+/**
+ * Price override gate. A line may carry `price_override` only if the caller may
+ * override prices themselves (owner/manager) or supplies a valid manager/owner
+ * PIN. Returns the approving user id (null when no line overrides a price). The
+ * approver comes from the server — the client cannot name one.
+ */
+function resolvePriceOverrideApproval(req: Request, lines: unknown): string | null {
+  if (!Array.isArray(lines) || !lines.some((l) => l && typeof l === 'object' && (l as any).price_override != null)) return null;
+  const body = req.body || {};
+  return resolveApprover({
+    user: (req as any).user, permission: 'sales.price_override', overridePin: body.override_pin,
+    rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:price-override`, action: 'override a price',
+  }).userId;
+}
+
+function approvalFailure(error: any, res: Response): boolean {
+  if (error instanceof ApprovalError) {
+    res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
+    return true;
+  }
+  return false;
+}
+
 /**
  * Create a sale.
  *
@@ -282,9 +324,12 @@ router.post('/', requirePermission('sales.create', { locationId: () => getCurren
     // client-sent user_id would let staff spoof order attribution.
     const authenticatedUserId = (req as any).user.userId;
 
+    const priceOverrideApprovedBy = resolvePriceOverrideApproval(req, items);
+
     const result = createSale({
       channel: type,
       lines: items,
+      priceOverrideApprovedBy,
       cashierUserId: authenticatedUserId,
       customerId: customer_id ?? null,
       tableId: table_id ?? null,
@@ -316,6 +361,7 @@ router.post('/', requirePermission('sales.create', { locationId: () => getCurren
     res.status(result.idempotentReplay ? 200 : 201).json({ order: Object.assign({}, result.sale, { items: result.lines }) });
   } catch (error: any) {
     const statusCode = error?.statusCode || 500;
+    if (approvalFailure(error, res)) return;
     // Client errors are answered, not logged — only unexpected failures are
     // worth a line in a merchant's log file.
     if (statusCode >= 500) {
@@ -366,6 +412,7 @@ router.post('/:id/items', requirePermission('sales.create', { locationId: () => 
     const result = addSaleItems({
       saleId: req.params.id as string,
       lines: items,
+      priceOverrideApprovedBy: resolvePriceOverrideApproval(req, items),
       specialInstructions: special_instructions !== undefined ? { value: special_instructions } : undefined,
       actorUserId: authUser?.userId ?? null,
       idempotency: idempotencyKey && requestHash
@@ -382,6 +429,7 @@ router.post('/:id/items', requirePermission('sales.create', { locationId: () => 
     // never gave add-items its own 201 the way create-sale does.
     res.json({ order: Object.assign({}, result.sale, { items: result.lines }) });
   } catch (error: any) {
+    if (approvalFailure(error, res)) return;
     const statusCode = error?.statusCode || 500;
     if (statusCode >= 500) {
       console.error('[Orders] Add items error:', error);
@@ -425,6 +473,21 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
     `).get(req.params.id) !== undefined;
     const requiresOverride = (currentStatusIndex > 0 || hasItemsInProgress) && status === 'cancelled';
 
+    // An order that has taken money is not cancelled: cancelling would restock
+    // and close the order while the customer's payment stays on the books.
+    // Captured/settled payments are reversed through the refund path, which
+    // records the money movement and keeps the original sale intact.
+    if (status === 'cancelled') {
+      const hasPayments = db.prepare(`
+        SELECT 1 FROM payments p JOIN bills b ON b.id = p.bill_id
+        WHERE b.order_id = ? AND p.state IN ('authorized', 'captured', 'settled', 'refunded') LIMIT 1
+      `).get(req.params.id) !== undefined;
+      if (hasPayments) {
+        return res.status(409).json({ error: 'This order has payments recorded. Refund it instead of cancelling it.', code: 'order_has_payments' });
+      }
+    }
+    let approvedByUserId: string | null = null;
+
     if (requiresOverride) {
       if (!override_pin) {
         return res.status(400).json({ error: 'Manager PIN required to cancel order in progress' });
@@ -438,13 +501,14 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
       }
 
       // Validate PIN against active owner/manager accounts only
-      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')")
+      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1))")
         .all()
         .find((u: any) => verifyPin(u.pin_hash, override_pin));
 
       if (!user) {
         return res.status(403).json({ error: 'Invalid manager PIN' });
       }
+      approvedByUserId = String((user as any).id);
     }
 
     const nowStr = now();
@@ -482,14 +546,20 @@ router.patch('/:id/status', requireRole('owner', 'manager', 'cashier', 'chef', '
         case 'cancelled': {
           const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(req.params.id) as any[];
           for (const item of items) {
-            const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.product_id) as any;
-            if (product && product.track_inventory) {
-              db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
-                .run(item.quantity, nowStr, product.id);
-            }
+            restockCancelledLine({
+              item, reason: reason ? `Order cancelled: ${reason}` : 'Order cancelled',
+              referenceType: 'order_cancel', referenceId: String(req.params.id), actorUserId: authUser?.userId ?? null,
+            });
           }
           db.prepare('UPDATE orders SET status = ?, cancelled_at = ?, cancellation_reason = ?, updated_at = ? WHERE id = ?')
             .run(status, nowStr, reason, nowStr, req.params.id);
+          recordAuditEvent({
+            type: 'sale.voided',
+            actor: { userId: authUser?.userId ?? null, role: authUser?.role ?? null },
+            entity: { type: 'order', id: String(req.params.id) },
+            summary: `Order ${(order as any).order_number ?? req.params.id} cancelled${reason ? `: ${reason}` : ''}`,
+            metadata: { order_id: Number(req.params.id), reason: reason ?? null, previous_status: (order as any).status, approved_by: approvedByUserId },
+          });
           // Only free table if explicitly requested (default: true for backward compatibility)
           if ((order as any).table_id && free_table !== false) {
             db.prepare("UPDATE tables SET status = 'available', updated_at = ? WHERE id = ?")
@@ -603,7 +673,7 @@ router.patch('/:id/convert-to-takeaway', requireRole('owner', 'manager', 'cashie
   }
 });
 
-router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.patch('/:id/discount', requireRole('owner', 'manager', 'cashier', 'waiter'), (req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id) as any;
@@ -631,25 +701,25 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
       return res.status(400).json({ error: 'discount_value must be a non-negative number' });
     }
 
-    // Check if approval is required
+    // Who may discount: an owner/manager outright; anyone else only with a manager/owner
+    // PIN. The `discount_requires_approval` setting forces a PIN from everyone, managers
+    // included. The approver is whoever the PIN belongs to — the client cannot name one.
+    // Removing a discount (value 0) raises the price, so it needs no approval.
+    let discountApprovedBy: string | null = null;
     if (discount_value > 0) {
       const requiresApproval = getSettingValue('discount_requires_approval') === 'true';
-      if (requiresApproval) {
-        const { override_pin } = req.body || {};
-        if (!override_pin) {
-          return res.status(403).json({ error: 'Manager PIN required for discounts', requiresApproval: true });
-        }
-        const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-        const rateLimitKey = `pin:${clientIp}:discount`;
-        if (!checkPinRateLimit(rateLimitKey)) {
-          return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
-        }
-        const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')")
-          .all()
-          .find((u: any) => verifyPin(u.pin_hash, override_pin));
-        if (!user) {
-          return res.status(403).json({ error: 'Invalid manager PIN' });
-        }
+      const authUser = (req as any).user as { userId: string; role: string };
+      try {
+        discountApprovedBy = resolveApprover({
+          user: requiresApproval ? { userId: authUser.userId, role: 'none' } : authUser,
+          permission: 'sales.discount',
+          overridePin: (req.body || {}).override_pin,
+          rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:discount`,
+          action: 'apply a discount',
+        }).userId;
+      } catch (error) {
+        if (approvalFailure(error, res)) return;
+        throw error;
       }
     }
 
@@ -678,8 +748,9 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
         }
       }
     }
+    const moneyExp = currencyExponent(getSettingValue('currency'));
     const tenantInfo = {
-      country: getSettingValue('country') || 'IN',
+      country: getSettingValue('country') || DEFAULT_COUNTRY,
       business_type: getSettingValue('business_type') || 'restaurant',
       state_code: getSettingValue('state_code') || '',
       taxes_enabled: getSettingValue('taxes_enabled') === 'true',
@@ -709,7 +780,7 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
         } else {
           discountAmount = Math.min(discount_value, currentOrder.subtotal);
         }
-        discountAmount = Math.round(discountAmount * 100) / 100;
+        discountAmount = quantiseMoney(discountAmount, moneyExp);
       }
 
       // Always recalculate tax from item-level data (not by scaling the already-discounted
@@ -721,9 +792,9 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
       const allTaxBreakdowns: any[] = [];
       const allTaxSnapshots: (string | null)[] = [];
       for (const item of activeItems) {
-        freshTax += item.tax_amount || 0;
+        freshTax = sumMoney([freshTax, item.tax_amount || 0], moneyExp);
         if (item.tax_type !== 'inclusive') {
-          exclusiveTax += item.tax_amount || 0;
+          exclusiveTax = sumMoney([exclusiveTax, item.tax_amount || 0], moneyExp);
         }
         if (item.tax_breakdown) {
           try {
@@ -737,13 +808,13 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
       let newExclusiveTax = exclusiveTax;
       let taxRatio = 1;
       if (discountAmount > 0 && currentOrder.subtotal > 0) {
-        const discountedSubtotal = Math.max(0, currentOrder.subtotal - discountAmount);
+        const discountedSubtotal = Math.max(0, sumMoney([currentOrder.subtotal, -discountAmount], moneyExp));
         taxRatio = discountedSubtotal / currentOrder.subtotal;
-        newTaxAmount = Math.round(freshTax * taxRatio * 100) / 100;
-        newExclusiveTax = Math.round(exclusiveTax * taxRatio * 100) / 100;
+        newTaxAmount = quantiseMoney(freshTax * taxRatio, moneyExp);
+        newExclusiveTax = quantiseMoney(exclusiveTax * taxRatio, moneyExp);
       }
 
-      const discountedSubtotal = Math.max(0, currentOrder.subtotal - discountAmount);
+      const discountedSubtotal = Math.max(0, sumMoney([currentOrder.subtotal, -discountAmount], moneyExp));
       const chargeTaxes = calculateConfiguredChargeTaxes(tenantInfo, {
         ...currentOrder,
         service_charge: 0,
@@ -756,14 +827,13 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
         itemTaxRatio: taxRatio,
         chargeTaxes,
       });
-      const preRoundTotal = discountedSubtotal + taxRollup.exclusiveTaxAmount
-        + (currentOrder.packaging_charge || 0) + (currentOrder.delivery_charge || 0);
-      const newTotal = Number(preRoundTotal.toFixed(2));
+      const newTotal = sumMoney([discountedSubtotal, taxRollup.exclusiveTaxAmount,
+        currentOrder.packaging_charge || 0, currentOrder.delivery_charge || 0], moneyExp);
       const roundOff = 0;
 
       db.prepare(`
         UPDATE orders SET discount_amount = ?, discount_type = ?, discount_value = ?,
-          discount_reason = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, total = ?, round_off = ?, updated_at = ? WHERE id = ?
+          discount_reason = ?, discount_source = NULL, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, total = ?, round_off = ?, updated_at = ? WHERE id = ?
       `).run(
         discountAmount,
         discount_value > 0 ? discount_type : null,
@@ -778,7 +848,7 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
       if (existingBill) {
         const pack = getActiveCountryPack(tenantInfo.country);
         const { total: billTotal, adjustment: billRoundOff } = applyPayableRounding(newTotal, pack);
-        const newBillBalance = Math.max(0, billTotal - (existingBill.paid_amount || 0));
+        const newBillBalance = Math.max(0, sumMoney([billTotal, -(existingBill.paid_amount || 0)], moneyExp));
         db.prepare(`
           UPDATE bills SET discount_amount = ?, discount_type = ?, discount_value = ?,
             discount_reason = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, total = ?, balance = ?, round_off = ?, updated_at = ?
@@ -792,7 +862,24 @@ router.patch('/:id/discount', requireRole('owner', 'manager'), (req: Request, re
         );
       }
 
+      // A person's discount replaces any automatic offer; removing it lets offers apply again.
+      db.prepare('DELETE FROM order_offers WHERE order_id = ?').run(req.params.id);
+      if (!(discount_value > 0)) refreshOffers(req.params.id as string);
+
       const updatedOrder = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id)) as any;
+      recordAuditEvent({
+        type: 'sale.discount_applied',
+        actor: { userId: (req as any).user?.userId ?? null, role: (req as any).user?.role ?? null },
+        entity: { type: 'order', id: String(req.params.id) },
+        summary: discount_value > 0
+          ? `Discount ${discount_type === 'percentage' ? `${discount_value}%` : discount_value} applied to order ${currentOrder.order_number ?? req.params.id}`
+          : `Discount removed from order ${currentOrder.order_number ?? req.params.id}`,
+        metadata: {
+          order_id: Number(req.params.id), discount_type: discount_value > 0 ? discount_type : null, discount_value,
+          discount_amount: discountAmount, reason: discount_value > 0 ? (discount_reason || null) : null,
+          requested_by: (req as any).user?.userId ?? null, approved_by: discountApprovedBy,
+        },
+      });
       return updatedOrder;
     });
 
@@ -849,7 +936,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
       if (!checkPinRateLimit(rateLimitKey)) {
         return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
       }
-      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND role IN ('owner', 'manager')")
+      const user = db.prepare("SELECT * FROM users WHERE is_active = 1 AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1))")
         .all()
         .find((u: any) => verifyPin(u.pin_hash, override_pin));
       if (!user) {
@@ -901,7 +988,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
     const settings = db.prepare("SELECT * FROM settings WHERE key IN ('country', 'business_type', 'state_code', 'taxes_enabled')").all() as any[];
     const settingsMap = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
     const tenantInfo = {
-      country: settingsMap.country || 'IN',
+      country: settingsMap.country || DEFAULT_COUNTRY,
       business_type: settingsMap.business_type || 'restaurant',
       state_code: settingsMap.state_code || '',
       taxes_enabled: settingsMap.taxes_enabled === 'true',
@@ -999,6 +1086,7 @@ router.patch('/:id/items/:itemId/discount', requireRole('owner', 'manager'), (re
           .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newOrderDiscount, billRoundOff, now(), existingBill.id);
       }
 
+      refreshOffers(req.params.id as string); // a line discount is a person's discount: offers step aside
       return db.prepare('SELECT * FROM order_items WHERE id = ?').get(req.params.itemId) as any;
     });
 

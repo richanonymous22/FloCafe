@@ -1,5 +1,6 @@
 import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
@@ -511,7 +512,10 @@ router.post('/refresh', (req: Request, res: Response) => {
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 
-router.get('/me', (req: Request, res: Response) => {
+// Called on every page load and token refresh, so the ceiling is generous; it only stops a runaway client.
+const meRateLimit = expressRateLimit({ windowMs: 60 * 1000, limit: 600, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Slow down and try again shortly.' } });
+
+router.get('/me', meRateLimit, (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {

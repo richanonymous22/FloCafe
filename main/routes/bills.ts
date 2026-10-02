@@ -1021,7 +1021,7 @@ router.get('/:id/refunds', refundRateLimit, requireRole('owner', 'manager', 'cas
   }
 });
 
-router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+router.post('/:id/applyDiscount', refundRateLimit, requireRole('owner', 'manager'), (req: Request, res: Response) => {
   try {
     const { type, value, reason } = req.body;
 

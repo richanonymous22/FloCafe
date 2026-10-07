@@ -198,6 +198,7 @@ async function run() {
     await waitFor(() => !!db.prepare(`SELECT 1 FROM product_variants WHERE name = 'Large'`).get(), 6000, 'variant created');
     const lv = db.prepare(`SELECT * FROM product_variants WHERE name = 'Large'`).get() as any;
     ok(lv.price === 5 && lv.barcode === 'BGLL' && lv.product_id === 'p-bagel', 'the new option is saved on the server with its price and barcode');
+    await waitFor(() => getBalance('p-bagel', lv.id) === 3, 6000, 'opening stock posted');
     ok(getBalance('p-bagel', lv.id) === 3, 'its opening stock (3) went through the stock ledger');
     await waitFor(() => (O.M().S.products.find((p: any) => p.id === 'p-bagel').variants || []).length === 1, 6000, 'till refreshed its options');
     ok(O.M().S.products.find((p: any) => p.id === 'p-bagel').variants.length === 1, 'the till picked the new option up without a restart');

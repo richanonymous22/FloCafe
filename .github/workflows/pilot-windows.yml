@@ -58,16 +58,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path join | Out-Null
           Set-Content -Path join/expected-sha256.txt -Value $hash
           $setup = $exe.Name
-          Set-Content -Path join/JOIN-INSTALLER.cmd -Encoding ascii -Value @(
+          $q = [char]34
+          $lines = @(
             '@echo off',
             'rem Put pilot-part01 ... pilot-partNN (all downloaded parts) in this folder, then double-click this file.',
-            "copy /b pilot-part* \"$setup\" >nul",
-            "echo Joined: $setup",
+            ('copy /b pilot-part* ' + $q + $setup + $q + ' >nul'),
+            ('echo Joined: ' + $setup),
             'echo Checking the file...',
-            "certutil -hashfile \"$setup\" SHA256",
-            "echo Expected: $hash",
+            ('certutil -hashfile ' + $q + $setup + $q + ' SHA256'),
+            ('echo Expected: ' + $hash),
             'echo The two long hex lines must match. If they do, run the installer.',
             'pause')
+          Set-Content -Path join/JOIN-INSTALLER.cmd -Encoding ascii -Value $lines
 
       - name: Upload the installer (single file)
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0

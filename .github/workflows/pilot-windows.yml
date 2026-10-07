@@ -2,7 +2,7 @@ name: Pilot Windows installer
 
 # Builds an UNSIGNED Windows installer for a trusted tester (no licence enforced, simulated card terminal available,
 # marked PILOT in the till). Nothing is published: the installer is attached to this run as a downloadable artifact.
-# Run it from the Actions tab: Pilot Windows installer -> Run workflow.
+# Run it from the Actions tab: Pilot Windows installer -> Run workflow (or edit this file on the branch to rebuild).
 
 on:
   workflow_dispatch:

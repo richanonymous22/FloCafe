@@ -66,10 +66,14 @@ async function plemmoStart(next) {
     // instead of the login form. If the status check can't be reached (offline,
     // or an older backend without the endpoint), fall back to the login gate so
     // an existing operator can still sign in.
-    try {
-      const st = await PlemmoAPI.setupStatus();
-      if (st && st.needsSetup) { renderPlemmoSetup(st); return; }
-    } catch (e) { /* offline / no setup endpoint → show login */ }
+    // The local server can still be warming up on the very first launch, so try a few times before giving up.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const st = await PlemmoAPI.setupStatus();
+        if (st && st.needsSetup) { renderPlemmoSetup(st); return; }
+        break;
+      } catch (e) { if (attempt < 3) await new Promise(r => setTimeout(r, 600)); }
+    }
     renderPlemmoAuth();
     return;
   }
@@ -180,10 +184,23 @@ function renderPlemmoAuth(msg) {
       <input class="input" type="password" name="password" id="plPass" required autocomplete="current-password" ${lastEmail ? 'autofocus' : ''}></label>
     <p class="pl-err" id="plErr">${msg ? esc(msg) : ''}</p>
     <button class="pl-btn" type="submit" id="plBtn">Sign in</button>
+    <p class="pl-foot"><a href="#" id="plFirstTime">First time on this till? Set it up</a></p>
     <p class="pl-foot" data-brand="foot">${esc(brandFoot())}</p>
   </form>`;
   const form = $('#plForm');
   if (form) form.addEventListener('submit', onPlemmoLoginSubmit);
+  const first = $('#plFirstTime');
+  if (first) first.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    const err = $('#plErr');
+    try {
+      const st = await PlemmoAPI.setupStatus();
+      if (st && st.needsSetup) { renderPlemmoSetup(st); return; }
+      if (err) err.textContent = 'This till already has an owner account, so setup is finished. Sign in with that account. If this is a fresh install, uninstall it and delete its data folder (see the pilot guide), then install again.';
+    } catch (e) {
+      if (err) err.textContent = 'Could not reach the till server yet. Wait a few seconds and try again.';
+    }
+  });
   const f = el.querySelector('[autofocus]'); if (f) f.focus();
 }
 

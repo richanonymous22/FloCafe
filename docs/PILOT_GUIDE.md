@@ -20,7 +20,10 @@ and under Settings → Licence. Never give a pilot version to a paying merchant.
    certificate costs money and is only needed for public release). Click **More info**, then **Run anyway**.
 2. Follow the installer (it can add a desktop shortcut). Start the till.
 3. On first run create the owner account (email and password). Then set up the business in Settings: name, address, VAT
-   number if registered, receipt message. Add a few items (or Items & stock → Items file → import a CSV).
+   number if registered, receipt message.
+   If you see a **sign-in** screen instead, the till already holds an owner account (for example from an earlier
+   install). Click **First time on this till? Set it up** to check. To start from nothing: uninstall, delete the folder
+   `%APPDATA%\Plemmo EPOS` (type that into the File Explorer address bar), then install again. This erases that till's data. Add a few items (or Items & stock → Items file → import a CSV).
 
 ## 3. Try everything (30 to 45 minutes)
 

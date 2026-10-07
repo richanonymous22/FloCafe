@@ -6,6 +6,11 @@ name: Pilot Windows installer
 
 on:
   workflow_dispatch:
+  # Lets the workflow run from this branch before it exists on the default branch (GitHub only lists
+  # dispatch workflows from the default branch). Fires only when this file itself changes.
+  push:
+    branches: [PLEMMO-DELIVERY]
+    paths: ['.github/workflows/pilot-windows.yml']
 
 permissions:
   contents: read

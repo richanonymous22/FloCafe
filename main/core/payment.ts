@@ -78,12 +78,14 @@
  * the rewrite this milestone avoids.
  */
 
+import { DEFAULT_CURRENCY } from './defaults';
 import { getDatabase, getSettingValue, now, withTxn } from '../db';
 import { recordAuditEvent } from './audit';
 import { ulid } from './ids';
 import { recordReturn as recordInventoryReturn } from './inventory';
 import { getOrganizationContext, getLocationContext } from './context';
 import { appendPaymentEventOutbox } from './sync/payment-events';
+import { consumeApprovedAttempt, markAttemptConsumed } from './card-terminal/service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +107,7 @@ export type PaymentState =
   | 'failed';
 
 /** Which capture logic handled a tender. Extend when a real provider adapter is built. */
-export type PaymentAdapterId = 'cash' | 'wallet' | 'manual_card';
+export type PaymentAdapterId = 'cash' | 'wallet' | 'manual_card' | 'card_terminal';
 
 /** A failure the caller can map to a response. Mirrors SaleError in sale.ts. */
 export class PaymentError extends Error {
@@ -239,10 +241,23 @@ export const ManualCardAdapter: PaymentAdapter = {
   },
 };
 
+/**
+ * A card payment the provider itself approved (see core/card-terminal). The approval was checked against the
+ * attempt ledger before this adapter runs, so the metadata it carries is verified, unlike `manual_card`.
+ * It lands on `captured`; `settled` is reserved for the provider's own settlement report.
+ */
+export const CardTerminalAdapter: PaymentAdapter = {
+  id: 'card_terminal',
+  capture(tender) {
+    return { state: 'captured', providerReference: tender.providerReference ?? null, metadata: { verified: true } };
+  },
+};
+
 const ADAPTERS: Record<PaymentAdapterId, PaymentAdapter> = {
   cash: CashAdapter,
   wallet: WalletAdapter,
   manual_card: ManualCardAdapter,
+  card_terminal: CardTerminalAdapter,
 };
 
 export function getPaymentAdapter(id: PaymentAdapterId): PaymentAdapter {
@@ -547,6 +562,8 @@ export interface RefundPaymentInput {
    * docs/MILESTONE_4_INVENTORY.md § Refund integration.
    */
   items?: RefundPaymentItemInput[] | null;
+  /** The card provider's id for a refund it has already made (card_terminal payments). */
+  providerReference?: string | null;
 }
 
 export interface RefundPaymentResult {
@@ -601,9 +618,9 @@ export function refundPayment(input: RefundPaymentInput): RefundPaymentResult {
     const refundOrderUid = (payment as { order_uid?: string | null }).order_uid
       ?? resolveBillOrderUids(db, payment.bill_id, payment.order_id ?? null).orderUid;
     db.prepare(`
-      INSERT INTO refunds (id, payment_id, bill_id, bill_uid, order_uid, amount_minor, currency, reason, state, actor_user_id, requested_at, settled_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?)
-    `).run(refundId, input.paymentId, payment.bill_id, refundBillUid, refundOrderUid, input.amountMinor, payment.currency, input.reason ?? null, input.actorUserId ?? null, changedAt, changedAt, changedAt, changedAt);
+      INSERT INTO refunds (id, payment_id, bill_id, bill_uid, order_uid, amount_minor, currency, reason, state, actor_user_id, requested_at, settled_at, created_at, updated_at, provider_reference)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?, ?, ?)
+    `).run(refundId, input.paymentId, payment.bill_id, refundBillUid, refundOrderUid, input.amountMinor, payment.currency, input.reason ?? null, input.actorUserId ?? null, changedAt, changedAt, changedAt, changedAt, input.providerReference ?? null);
 
     if (input.items && input.items.length > 0) {
       for (const item of input.items) {
@@ -693,6 +710,8 @@ export interface AppliedPaymentLine {
   tipCents?: number | null;
   transactionId?: string | null;
   notes?: string | null;
+  /** A provider-approved card attempt to turn into this payment (core/card-terminal). */
+  cardAttemptId?: string | null;
 }
 
 export interface RecordAppliedPaymentLineInput {
@@ -727,8 +746,12 @@ export interface RecordAppliedPaymentLineInput {
  */
 export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): void {
   const db = getDatabase();
-  const currency = (getSettingValue('currency') || 'INR').toUpperCase();
-  const adapter: PaymentAdapterId = input.line.method === 'cash' ? 'cash'
+  const currency = (getSettingValue('currency') || DEFAULT_CURRENCY).toUpperCase();
+  const attempt = input.line.cardAttemptId
+    ? consumeApprovedAttempt(input.line.cardAttemptId, { billId: input.billId, amountMinor: input.line.amountCents })
+    : null;
+  const adapter: PaymentAdapterId = attempt ? 'card_terminal'
+    : input.line.method === 'cash' ? 'cash'
     : input.line.method === 'wallet' ? 'wallet'
     : 'manual_card';
 
@@ -738,10 +761,12 @@ export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): 
     amountMinor: input.line.amountCents,
     currency,
     tenderedMinor: input.line.tenderedCents ?? undefined,
-    tipMinor: input.line.tipCents ?? 0,
-    providerReference: input.line.transactionId ?? null,
+    tipMinor: attempt ? attempt.tip_minor : (input.line.tipCents ?? 0),
+    providerReference: attempt ? attempt.provider_reference : (input.line.transactionId ?? null),
     notes: input.line.notes ?? null,
-    metadata: input.line.paymentMethodId != null ? { payment_method_id: input.line.paymentMethodId } : null,
+    metadata: attempt
+      ? { card_attempt_id: attempt.id, provider: attempt.provider, simulated: !!attempt.simulated, card_scheme: attempt.card_scheme, card_last4: attempt.card_last4, auth_code: attempt.auth_code }
+      : input.line.paymentMethodId != null ? { payment_method_id: input.line.paymentMethodId } : null,
   };
 
   const result = getPaymentAdapter(adapter).capture(tenderRequest);
@@ -749,6 +774,7 @@ export function recordAppliedPaymentLine(input: RecordAppliedPaymentLineInput): 
     db, billId: input.billId, orderId: input.orderId, tender: tenderRequest, result,
     actorUserId: input.actorUserId,
   });
+  if (attempt) markAttemptConsumed(attempt.id, payment.id);
 
   recordAuditEvent({
     type: 'payment.recorded',

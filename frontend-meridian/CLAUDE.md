@@ -9,9 +9,12 @@ stock, customers/loyalty, team/timesheets, cash drawer, reports, an AI
 assistant, and a self-service kiosk mode. Vanilla JavaScript, no framework,
 no build tooling beyond string concatenation.
 
-**There is no backend.** All state lives in one JS object (`S`) and persists
-to `localStorage` in the browser. See "Known limitations" below before
-assuming any feature is more real than it is.
+**The till server is the source of truth.** Signed in to a till, every price, tax figure, total, stock level,
+refund, report and setting is the server's (`PlemmoAPI` in `src/00-plemmo-api.js` and the `03*-plemmo-*.js`
+adapters); a failed request changes nothing on screen. The local state object `S` is a cache of what the
+server returned, and `localStorage` only keeps this device's own preferences. Anything a screen cannot get
+from the server is hidden or labelled, never faked. The older standalone behaviour described below applies only
+when no server is reachable. The product name and links come from the server (`brand/brand.json`, `GET /api/brand`).
 
 ## Build
 
@@ -100,20 +103,15 @@ outside that hosting environment. If you change `snapshot()`'s shape, check
 both the Claude prompt construction (`buildTurns`) and `localAnswer()` still
 make sense together.
 
-## Known limitations (don't accidentally "fix" these without discussing first)
+## Known limitations
 
-- **No backend / no API.** Everything is client-only, single-device,
-  single-browser persistence via `localStorage`.
-- **No real multi-tenancy.** "New business" just rebuilds `S` from scratch.
-- **Auth is a 4-digit PIN checked in-memory**, no hashing, no sessions.
-- **"Offline mode" is just localStorage** — no sync queue, no conflict
-  resolution, no multi-device story.
-- **IDs are client-generated** (`uid()`), not server-assigned.
-
-These are the exact seams to design around if/when a real backend gets
-plugged in — the views mostly survive as-is; the data layer (`store`, every
-`A.xxx` handler that currently mutates `S` directly) is what would need to
-become async and call an API instead.
+- A till with no server connection falls back to the cached local flow; the connected-only screens (stocktake,
+  suppliers and purchase orders, period reports, options) are not offered then.
+- With no card provider chosen, cards are recorded by staff as approved on their own terminal and the till labels
+  such takings as not confirmed by a card provider. With a provider (Settings, Card payments) the till sends the
+  amount to the terminal and only the provider's answer approves it (`05d-cards.js`, `04-register-kitchen.js`
+  `providerCardFlow`). Only a simulated provider exists so far; see `docs/CARD_PROVIDERS.md`.
+- Auth is the server's: account sign-in plus a per-staff PIN checked on the server.
 
 ## Conventions to keep
 

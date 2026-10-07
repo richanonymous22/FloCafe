@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "meridian-gb-vat",
+  "publisher": "meridian",
+  "version": "1.0.0",
+  "country": "GB",
+  "jurisdiction": "GB",
+  "currency": "GBP",
+  "effectiveFrom": "2011-01-04",
+  "publishedAt": "2026-10-01",
+  "minFloVersion": "2.4.0",
+  "taxPoint": "finalized_at",
+  "inclusivePricingDefault": true,
+  "registrationNumberLabel": "VAT registration number",
+  "categories": [
+    { "id": "standard", "label": "Standard rate (20%)", "ruleIds": ["vat-standard"] },
+    { "id": "reduced", "label": "Reduced rate (5%)", "ruleIds": ["vat-reduced"] },
+    { "id": "zero", "label": "Zero rate (0%)", "ruleIds": ["vat-zero"] },
+    { "id": "exempt", "label": "Exempt", "ruleIds": ["vat-exempt"] },
+    { "id": "unclassified", "label": "Unclassified (no VAT)", "ruleIds": [] }
+  ],
+  "defaultCategories": {
+    "product": "standard",
+    "packaging": "standard",
+    "delivery": "standard",
+    "service_charge": "standard",
+    "addon": "standard"
+  },
+  "unclassifiedCategoryId": "unclassified",
+  "rules": [
+    { "id": "vat-standard", "label": "VAT 20%", "type": "percent", "categoryIds": ["standard"], "rate": "20" },
+    { "id": "vat-reduced", "label": "VAT 5%", "type": "percent", "categoryIds": ["reduced"], "rate": "5" },
+    { "id": "vat-zero", "label": "VAT 0%", "type": "percent", "categoryIds": ["zero"], "rate": "0" },
+    { "id": "vat-exempt", "label": "VAT exempt", "type": "percent", "categoryIds": ["exempt"], "rate": "0" }
+  ],
+  "taxRounding": {
+    "scope": "document",
+    "method": "half_up",
+    "decimalPlaces": 2,
+    "remainderAllocation": "largest_remainder"
+  },
+  "payableRounding": {
+    "increment": "0.01",
+    "method": "half_up"
+  }
+}

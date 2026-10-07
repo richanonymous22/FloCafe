@@ -116,7 +116,13 @@ function initTestDb() {
     }
     throw error;
   }
-  return getDatabase();
+  // Most suites were written against an India-configured store (INR, GST, Asia/Kolkata). A fresh install now
+  // defaults to the UK, so the shared fixture pins the regional settings those suites assume; suites that
+  // exercise the real install defaults call initDatabase() directly instead.
+  const db = getDatabase();
+  const pin = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+  pin.run('IN', 'country'); pin.run('INR', 'currency'); pin.run('₹', 'currency_symbol'); pin.run('Asia/Kolkata', 'timezone');
+  return db;
 }
 
 // ── Express App Factory ──────────────────────────────────────────────────────

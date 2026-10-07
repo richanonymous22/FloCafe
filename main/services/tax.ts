@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import Decimal from 'decimal.js';
 import { getDatabase, getSettingValue } from '../db';
 import { getBundledCountryPack } from '../tax-packs/bundled';
@@ -712,7 +713,7 @@ export async function calculateTaxPreview(req: any, res: any): Promise<void> {
     });
 
     const tenantInfo: TenantInfo = {
-      country: settings.country || 'IN',
+      country: settings.country || DEFAULT_COUNTRY,
       business_type: settings.business_type || 'restaurant',
       state_code: settings.state_code || '',
       taxes_enabled: settings.taxes_enabled === 'true',

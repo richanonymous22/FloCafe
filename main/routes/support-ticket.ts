@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/security';
 import { ALL_ROLES } from '../core/authorization';
 import { cloudSync } from '../services/cloud-sync';
 import { getDatabase } from '../db';
+import { getBrand } from '../brand';
 
 const router = Router();
 
@@ -130,7 +131,7 @@ router.post('/', requireRole(...supportRoles), async (req: Request, res: Respons
     ...queued,
     status: queued.queued ? 'queued' : 'unavailable',
     message: queued.queued
-      ? 'Your request is queued and will be sent when FloCafe is online.'
+      ? 'Your request is queued and will be sent when ' + getBrand().productName + ' is online.'
       : 'Cloud data deletion is in progress; please try again later.',
   });
 });

@@ -5,6 +5,7 @@
  * in minor units. Authorization is server-enforced via requireRole; the
  * frontend's own role checks are UX only.
  */
+import { DEFAULT_CURRENCY } from '../core/defaults';
 import { createHash } from 'crypto';
 import { Router, Request, Response } from 'express';
 import { requireRole } from '../middleware/security';
@@ -19,7 +20,7 @@ import {
 const router = Router();
 
 function currency(): string {
-  return (getSettingValue('currency') || 'INR').toUpperCase();
+  return (getSettingValue('currency') || DEFAULT_CURRENCY).toUpperCase();
 }
 function idem(req: Request, body: unknown): { key: string; requestHash: string; userId: string } | null {
   const key = req.header('Idempotency-Key');

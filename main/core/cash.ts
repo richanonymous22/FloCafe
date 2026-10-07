@@ -286,6 +286,26 @@ export function recordCashSaleForPayment(args: {
   }
 }
 
+/**
+ * Record the drawer impact of a refund paid out in CASH. Mirrors
+ * `recordCashSaleForPayment`: a `refund` movement (signed negative) on the open
+ * session for this location. Returns false when no drawer is open (nothing to
+ * reconcile against) so the caller can say so in its audit record.
+ */
+export function recordCashRefundForPayment(args: {
+  locationId: string | null; amountMinor: number; actorUserId?: string | null; reference?: string | null; reason?: string | null;
+}): boolean {
+  const amount = Math.round(args.amountMinor);
+  if (!(amount > 0)) return false;
+  const session = getOpenCashSession(args.locationId);
+  if (!session) return false;
+  getDatabase().prepare(`
+    INSERT INTO cash_movements (id, session_id, type, amount_minor, currency, reason, reference, actor_user_id, created_at)
+    VALUES (?, ?, 'refund', ?, ?, ?, ?, ?, ?)
+  `).run(ulid(), session.id, -amount, session.currency, args.reason ?? null, args.reference ?? null, args.actorUserId ?? null, now());
+  return true;
+}
+
 // ── Close ───────────────────────────────────────────────────────────────────
 export interface CloseCashSessionInput {
   sessionId: string;

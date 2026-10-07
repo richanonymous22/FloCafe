@@ -1,5 +1,7 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { createHash, randomUUID } from 'crypto';
 import { Router, Request, Response } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import {
   attachEffectiveAddons,
   utcDayBounds,
@@ -25,7 +27,13 @@ import {
 import { applyPayableRounding } from '../services/tax-engine';
 import { sendEvent } from '../services/telemetry';
 import { appendBillSnapshot, appendOrderSnapshot } from '../core/sync/sales-events';
-import { recordAppliedPaymentLine } from '../core/payment';
+import { recordAppliedPaymentLine, PaymentError } from '../core/payment';
+import { refreshOffers } from '../core/offers';
+import { CardError, consumeApprovedAttempt, getAttempt, markRefundConsumed, refundOnProvider } from '../core/card-terminal/service';
+import { ApprovalError, resolveApprover } from '../core/approval';
+import { refundBill, listBillPayments, listRefundableLines } from '../core/refund';
+import { minorUnitExponent, toMinor, fromMinor } from '../core/money';
+import { InventoryError } from '../core/inventory';
 import { recordCashSaleForPayment } from '../core/cash';
 import { getCurrentLocationId } from '../core/location';
 import { buildDigitalReceipt, recordReceiptDelivery } from '../core/receipt-digital';
@@ -175,6 +183,8 @@ router.get('/order/:orderId', requireRole('owner', 'manager', 'cashier'), (req: 
  */
 export function generateBillForOrder(orderId: number | string): { bill: any; isNew: boolean } {
   const db = getDatabase();
+  // Bring any automatic offer up to date before the bill copies the order's totals.
+  withTxn(() => { refreshOffers(orderId); });
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
   if (!order) {
     const error: any = new Error('Order not found');
@@ -196,7 +206,7 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
         const orderPackaging     = order.packaging_charge|| 0;
         const orderTotal         = order.total           || 0;
 
-        const pack = getActiveCountryPack(getSettingValue('country') || 'IN');
+        const pack = getActiveCountryPack(getSettingValue('country') || DEFAULT_COUNTRY);
         const { total: roundedOrderTotal, adjustment: orderRoundOff } = applyPayableRounding(orderTotal, pack);
 
         const totalsChanged =
@@ -247,7 +257,7 @@ export function generateBillForOrder(orderId: number | string): { bill: any; isN
       const discountAmount = order.discount_amount || 0;
       const deliveryCharge = order.delivery_charge || 0;
       const packagingCharge = order.packaging_charge || 0;
-      const pack = getActiveCountryPack(getSettingValue('country') || 'IN');
+      const pack = getActiveCountryPack(getSettingValue('country') || DEFAULT_COUNTRY);
       const { total, adjustment: roundOff } = applyPayableRounding(order.total || 0, pack);
 
       const runResult = db.prepare(`
@@ -384,6 +394,8 @@ interface PaymentInput {
   tip?: number | string | null;
   transaction_id?: string;
   notes?: string;
+  /** A card payment the terminal approved (see core/card-terminal). Only valid with method 'card'. */
+  card_attempt_id?: string;
 }
 
 // A payment request is prepared and fully validated before any ledger or bill
@@ -459,7 +471,37 @@ function validatePaymentFields(payment: PaymentInput, index: number): void {
       throw Object.assign(new Error(`${field} is invalid or too long`), { statusCode: 400 });
     }
   }
+  if (payment.card_attempt_id !== undefined) {
+    if (payment.method !== 'card' || typeof payment.card_attempt_id !== 'string' || payment.card_attempt_id.length < 8 || payment.card_attempt_id.length > 64) {
+      throw Object.assign(new Error(`card_attempt_id is only valid on a card payment (line ${index + 1})`), { statusCode: 400 });
+    }
+  }
   if (payment.amount !== undefined && payment.amount !== null) paymentAmountCents(payment.amount);
+}
+
+/**
+ * A card line that names a terminal attempt takes its amount, tip and reference from that approved attempt,
+ * never from the browser. A line that already used its attempt on this bill stays a replay candidate.
+ */
+function bindCardAttempt(payment: PaymentInput, billId: string): PaymentInput {
+  if (!payment.card_attempt_id) return payment;
+  const attempt = getAttempt(payment.card_attempt_id);
+  const reused = attempt?.state === 'consumed' && attempt.bill_id != null && String(attempt.bill_id) === String(billId);
+  try {
+    if (!reused) consumeApprovedAttempt(payment.card_attempt_id, { billId });
+  } catch (error) {
+    if (error instanceof CardError) throw Object.assign(new Error(error.message), { statusCode: error.statusCode });
+    throw error;
+  }
+  if (!attempt) throw Object.assign(new Error('Unknown card payment'), { statusCode: 400 });
+  const exact = (attempt.amount_minor / 100).toFixed(2);
+  if (payment.amount !== undefined && payment.amount !== null && Math.round(Number(payment.amount) * 100) !== attempt.amount_minor) {
+    throw Object.assign(new Error('The amount does not match what the customer approved on the terminal.'), { statusCode: 409 });
+  }
+  if (payment.tip !== undefined && payment.tip !== null && Math.round(Number(payment.tip) * 100) !== attempt.tip_minor) {
+    throw Object.assign(new Error('The tip does not match what the customer approved on the terminal.'), { statusCode: 409 });
+  }
+  return { ...payment, amount: exact, tip: (attempt.tip_minor / 100).toFixed(2), transaction_id: attempt.provider_reference || payment.transaction_id };
 }
 
 function paymentTransactionKey(payment: unknown): string | null {
@@ -506,7 +548,7 @@ function preparePaymentBatch(
   // has always used for any legacy line that predated that field.
   const existingPayments: any[] = deriveBillPaymentDetails(billId) || [];
   payments.forEach(validatePaymentFields);
-  const resolvedPayments = payments.map((payment, index) => {
+  const resolvedPayments = payments.map((payment) => bindCardAttempt(payment, billId)).map((payment, index) => {
     if (PAYMENT_METHODS.has(payment.method)) return payment;
     const configured = payment.method === 'custom'
       ? db.prepare('SELECT id, name FROM payment_methods WHERE id = ? AND is_active = 1').get(payment.payment_method_id) as any
@@ -591,6 +633,7 @@ function preparePaymentBatch(
       ...(payment.payment_method_id !== undefined ? { payment_method_id: payment.payment_method_id } : {}),
     };
     if (payment.transaction_id !== undefined) normalizedPayment.transaction_id = payment.transaction_id;
+    if (payment.card_attempt_id !== undefined) normalizedPayment.card_attempt_id = payment.card_attempt_id;
     if (payment.notes !== undefined) normalizedPayment.notes = payment.notes;
     if (payment.tip !== undefined && payment.tip !== null) normalizedPayment.tip = payment.tip;
     return {
@@ -733,6 +776,7 @@ function applyPaymentBatch(
         tipCents,
         transactionId: line.payment.transaction_id ?? null,
         notes: line.payment.notes ?? null,
+        cardAttemptId: line.payment.card_attempt_id ?? null,
       },
       actorUserId: idempotencyUserId ?? null,
     });
@@ -843,7 +887,144 @@ router.post('/:id/payments', requireRole('owner', 'manager', 'cashier'), (req: R
   }
 });
 
-router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request, res: Response) => {
+// Refund/held-cart routes are money- or data-changing and reachable from the LAN, so
+// they are rate limited per client IP (private IPs are NOT exempt). The ceiling is far
+// above what a till generates; it exists to stop a runaway or hostile client.
+const refundRateLimit = expressRateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many refund requests. Slow down and try again shortly.' },
+});
+
+// POST /:id/refund — refund all or part of a PAID bill through the authoritative
+// refund service (core/refund.ts → core/payment.ts refundPayment). Nothing on the
+// original sale, bill or payments is rewritten; the refund is an additive record.
+//
+// Authorization: an owner/manager may refund outright. A cashier may only refund
+// with a manager/owner PIN (`override_pin`); the approving user is the one
+// recorded against the refund. Waiters/chefs cannot reach this route.
+//
+// Idempotency: an `Idempotency-Key` makes a retry (dropped response, reconnect)
+// replay the stored result instead of refunding twice. Without a key, a second
+// identical request is still bounded by the unrefunded balance.
+router.post('/:id/refund', refundRateLimit, requireRole('owner', 'manager', 'cashier'), async (req: Request, res: Response) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Refund body must be an object' });
+    }
+    const user = (req as any).user as { userId: string; role: string };
+    const billId = String(req.params.id);
+    const db = getDatabase();
+    const bill = db.prepare('SELECT id, payment_status FROM bills WHERE id = ?').get(billId) as { id: number; payment_status: string } | undefined;
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+
+    const reason = typeof body.reason === 'string' ? body.reason : '';
+    let itemsInput: { orderItemId: number; quantity: number; restock?: boolean }[] | undefined;
+    if (body.items !== undefined && body.items !== null) {
+      if (!Array.isArray(body.items)) return res.status(400).json({ error: 'items must be an array' });
+      itemsInput = body.items.map((i: any) => ({ orderItemId: Number(i?.order_item_id), quantity: Number(i?.quantity), restock: i?.restock !== false }));
+    }
+    let amountMinor: number | undefined;
+    if (body.amount !== undefined && body.amount !== null) {
+      if (typeof body.amount !== 'number' && typeof body.amount !== 'string') return res.status(400).json({ error: 'amount must be a number' });
+      const currency = (getSettingValue('currency') || 'GBP').toUpperCase();
+      try { amountMinor = toMinor(body.amount, minorUnitExponent(currency)); }
+      catch { return res.status(400).json({ error: 'amount must be a valid amount' }); }
+    }
+
+    const idemKey = paymentIdempotencyKey(req);
+    const requestHash = createHash('sha256').update(canonicalizePaymentRequest({
+      billId, amountMinor: amountMinor ?? null, reason: reason.trim(),
+      items: (itemsInput || []).map((i) => [i.orderItemId, i.quantity, i.restock === false ? 0 : 1]),
+      fromItems: body.amount_from_items === true,
+    })).digest('hex');
+
+    if (idemKey) {
+      const prior = db.prepare('SELECT bill_id, request_hash, response_json FROM payment_idempotency WHERE user_id = ? AND idempotency_key = ?')
+        .get(user.userId, idemKey) as { bill_id: string; request_hash: string; response_json: string } | undefined;
+      if (prior) {
+        if (String(prior.bill_id) !== billId || prior.request_hash !== requestHash) {
+          return res.status(409).json({ error: 'Idempotency-Key was already used for a different refund request' });
+        }
+        return res.json({ ...JSON.parse(prior.response_json), idempotentReplay: true });
+      }
+    }
+
+    const approver = resolveApprover({
+      user, permission: 'sales.refund', overridePin: body.override_pin,
+      rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:refund`, action: 'refund a sale',
+    });
+
+    const refundInput = {
+      billId, amountMinor: amountMinor ?? null, reason, items: itemsInput ?? null, amountFromItems: body.amount_from_items === true,
+      approvedByUserId: approver.userId, requestedByUserId: user.userId,
+    };
+    // Card tenders go back through the card provider first. If the provider refuses, nothing is changed here.
+    const providerRefunds: Record<string, string> = {};
+    const preview = refundBill({ ...refundInput, dryRun: true });
+    for (const allocation of preview.allocations || []) {
+      if (allocation.adapter !== 'card_terminal') continue;
+      const made = await refundOnProvider({
+        paymentId: allocation.payment_id, amountMinor: allocation.amount_minor, alreadyRefundedMinor: allocation.already_refunded_minor,
+        currency: allocation.currency, userId: approver.userId,
+      });
+      providerRefunds[allocation.payment_id] = made.refundReference;
+    }
+    const result = withTxn(() => {
+      const refunded = refundBill({ ...refundInput, providerRefunds });
+      for (const r of refunded.refunds) {
+        const ref = providerRefunds[r.payment_id];
+        if (ref) markRefundConsumed(ref, r.id);
+      }
+      if (idemKey) {
+        db.prepare('INSERT INTO payment_idempotency (user_id, idempotency_key, bill_id, request_hash, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(user.userId, idemKey, billId, requestHash, JSON.stringify(refunded), now());
+      }
+      return refunded;
+    });
+    notifyOrderUpdated();
+    res.json(result);
+  } catch (error: any) {
+    if (error instanceof ApprovalError) {
+      return res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
+    }
+    const statusCode = (error instanceof PaymentError || error instanceof InventoryError || error instanceof CardError) && error.statusCode ? error.statusCode : 500;
+    if (statusCode >= 500) console.error('[API] Bill refund failed:', error);
+    res.status(statusCode).json({ error: statusCode >= 500 ? 'Refund failed' : error.message });
+  }
+});
+
+// GET /:id/refunds — the refund history and what is still refundable.
+router.get('/:id/refunds', refundRateLimit, requireRole('owner', 'manager', 'cashier'), (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const bill = db.prepare('SELECT id FROM bills WHERE id = ?').get(req.params.id);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+    const payments = listBillPayments(req.params.id as string);
+    const refunds = db.prepare('SELECT * FROM refunds WHERE bill_id = ? ORDER BY requested_at ASC').all(req.params.id);
+    const live = payments.filter((p) => ['captured', 'settled', 'refunded'].includes(p.state));
+    const exponent = minorUnitExponent(payments[0]?.currency);
+    const refundable = live.reduce((s, p) => s + Math.max(0, p.amount_minor - p.refunded_minor), 0);
+    res.json({
+      refunds, payments,
+      paid_minor: live.reduce((s, p) => s + p.amount_minor, 0),
+      refunded_minor: live.reduce((s, p) => s + p.refunded_minor, 0),
+      refundable_minor: refundable,
+      refundable_amount: fromMinor(refundable, exponent),
+      items: listRefundableLines(req.params.id as string),
+      exponent,
+      currency: payments[0]?.currency ?? (getSettingValue('currency') || 'GBP').toUpperCase(),
+    });
+  } catch (error: any) {
+    console.error('[API] Bill refunds read failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/:id/applyDiscount', refundRateLimit, requireRole('owner', 'manager'), (req: Request, res: Response) => {
   try {
     const { type, value, reason } = req.body;
 
@@ -884,13 +1065,13 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
       const managerId = req.body.manager_id || req.body.user_id;
       let user: any = null;
       if (managerId) {
-        const candidate = db.prepare("SELECT * FROM users WHERE id = ? AND pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").get(managerId) as any;
+        const candidate = db.prepare("SELECT * FROM users WHERE id = ? AND pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1)) AND is_active = 1").get(managerId) as any;
         if (candidate && verifyPin(candidate.pin_hash, override_pin)) {
           user = candidate;
         }
       }
       if (!user) {
-        const managers = db.prepare("SELECT * FROM users WHERE pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").all() as any[];
+        const managers = db.prepare("SELECT * FROM users WHERE pin_hash IS NOT NULL AND (role IN ('owner', 'manager') OR (role = 'cashier' AND is_supervisor = 1)) AND is_active = 1").all() as any[];
         for (const u of managers) {
           if (verifyPin(u.pin_hash, override_pin)) {
             user = u;
@@ -961,7 +1142,7 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
     const newTaxAmount = Math.round(itemTaxAmount * taxRatio * 100) / 100;
     const newExclusiveTax = Math.round(itemExclusiveTax * taxRatio * 100) / 100;
     const tenantInfo = {
-      country: getSettingValue('country') || 'IN',
+      country: getSettingValue('country') || DEFAULT_COUNTRY,
       business_type: getSettingValue('business_type') || 'restaurant',
       state_code: getSettingValue('state_code') || '',
       taxes_enabled: getSettingValue('taxes_enabled') === 'true',
@@ -1007,7 +1188,7 @@ router.post('/:id/applyDiscount', requireRole('owner', 'manager'), (req: Request
       // settlement boundary) holds the pack-rounded payable total (#170).
       db.prepare(`
         UPDATE orders SET discount_amount = ?, discount_type = ?, discount_value = ?,
-          discount_reason = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?,
+          discount_reason = ?, discount_source = NULL, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?,
           total = ?, round_off = ?, updated_at = ?
         WHERE id = ?
       `).run(

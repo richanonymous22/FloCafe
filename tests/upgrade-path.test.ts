@@ -292,13 +292,13 @@ function main() {
   console.log('   ✓ old installs receive every Phase 1 tax table and guarded additive column');
   assert.equal(
     (db.prepare('SELECT COUNT(*) AS count FROM country_packs').get() as { count: number }).count,
-    1,
-    'old installs register only the generic tax pack during upgrade',
+    2,
+    'old installs register exactly the bundled packs during upgrade (generic + UK VAT)',
   );
   assert.equal(
     (db.prepare('SELECT COUNT(*) AS count FROM country_pack_versions').get() as { count: number }).count,
-    1,
-    'old installs register only the generic tax pack version during upgrade',
+    2,
+    'old installs register exactly the bundled pack versions during upgrade (generic + UK VAT)',
   );
   console.log('   ✓ old installs receive generic tax behavior without replacing legacy tax data');
 

@@ -21,15 +21,18 @@
  * `needs_verification` (still not an instant lockout — the merchant is warned,
  * not stranded mid-service). A `revoked` license is never granted grace.
  *
- * Cryptographic signature verification of the license payload is stubbed
- * behind `LicenseVerifier` — the real server-issued signature check is an
- * external dependency (the cloud license service, not yet deployed); the local
- * cache + effective-status logic here are complete and testable.
+ * Cryptographic signature verification of the license payload IS implemented
+ * (see `createCloudLicenseVerifier` + `licensing-signature.ts`, B2): when a
+ * public key is pinned into the build, a tampered or unsigned payload is
+ * rejected. What remains an external dependency is the cloud license *service*
+ * that issues and signs those payloads (not yet deployed). The local cache,
+ * effective-status logic and signature check here are complete and tested
+ * (plemmo-license-signature.test.ts + plemmo-license-lifecycle.test.ts).
  */
 
 import { getDatabase, getSettingValue, now } from '../db';
 import { isEnabled } from './features';
-import { getLicensePublicKey, verifyLicenseSignature } from './licensing-signature';
+import { licenseSignatureEnforced, verifyPinnedLicense } from './licensing-signature';
 
 const LICENSE_KEY = 'plemmo_license';
 
@@ -49,12 +52,13 @@ export interface License {
   features: string[];             // entitlement keys this license grants
   last_verified_at: string | null;
   signature: string | null;       // server-issued; verified by LicenseVerifier (external)
+  key_id?: string | null;         // which pinned public key signed it (key rotation)
 }
 
 const UNLICENSED: License = {
   status: 'unlicensed', plan: 'none', organization_uid: null, issued_at: null, activated_at: null,
   expires_at: null, grace_days: 0, device_limit: 0, location_limit: 0, features: [],
-  last_verified_at: null, signature: null,
+  last_verified_at: null, signature: null, key_id: null,
 };
 
 function parseIso(s: string | null): number | null {
@@ -63,11 +67,47 @@ function parseIso(s: string | null): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** The locally cached license (offline-usable). Returns an `unlicensed` sentinel when none is stored. */
+/** True when a licence has ever been stored on this device (even one that no longer verifies). */
+export function hasStoredLicense(): boolean {
+  return !!getSettingValue(LICENSE_KEY);
+}
+
+/**
+ * The locally cached license (offline-usable). Returns an `unlicensed` sentinel when none is stored — or when
+ * this build pins licence-signing keys and the cached licence no longer verifies (someone edited the stored
+ * copy). A cached licence is exactly what the cloud signed plus `last_verified_at`, which is not signed.
+ */
 export function getLicense(): License {
   const raw = getSettingValue(LICENSE_KEY);
   if (!raw) return { ...UNLICENSED };
-  try { return { ...UNLICENSED, ...(JSON.parse(raw) as Partial<License>) }; } catch { return { ...UNLICENSED }; }
+  try {
+    const license = { ...UNLICENSED, ...(JSON.parse(raw) as Partial<License>) };
+    if (licenseSignatureEnforced() && license.status !== 'unlicensed' && !verifyPinnedLicense(license, license.signature, license.key_id)) {
+      return { ...UNLICENSED };
+    }
+    return license;
+  } catch { return { ...UNLICENSED }; }
+}
+
+const CLOCK_KEY = 'license_clock_high_water';
+
+/**
+ * "Now" for licence decisions: never earlier than the latest time this device has seen, so winding the
+ * system clock back cannot extend an expiry or an offline grace period. (`touchLicenseClock` records it.)
+ */
+export function trustedNow(): number {
+  const seen = Date.parse(getSettingValue(CLOCK_KEY) || '');
+  return Number.isFinite(seen) ? Math.max(Date.now(), seen) : Date.now();
+}
+
+/** Remember the current time as the high-water mark (at most one write a minute). */
+export function touchLicenseClock(): void {
+  const t = Date.now();
+  const seen = Date.parse(getSettingValue(CLOCK_KEY) || '');
+  if (Number.isFinite(seen) && t - seen < 60_000) return;
+  if (Number.isFinite(seen) && t < seen) return; // the clock went backwards: keep the later mark
+  getDatabase().prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(CLOCK_KEY, new Date(t).toISOString(), now());
 }
 
 /** Persists the cached license (from activation or a server verification refresh). */
@@ -92,7 +132,7 @@ export function clearLicense(): void {
  *     'needs_verification' (still effective, but the merchant should reconnect).
  *   - otherwise: 'expired'.
  */
-export function effectiveStatus(license: License = getLicense(), atMs: number = Date.now()): EffectiveStatus {
+export function effectiveStatus(license: License = getLicense(), atMs: number = trustedNow()): EffectiveStatus {
   if (license.status === 'revoked') return 'revoked';
   if (license.status === 'suspended') return 'suspended';
   if (license.status === 'unlicensed') return 'unlicensed';
@@ -109,13 +149,13 @@ export function effectiveStatus(license: License = getLicense(), atMs: number = 
 }
 
 /** True when the license is effective enough to operate (active / grace / needs_verification). */
-export function isLicensed(license: License = getLicense(), atMs: number = Date.now()): boolean {
+export function isLicensed(license: License = getLicense(), atMs: number = trustedNow()): boolean {
   const s = effectiveStatus(license, atMs);
   return s === 'active' || s === 'grace' || s === 'needs_verification';
 }
 
 /** Whether a still-valid-but-unverified license is running on offline grace. */
-export function withinOfflineGrace(license: License = getLicense(), atMs: number = Date.now()): boolean {
+export function withinOfflineGrace(license: License = getLicense(), atMs: number = trustedNow()): boolean {
   const s = effectiveStatus(license, atMs);
   return s === 'grace' || s === 'needs_verification';
 }
@@ -126,7 +166,7 @@ export function withinOfflineGrace(license: License = getLicense(), atMs: number
  * enables it (the two layers compose). `organizationId` defaults to the
  * license's org.
  */
-export function isFeatureLicensed(featureKey: string, organizationId?: string, atMs: number = Date.now()): boolean {
+export function isFeatureLicensed(featureKey: string, organizationId?: string, atMs: number = trustedNow()): boolean {
   const license = getLicense();
   if (!isLicensed(license, atMs)) return false;
   if (license.features.length > 0 && !license.features.includes(featureKey)) return false;
@@ -222,14 +262,13 @@ export function createCloudLicenseVerifier(pullLicense: () => Promise<Record<str
         location_limit: raw.location_limit == null ? null : Number(raw.location_limit),
         features: Array.isArray(raw.features) ? (raw.features as string[]) : [],
         signature: (raw.signature as string) ?? null,
+        key_id: (raw.key_id as string) ?? null,
       };
-      // B2: when a public key is pinned (managed/commercial build), the payload
-      // must carry a valid signature over its authenticated fields. A tampered
-      // or unsigned payload is rejected by throwing, so `refreshLicense` keeps
-      // the cached entitlement (offline grace) instead of adopting it. With no
-      // key configured (dev/tests), verification is skipped.
-      const publicKey = getLicensePublicKey();
-      if (publicKey && !verifyLicenseSignature(publicKey, license, license.signature)) {
+      // B2: when licence-signing keys are pinned (managed/commercial build), the payload must carry a valid
+      // signature from one of them (by key id, so keys can be rotated). A tampered, unsigned or unknown-key
+      // payload is rejected by throwing, so `refreshLicense` keeps the cached entitlement (offline grace)
+      // instead of adopting it. With no key pinned (dev/tests), verification is skipped.
+      if (licenseSignatureEnforced() && !verifyPinnedLicense(license, license.signature, license.key_id)) {
         throw new LicenseSignatureError();
       }
       return license;

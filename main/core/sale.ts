@@ -53,6 +53,7 @@
  * in the extraction notes.
  */
 
+import { DEFAULT_COUNTRY } from './defaults';
 import {
   getDatabase,
   generateOrderNumber,
@@ -62,6 +63,7 @@ import {
   withTxn,
   insertOrderItemAddons,
   attachEffectiveAddons,
+  getSettingValue,
 } from '../db';
 import {
   calculateConfiguredChargeTaxes,
@@ -73,11 +75,14 @@ import {
 import { applyPayableRounding } from '../services/tax-engine';
 import { validateOrderNotes, validateItemNotes } from './notes-validation';
 import { recordAuditEvent } from './audit';
+import { fromMinor, minorUnitExponent, toMinor } from './money';
+import { currencyExponent, sumMoney } from './money-integrity';
 import { ulid } from './ids';
 import { runOnSaleOpened } from './hooks';
 import { getBalance as getInventoryBalance, recordSale as recordInventorySale } from './inventory';
 import { getOrganizationContext, getLocationContext, getRegisterContext, getDeviceContext } from './context';
 import { appendOrderSnapshot, appendOrderItemSnapshot, appendBillSnapshot } from './sync/sales-events';
+import { refreshOffers } from './offers';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,6 +124,15 @@ export interface SaleLineInput {
    * `variant_selection`, the pre-existing free-form JSON column.
    */
   variant_id?: string | null;
+  /**
+   * Sell this line at a price other than the catalogue price. Honoured ONLY when
+   * the caller also supplies `priceOverrideApprovedBy` (set by the route after
+   * it has checked the `sales.price_override` permission or a manager PIN);
+   * without that the line is rejected, so a client cannot price its own sale.
+   * The catalogue price and the master product price are never modified — the
+   * original is kept on the line (`original_unit_price`).
+   */
+  price_override?: { unit_price: number | string; reason: string } | null;
 }
 
 /**
@@ -149,6 +163,8 @@ export interface CreateSaleInput {
   packagingCharge?: number | null;
   deliveryCharge?: number | null;
   idempotency?: SaleIdempotency | null;
+  /** The user who approved any `price_override` on these lines. Route-derived, never client-supplied. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 /** The persisted sale header. Mirrors the `orders` row. */
@@ -325,7 +341,7 @@ function readTenantContext(db: ReturnType<typeof getDatabase>): TenantContext {
   (db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[])
     .forEach((row) => { settings[row.key] = row.value; });
   return {
-    country: settings.country || 'IN',
+    country: settings.country || DEFAULT_COUNTRY,
     business_type: settings.business_type || 'restaurant',
     state_code: settings.state_code || '',
     taxes_enabled: settings.taxes_enabled === 'true',
@@ -342,6 +358,8 @@ interface PersistLineContext {
   customer: any;
   /** The authenticated cashier, threaded through for inventory movement attribution (Milestone 4). */
   actorUserId?: string | null;
+  /** Approver for `line.price_override`; see SaleLineInput.price_override. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 /** What `persistSaleLine` reports back, so both callers can aggregate however they need to. */
@@ -418,7 +436,33 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
 
   // Price always comes from the catalogue, never from the request — the
   // catalogue is now "the variant if one was named, else the product".
-  const unitPrice = parseFloat(variant ? variant.price : product.price);
+  const cataloguePrice = parseFloat(variant ? variant.price : product.price);
+  let unitPrice = cataloguePrice;
+  let override: { originalUnitPrice: number; reason: string; approvedBy: string } | null = null;
+  if (line.price_override !== undefined && line.price_override !== null) {
+    if (!ctx.priceOverrideApprovedBy) {
+      throw new SaleError('A price override requires manager approval', 403);
+    }
+    const o = line.price_override;
+    if (typeof o !== 'object' || (typeof o.unit_price !== 'number' && typeof o.unit_price !== 'string')) {
+      throw new SaleError(`Invalid price override for ${product.name}`, 400);
+    }
+    const reason = typeof o.reason === 'string' ? o.reason.trim() : '';
+    if (!reason) throw new SaleError('A price override needs a reason', 400);
+    if (reason.length > 200) throw new SaleError('Price override reason must be 200 characters or fewer', 400);
+    const exponent = minorUnitExponent((getSettingValue('currency') || 'GBP').toUpperCase());
+    let overrideMinor: number;
+    try { overrideMinor = toMinor(o.unit_price, exponent); } catch { throw new SaleError(`Invalid price override for ${product.name}`, 400); }
+    if (!Number.isSafeInteger(overrideMinor) || overrideMinor < 0 || overrideMinor > 100_000_000_00) {
+      throw new SaleError(`Price override for ${product.name} must be between 0 and 100,000,000`, 400);
+    }
+    const overridePrice = fromMinor(overrideMinor, exponent);
+    // Overriding to the catalogue price changes nothing, so nothing is recorded.
+    if (overridePrice !== cataloguePrice) {
+      unitPrice = overridePrice;
+      override = { originalUnitPrice: cataloguePrice, reason, approvedBy: ctx.priceOverrideApprovedBy };
+    }
+  }
   const unitCost = parseFloat((variant ? variant.cost : product.cost) ?? 0) || 0;
   const lineSku = variant ? (variant.sku || product.sku) : product.sku;
   const quantity = line.quantity;
@@ -458,17 +502,32 @@ function persistSaleLine(ctx: PersistLineContext, line: SaleLineInput): Persiste
   const insertItemResult = db.prepare(`
     INSERT INTO order_items (order_id, uid, product_id, product_name, product_sku, unit_price, quantity,
       subtotal, tax_amount, tax_breakdown, tax_snapshot, tax_type, discount_amount, total, variant_selection,
-      modifier_selection, special_instructions, status, created_at, updated_at, product_variant_id, unit_cost)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+      modifier_selection, special_instructions, status, created_at, updated_at, product_variant_id, unit_cost,
+      original_unit_price, price_override_reason, price_override_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    orderId, lineUid, product.id, product.name, lineSku, unitPrice, quantity,
+    orderId, lineUid, product.id, variant && variant.name ? `${product.name} — ${variant.name}` : product.name, lineSku, unitPrice, quantity,
     itemSubtotal, taxResult.tax_amount, JSON.stringify(taxResult.tax_breakdown), itemTaxSnapshotJson,
     taxResult.tax_type, itemDiscount, itemTotal,
     JSON.stringify(line.variant_selection || null),
     JSON.stringify(line.modifier_selection || null),
     line.special_instructions || null, itemCreatedAt, itemCreatedAt,
     variant ? variant.id : null, unitCost,
+    override ? override.originalUnitPrice : null, override ? override.reason : null, override ? override.approvedBy : null,
   );
+  if (override) {
+    recordAuditEvent({
+      type: 'sale.price_overridden',
+      actor: { userId: ctx.actorUserId ?? null },
+      entity: { type: 'order_item', id: String(insertItemResult.lastInsertRowid) },
+      summary: `${product.name} sold at ${unitPrice} instead of ${override.originalUnitPrice}: ${override.reason}`,
+      metadata: {
+        order_id: Number(orderId), product_id: product.id, quantity,
+        original_unit_price: override.originalUnitPrice, unit_price: unitPrice,
+        reason: override.reason, requested_by: ctx.actorUserId ?? null, approved_by: override.approvedBy,
+      },
+    });
+  }
   insertOrderItemAddons(db, insertItemResult.lastInsertRowid, line.addons, itemCreatedAt);
 
   if (product.track_inventory) {
@@ -592,6 +651,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     );
     const orderId = orderResult.lastInsertRowid;
 
+    const moneyExp = currencyExponent(getSettingValue('currency'));
     let subtotal = 0;
     let totalTax = 0;
     let exclusiveTax = 0;
@@ -606,16 +666,16 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
     // sale has nothing to aggregate but the lines just inserted, so summing
     // as we go is correct and matches the original inline behaviour exactly.
     for (const line of input.lines) {
-      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId }, line);
-      totalTax += persisted.taxAmount;
+      const persisted = persistSaleLine({ db, orderId, tenantInfo, customer, actorUserId: input.cashierUserId, priceOverrideApprovedBy: input.priceOverrideApprovedBy }, line);
+      totalTax = sumMoney([totalTax, persisted.taxAmount], moneyExp);
       if (persisted.taxType !== 'inclusive') {
-        exclusiveTax += persisted.taxAmount;
+        exclusiveTax = sumMoney([exclusiveTax, persisted.taxAmount], moneyExp);
       }
       if (persisted.taxBreakdown) {
         allTaxBreakdowns.push(persisted.taxBreakdown);
       }
       allTaxSnapshots.push(persisted.taxSnapshotJson);
-      subtotal += persisted.subtotal;
+      subtotal = sumMoney([subtotal, persisted.subtotal], moneyExp);
     }
 
     const chargeTaxes = calculateConfiguredChargeTaxes(tenantInfo, chargeContext, customer);
@@ -627,8 +687,7 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       itemTaxRatio: 1,
       chargeTaxes,
     });
-    const preRoundTotal = subtotal + taxRollup.exclusiveTaxAmount + deliveryCharge + packagingCharge;
-    const total = Number(preRoundTotal.toFixed(2));
+    const total = sumMoney([subtotal, taxRollup.exclusiveTaxAmount, deliveryCharge, packagingCharge], moneyExp);
     // Payable rounding is applied at bill generation, not here — an order total
     // and its bill total can legitimately differ by that adjustment (B5).
     const roundOff = 0;
@@ -640,6 +699,8 @@ export function createSale(input: CreateSaleInput): CreateSaleResult {
       subtotal, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns),
       taxRollup.snapshotJson, total, roundOff, now(), orderId,
     );
+    // Automatic offers (a no-op when none apply): the sale's discount, tax and total follow from them.
+    refreshOffers(Number(orderId));
 
     // Sale creation itself has no hospitality-specific branch anymore: this
     // used to be a direct `UPDATE tables ...` here. It now goes through the
@@ -712,6 +773,8 @@ export interface AddSaleItemsInput {
   /** For audit attribution only — see the note above `recordAuditEvent` below. Not used for authorization. */
   actorUserId?: string | null;
   idempotency?: SaleIdempotency | null;
+  /** The user who approved any `price_override` on these lines. Route-derived, never client-supplied. */
+  priceOverrideApprovedBy?: string | null;
 }
 
 export interface AddSaleItemsResult {
@@ -822,23 +885,24 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
 
     // Shared line engine — see the module docstring and persistSaleLine above.
     for (const line of input.lines) {
-      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer, actorUserId: input.actorUserId }, line);
+      persistSaleLine({ db, orderId: input.saleId, tenantInfo, customer, actorUserId: input.actorUserId, priceOverrideApprovedBy: input.priceOverrideApprovedBy }, line);
     }
 
     // Re-derive totals from every ACTIVE line on the sale, not just the ones
     // just inserted — the sale may already have items, and some may have
     // been cancelled since. (Inherited as "BUG #3 FIX".)
     const activeItems = db.prepare("SELECT * FROM order_items WHERE order_id = ? AND status != 'cancelled'").all(input.saleId) as any[];
+    const moneyExp = currencyExponent(getSettingValue('currency'));
     let subtotal = 0;
     let totalTax = 0;
     let exclusiveTax = 0;
     const allTaxBreakdowns: any[] = [];
     const allTaxSnapshots: (string | null)[] = [];
     for (const item of activeItems) {
-      subtotal += item.subtotal;
-      totalTax += item.tax_amount;
+      subtotal = sumMoney([subtotal, item.subtotal], moneyExp);
+      totalTax = sumMoney([totalTax, item.tax_amount], moneyExp);
       if (item.tax_type !== 'inclusive') {
-        exclusiveTax += item.tax_amount;
+        exclusiveTax = sumMoney([exclusiveTax, item.tax_amount], moneyExp);
       }
       if (item.tax_breakdown) {
         try {
@@ -861,7 +925,7 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
       // amount type: keep the same value
     }
 
-    const discountedSubtotal = Math.max(0, subtotal - newDiscountAmount);
+    const discountedSubtotal = Math.max(0, sumMoney([subtotal, -newDiscountAmount], moneyExp));
     let newTaxAmount = totalTax;
     let newExclusiveTax = exclusiveTax;
     let taxRatio = 1;
@@ -883,9 +947,8 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
       itemTaxRatio: taxRatio,
       chargeTaxes,
     });
-    const preRoundTotal = discountedSubtotal + taxRollup.exclusiveTaxAmount
-      + (currentOrder.delivery_charge || 0) + (currentOrder.packaging_charge || 0);
-    const total = Number(preRoundTotal.toFixed(2));
+    const total = sumMoney([discountedSubtotal, taxRollup.exclusiveTaxAmount,
+      currentOrder.delivery_charge || 0, currentOrder.packaging_charge || 0], moneyExp);
     const roundOff = 0;
 
     if (input.specialInstructions !== undefined) {
@@ -904,10 +967,13 @@ export function addSaleItems(input: AddSaleItemsInput): AddSaleItemsResult {
     if (existingBill) {
       const pack = getActiveCountryPack(tenantInfo.country);
       const { total: billTotal, adjustment: billRoundOff } = applyPayableRounding(total, pack);
-      const newBillBalance = Math.max(0, billTotal - (existingBill.paid_amount || 0));
+      const newBillBalance = Math.max(0, sumMoney([billTotal, -(existingBill.paid_amount || 0)], moneyExp));
       db.prepare(`UPDATE bills SET total = ?, balance = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, round_off = ?, updated_at = ? WHERE id = ?`)
         .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
     }
+
+    // The lines changed: bring any automatic offer up to date (a person's discount, if present, is left alone).
+    refreshOffers(input.saleId);
 
     const sale = parseRowJson(db.prepare('SELECT * FROM orders WHERE id = ?').get(input.saleId)) as SaleRecord;
     const lines = attachEffectiveAddons(

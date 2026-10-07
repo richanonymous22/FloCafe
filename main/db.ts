@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY_SYMBOL, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from './core/defaults';
 import Database from 'better-sqlite3';
 import type { Request, Response, NextFunction } from 'express';
 import * as path from 'path';
@@ -9,6 +10,8 @@ import * as crypto from 'crypto';
 import { BUNDLED_COUNTRY_PACKS, bundledPackVersionId } from './tax-packs/bundled';
 import { ulid } from './core/ids';
 import { fromMinor, minorUnitExponent } from './core/money';
+import { dropMoneyGuards, installMoneyGuards, repairMoneyColumns, scanMoneyIntegrity } from './core/money-integrity';
+import { getBrand } from './brand';
 
 let db: Database.Database;
 let dbHealthError: string | null = null;
@@ -73,6 +76,7 @@ const DATABASE_MAINTENANCE_ROUTES = new Set([
   'POST /api/db/backup',
   'GET /api/db/download',
   'POST /api/db-tools/initialize',
+  'POST /api/updates/install', // takes the pre-update backup under the same lock
 ]);
 
 function isDatabaseMaintenanceRoute(req: Request): boolean {
@@ -137,7 +141,12 @@ export function withDatabaseMaintenanceLock<T>(operation: () => T | Promise<T>):
   }).finally(release);
 }
 
-const DEFAULT_CLOUD_SERVER_URL = 'https://blue.flopos.com/';
+// PLEMMO FORK: no hard-coded FloPOS default (was blue.flopos.com). Sourced from
+// the build-time PLEMMO_CLOUD_SERVER_URL env var, else empty ("" = no cloud
+// configured). Mirrors services/cloud-sync.ts. Cloud coordination is opt-in and
+// off by default, so an empty value keeps a fresh install fully offline-only and
+// guarantees no production build contacts FloPOS infrastructure.
+const DEFAULT_CLOUD_SERVER_URL = (process.env.PLEMMO_CLOUD_SERVER_URL || '').trim();
 
 function randomSecret(): string {
   return crypto.randomBytes(32).toString('base64')
@@ -459,6 +468,12 @@ export function initDatabase(recoverInterruptedReplacement = true): void {
 
   db.pragma('foreign_keys = ON');
 
+  // Re-assert the money guards every start: a later table rebuild or a new money
+  // column must never leave a writer unguarded. (MERIDIAN_MONEY_GUARDS=off exists
+  // only so the test suite can discover writers that store unquantised values.)
+  if (process.env.MERIDIAN_MONEY_GUARDS === 'off') dropMoneyGuards(db);
+  else installMoneyGuards(db);
+
   runStartupIntegrityCheck();
   repairSequences();
   autoRepairPaymentDetails();
@@ -736,6 +751,16 @@ export function getDatabase(): Database.Database {
 
 export function closeDatabase(): void {
   if (db) {
+    if (process.env.MERIDIAN_MONEY_SCAN === '1') {
+      // Strict mode for CI: any unquantised money left behind is a writer bug.
+      const bad = scanMoneyIntegrity(db, 10);
+      if (bad.length) {
+        console.error('[DB] MONEY INTEGRITY VIOLATIONS:', JSON.stringify(bad));
+        db.close();
+        db = null as unknown as Database.Database;
+        throw new Error(`Money integrity: ${bad.length}+ unquantised value(s), e.g. ${bad[0].table}.${bad[0].column}=${bad[0].value}`);
+      }
+    }
     db.close();
     db = null as unknown as Database.Database;
     console.log('[DB] Database closed');
@@ -1981,6 +2006,117 @@ export function buildIdealSchemaDb(): Database.Database {
 // Each entry runs exactly once, in order, wrapped in a transaction.
 // To add a schema change: append a new entry. Never edit existing entries.
 
+/**
+ * Register every bundled country tax pack (idempotent: INSERT OR IGNORE / ON CONFLICT, and an
+ * already-active version is never replaced). Used by the original v38 migration and again by
+ * v99 so a pack added to the bundle later (e.g. the UK VAT pack) reaches upgraded databases too.
+ */
+function seedBundledCountryPacks(): void {
+  const insertPack = db.prepare(`
+    INSERT INTO country_packs (
+      id, publisher, country, jurisdiction, active_version_id, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      publisher = excluded.publisher,
+      country = excluded.country,
+      jurisdiction = excluded.jurisdiction,
+      active_version_id = COALESCE(country_packs.active_version_id, excluded.active_version_id),
+      updated_at = excluded.updated_at
+  `);
+  const insertVersion = db.prepare(`
+    INSERT OR IGNORE INTO country_pack_versions (
+      id, pack_id, version, schema_version, manifest_json, pack_json, digest, signature,
+      effective_from, effective_to, min_flo_version, published_at, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'active', ?)
+  `);
+  const insertCategory = db.prepare(`
+    INSERT OR IGNORE INTO tax_categories (
+      id, pack_version_id, category_id, label, default_behavior, definition_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertRule = db.prepare(`
+    INSERT OR IGNORE INTO tax_rules (
+      id, pack_version_id, rule_id, label, calculation_type, rate, amount,
+      applies_per, base_rule_ids, definition_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const pack of BUNDLED_COUNTRY_PACKS) {
+    const versionId = bundledPackVersionId(pack);
+    const packJson = JSON.stringify(pack);
+    const installedAt = now();
+    const alreadyInstalled = db.prepare(
+      'SELECT 1 FROM country_pack_versions WHERE id = ?'
+    ).get(versionId);
+
+    insertPack.run(
+      pack.id, pack.publisher, pack.country, pack.jurisdiction,
+      versionId, installedAt, installedAt,
+    );
+    insertVersion.run(
+      versionId,
+      pack.id,
+      pack.version,
+      pack.schemaVersion,
+      JSON.stringify({
+        id: pack.id,
+        publisher: pack.publisher,
+        country: pack.country,
+        jurisdiction: pack.jurisdiction,
+        version: pack.version,
+        publishedAt: pack.publishedAt,
+      }),
+      packJson,
+      sha256Hex(packJson),
+      pack.effectiveFrom,
+      pack.effectiveTo || null,
+      pack.minFloVersion,
+      pack.publishedAt,
+      installedAt,
+    );
+
+    for (const category of pack.categories) {
+      insertCategory.run(
+        `${versionId}:category:${category.id}`,
+        versionId,
+        category.id,
+        category.label,
+        category.defaultBehavior || null,
+        JSON.stringify(category),
+        installedAt,
+      );
+    }
+    for (const rule of pack.rules) {
+      insertRule.run(
+        `${versionId}:rule:${rule.id}`,
+        versionId,
+        rule.id,
+        rule.label,
+        rule.type,
+        rule.rate || null,
+        rule.amount || null,
+        rule.appliesPer || null,
+        JSON.stringify(rule.baseRuleIds || []),
+        JSON.stringify(rule),
+        installedAt,
+      );
+    }
+
+    if (!alreadyInstalled) {
+      db.prepare(`
+        INSERT INTO tax_config_audit (
+          action, pack_id, pack_version_id, details_json, created_at
+        ) VALUES ('install_bundled_pack', ?, ?, ?, ?)
+      `).run(
+        pack.id,
+        versionId,
+        JSON.stringify({ source: 'application_bundle', version: pack.version }),
+        installedAt,
+      );
+    }
+  }
+}
+
 export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
   {
     version: 1,
@@ -2677,109 +2813,7 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
     name: 'register_bundled_tax_pack_versions',
     up: () => {
       createTaxPackSchema();
-      const insertPack = db.prepare(`
-        INSERT INTO country_packs (
-          id, publisher, country, jurisdiction, active_version_id, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          publisher = excluded.publisher,
-          country = excluded.country,
-          jurisdiction = excluded.jurisdiction,
-          active_version_id = COALESCE(country_packs.active_version_id, excluded.active_version_id),
-          updated_at = excluded.updated_at
-      `);
-      const insertVersion = db.prepare(`
-        INSERT OR IGNORE INTO country_pack_versions (
-          id, pack_id, version, schema_version, manifest_json, pack_json, digest, signature,
-          effective_from, effective_to, min_flo_version, published_at, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'active', ?)
-      `);
-      const insertCategory = db.prepare(`
-        INSERT OR IGNORE INTO tax_categories (
-          id, pack_version_id, category_id, label, default_behavior, definition_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      const insertRule = db.prepare(`
-        INSERT OR IGNORE INTO tax_rules (
-          id, pack_version_id, rule_id, label, calculation_type, rate, amount,
-          applies_per, base_rule_ids, definition_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (const pack of BUNDLED_COUNTRY_PACKS) {
-        const versionId = bundledPackVersionId(pack);
-        const packJson = JSON.stringify(pack);
-        const installedAt = now();
-        const alreadyInstalled = db.prepare(
-          'SELECT 1 FROM country_pack_versions WHERE id = ?'
-        ).get(versionId);
-
-        insertPack.run(
-          pack.id, pack.publisher, pack.country, pack.jurisdiction,
-          versionId, installedAt, installedAt,
-        );
-        insertVersion.run(
-          versionId,
-          pack.id,
-          pack.version,
-          pack.schemaVersion,
-          JSON.stringify({
-            id: pack.id,
-            publisher: pack.publisher,
-            country: pack.country,
-            jurisdiction: pack.jurisdiction,
-            version: pack.version,
-            publishedAt: pack.publishedAt,
-          }),
-          packJson,
-          sha256Hex(packJson),
-          pack.effectiveFrom,
-          pack.effectiveTo || null,
-          pack.minFloVersion,
-          pack.publishedAt,
-          installedAt,
-        );
-
-        for (const category of pack.categories) {
-          insertCategory.run(
-            `${versionId}:category:${category.id}`,
-            versionId,
-            category.id,
-            category.label,
-            category.defaultBehavior || null,
-            JSON.stringify(category),
-            installedAt,
-          );
-        }
-        for (const rule of pack.rules) {
-          insertRule.run(
-            `${versionId}:rule:${rule.id}`,
-            versionId,
-            rule.id,
-            rule.label,
-            rule.type,
-            rule.rate || null,
-            rule.amount || null,
-            rule.appliesPer || null,
-            JSON.stringify(rule.baseRuleIds || []),
-            JSON.stringify(rule),
-            installedAt,
-          );
-        }
-
-        if (!alreadyInstalled) {
-          db.prepare(`
-            INSERT INTO tax_config_audit (
-              action, pack_id, pack_version_id, details_json, created_at
-            ) VALUES ('install_bundled_pack', ?, ?, ?, ?)
-          `).run(
-            pack.id,
-            versionId,
-            JSON.stringify({ source: 'application_bundle', version: pack.version }),
-            installedAt,
-          );
-        }
-      }
+      seedBundledCountryPacks();
     },
   },
   {
@@ -5285,6 +5319,283 @@ export const MIGRATIONS: { version: number; name: string; up: () => void }[] = [
       if (!has('error')) db.exec(`ALTER TABLE receipt_deliveries ADD COLUMN error TEXT`);
     },
   },
+  {
+    version: 96,
+    name: 'till_price_override_and_held_carts',
+    up: () => {
+      // MERIDIAN TILL WIRING — two additive changes, nothing existing is altered.
+      //
+      // 1) Price override. `order_items.unit_price` remains the price the sale
+      //    actually RAN at (every total/tax/report already reads it), so an
+      //    override must keep the catalogue price somewhere else or it is lost.
+      //    `original_unit_price` is NULL for every line that was not overridden
+      //    (including all historical rows), which is what marks a line as
+      //    overridden; the reason and the approving user ride with it.
+      const itemCols = db.prepare(`PRAGMA table_info(order_items)`).all() as { name: string }[];
+      const hasItemCol = (c: string) => itemCols.some((x) => x.name === c);
+      if (!hasItemCol('original_unit_price')) db.exec(`ALTER TABLE order_items ADD COLUMN original_unit_price REAL`);
+      if (!hasItemCol('price_override_reason')) db.exec(`ALTER TABLE order_items ADD COLUMN price_override_reason TEXT`);
+      if (!hasItemCol('price_override_by')) db.exec(`ALTER TABLE order_items ADD COLUMN price_override_by TEXT`);
+
+      // 2) Held carts. `held_orders` is keyed by TABLE (one parked order per
+      //    table, upsert) which cannot represent several parked counter
+      //    sales, so a cart that has not been sent or paid gets its own
+      //    device-local table. A held cart is NOT a sale: it has no totals, no
+      //    stock effect and no sync footprint until it is resumed and rung up.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS held_carts (
+          id          TEXT PRIMARY KEY,
+          label       TEXT NOT NULL,
+          cart_json   TEXT NOT NULL,
+          created_by  TEXT,
+          created_at  TEXT NOT NULL,
+          updated_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_held_carts_created ON held_carts(created_at);
+      `);
+    },
+  },
+  {
+    version: 97,
+    name: 'money_integrity_guards',
+    up: () => {
+      // EXACT MONEY (WP2). Sales-side money stays in REAL columns but every stored
+      // value must be a whole number of minor units, and totals are summed in
+      // integer minor units (core/money-integrity.ts). Data-preserving: this only
+      // rounds values that carried float residue (e.g. 0.30000000000000004 -> 0.3),
+      // then installs triggers that keep every future write exact. No column,
+      // table or row is added, removed or reshaped.
+      repairMoneyColumns(db);
+      installMoneyGuards(db);
+    },
+  },
+  {
+    version: 98,
+    name: 'refund_lines',
+    up: () => {
+      // PARTIAL REFUNDS. A refund row records money; it cannot say which lines came
+      // back, so a second "return 1 of 3" could not know 1 was already returned (and an
+      // untracked product leaves no stock movement to count). One additive row per
+      // returned line keeps the per-line returned quantity the refund screen and the
+      // refund service cap against. Nothing existing is altered.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS refund_lines (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          refund_id     TEXT NOT NULL,
+          bill_id       INTEGER NOT NULL,
+          order_item_id INTEGER NOT NULL,
+          quantity      INTEGER NOT NULL,
+          amount_minor  INTEGER NOT NULL DEFAULT 0,
+          restocked     INTEGER NOT NULL DEFAULT 0,
+          created_at    TEXT NOT NULL,
+          FOREIGN KEY (refund_id) REFERENCES refunds(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_refund_lines_bill ON refund_lines(bill_id);
+        CREATE INDEX IF NOT EXISTS idx_refund_lines_item ON refund_lines(order_item_id);
+      `);
+    },
+  },
+  {
+    version: 99,
+    name: 'bundled_uk_vat_pack',
+    up: () => {
+      // UK VAT, offline. The generic pack carries no rules (it charges nothing), and every
+      // other country pack would come from the upstream plugin feed. The GB pack (standard 20%,
+      // reduced 5%, zero, exempt) is part of the application bundle; this registers it for
+      // databases that already passed v38. Existing packs, assignments and settings are untouched.
+      seedBundledCountryPacks();
+    },
+  },
+  {
+    version: 100,
+    name: 'z_reports',
+    up: () => {
+      // Z REPORTS. One immutable, sequentially numbered row per closed trading period and location. The
+      // snapshot is the exact figures at the moment the period closed; the triggers refuse any UPDATE or
+      // DELETE so a Z can never be regenerated with different numbers. Additive: nothing existing changes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS z_reports (
+          id            TEXT PRIMARY KEY,
+          location_key  TEXT NOT NULL,
+          location_id   TEXT,
+          number        INTEGER NOT NULL,
+          period_start  TEXT NOT NULL,
+          period_end    TEXT NOT NULL,
+          currency      TEXT NOT NULL,
+          generated_by  TEXT,
+          generated_at  TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          digest        TEXT NOT NULL,
+          UNIQUE (location_key, number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_z_reports_loc_end ON z_reports(location_key, period_end);
+        CREATE TRIGGER IF NOT EXISTS trg_z_reports_no_update BEFORE UPDATE ON z_reports
+        BEGIN SELECT RAISE(ABORT, 'z_reports are immutable'); END;
+        CREATE TRIGGER IF NOT EXISTS trg_z_reports_no_delete BEFORE DELETE ON z_reports
+        BEGIN SELECT RAISE(ABORT, 'z_reports are immutable'); END;
+      `);
+    },
+  },
+  {
+    version: 101,
+    name: 'stocktakes',
+    up: () => {
+      // STOCKTAKES. A count is a document: it is started, counted line by line (typed or scanned), reviewed
+      // as a variance report and then approved, which posts one ledger adjustment per counted line. Nothing
+      // existing is altered. `expected_at_count` is the ledger balance at the moment the line was counted, so
+      // sales made while counting are never overwritten when the count is approved.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS stocktakes (
+          id             TEXT PRIMARY KEY,
+          number         INTEGER NOT NULL UNIQUE,
+          location_id    TEXT,
+          name           TEXT NOT NULL,
+          status         TEXT NOT NULL DEFAULT 'counting' CHECK (status IN ('counting', 'approved', 'cancelled')),
+          category_ids   TEXT,
+          uncounted      TEXT,
+          created_by     TEXT,
+          created_at     TEXT NOT NULL,
+          approved_by    TEXT,
+          approved_at    TEXT,
+          cancelled_at   TEXT,
+          note           TEXT
+        );
+        CREATE TABLE IF NOT EXISTS stocktake_lines (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          stocktake_id      TEXT NOT NULL,
+          product_id        TEXT NOT NULL,
+          product_variant_id TEXT,
+          name              TEXT NOT NULL,
+          sku               TEXT,
+          barcode           TEXT,
+          unit_cost         REAL NOT NULL DEFAULT 0,
+          expected          REAL NOT NULL DEFAULT 0,
+          expected_at_count REAL,
+          counted           REAL,
+          counted_by        TEXT,
+          counted_at        TEXT,
+          applied_delta     REAL,
+          movement_id       TEXT,
+          clamped           INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (stocktake_id) REFERENCES stocktakes(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stocktake_lines_unique
+          ON stocktake_lines(stocktake_id, product_id, COALESCE(product_variant_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_stocktakes_status ON stocktakes(status, location_id);
+      `);
+    },
+  },
+  {
+    version: 102,
+    name: 'card_attempts',
+    up: () => {
+      // CARD TERMINAL ATTEMPTS. One row per request to a card provider (a sale or a refund). A sale only
+      // becomes a payment when the provider says approved AND the till consumes the attempt exactly once;
+      // `consumed_payment_id` is that link. Nothing existing is altered.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS card_attempts (
+          id                  TEXT PRIMARY KEY,
+          kind                TEXT NOT NULL DEFAULT 'sale' CHECK (kind IN ('sale', 'refund')),
+          provider            TEXT NOT NULL,
+          simulated           INTEGER NOT NULL DEFAULT 0,
+          terminal_id         TEXT,
+          bill_id             INTEGER,
+          amount_minor        INTEGER NOT NULL CHECK (amount_minor > 0),
+          tip_minor           INTEGER NOT NULL DEFAULT 0,
+          currency            TEXT NOT NULL,
+          state               TEXT NOT NULL DEFAULT 'pending'
+            CHECK (state IN ('pending', 'approved', 'declined', 'cancelled', 'timed_out', 'failed', 'consumed')),
+          provider_reference  TEXT,
+          auth_code           TEXT,
+          card_scheme         TEXT,
+          card_last4          TEXT,
+          message             TEXT,
+          parent_payment_id   TEXT,
+          consumed_payment_id TEXT,
+          consumed_refund_id  TEXT,
+          created_by          TEXT,
+          created_at          TEXT NOT NULL,
+          updated_at          TEXT NOT NULL,
+          expires_at          TEXT NOT NULL,
+          organization_id     TEXT,
+          location_id         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_card_attempts_state ON card_attempts(state, created_at);
+        CREATE INDEX IF NOT EXISTS idx_card_attempts_bill ON card_attempts(bill_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_card_attempts_provider_ref
+          ON card_attempts(provider, provider_reference, kind) WHERE provider_reference IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 103,
+    name: 'users_supervisor_flag',
+    up: () => {
+      // SUPERVISOR. A cashier who may approve refunds, voids, discounts and price changes (by their own login or by
+      // PIN) without being a manager. Additive only: the users table is not rebuilt and no existing row changes
+      // (everyone starts as 0). The role stays 'cashier', so every route gated by role keeps treating them as one.
+      const cols = db.prepare("PRAGMA table_info('users')").all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'is_supervisor')) {
+        db.exec('ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+  },
+  {
+    version: 104,
+    name: 'offers',
+    up: () => {
+      // OFFERS. Automatic promotions (multi-buy, buy-X-get-Y-free, percent off, amount off, fixed price) that the till
+      // server applies to a sale as an order-level discount, so tax, bills, refunds and reports already agree with
+      // them. `order_offers` records which offer saved how much on which order. `orders.discount_source` says whether
+      // the order's discount came from offers ('offer') or from a person (NULL): a person's discount always wins.
+      // Everything is additive; no existing row changes.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS offers (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          kind            TEXT NOT NULL CHECK (kind IN ('percent_off', 'amount_off', 'fixed_price', 'multi_buy_price', 'buy_get_free')),
+          scope           TEXT NOT NULL DEFAULT 'all' CHECK (scope IN ('all', 'category', 'products')),
+          category_id     TEXT,
+          product_ids     TEXT,
+          percent         REAL,
+          amount_minor    INTEGER,
+          price_minor     INTEGER,
+          buy_qty         INTEGER,
+          get_qty         INTEGER,
+          bundle_qty      INTEGER,
+          starts_at       TEXT,
+          ends_at         TEXT,
+          days_of_week    TEXT,
+          time_from       TEXT,
+          time_to         TEXT,
+          customer_rule   TEXT NOT NULL DEFAULT 'any' CHECK (customer_rule IN ('any', 'member', 'tier')),
+          tiers           TEXT,
+          location_id     TEXT,
+          priority        INTEGER NOT NULL DEFAULT 0,
+          is_active       INTEGER NOT NULL DEFAULT 1,
+          archived_at     TEXT,
+          created_by      TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL,
+          organization_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_offers_active ON offers(is_active, archived_at);
+        CREATE TABLE IF NOT EXISTS order_offers (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          order_id      INTEGER NOT NULL,
+          offer_id      TEXT NOT NULL,
+          offer_name    TEXT NOT NULL,
+          savings_minor INTEGER NOT NULL,
+          units         INTEGER NOT NULL DEFAULT 0,
+          created_at    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_order_offers_order ON order_offers(order_id);
+        CREATE INDEX IF NOT EXISTS idx_order_offers_offer ON order_offers(offer_id);
+      `);
+      const cols = db.prepare("PRAGMA table_info('orders')").all() as { name: string }[];
+      if (!cols.some((c) => c.name === 'discount_source')) db.exec('ALTER TABLE orders ADD COLUMN discount_source TEXT');
+    },
+  },
 ];
 
 function syncBackupBeforeMigration(fromVersion: number, toVersion: number): void {
@@ -5353,7 +5664,7 @@ export class SchemaVersionMismatchError extends Error {
     super(
       `Database schema (v${dbVersion}) is newer than this app version supports (v${appVersion}). ` +
       `This usually means another device or a previous update already upgraded this database. ` +
-      `Please update Flo Cafe to the latest version before continuing.`
+      `Please update ${getBrand().productName} to the latest version before continuing.`
     );
     this.name = 'SchemaVersionMismatchError';
   }
@@ -5999,10 +6310,10 @@ function seedInstallDefaults(): void {
 
   insert('business_name', '');
   insert('business_type', 'restaurant');
-  insert('country', 'IN');
-  insert('currency', 'INR');
-  insert('currency_symbol', '₹');
-  insert('timezone', 'Asia/Kolkata');
+  insert('country', DEFAULT_COUNTRY);
+  insert('currency', DEFAULT_CURRENCY);
+  insert('currency_symbol', DEFAULT_CURRENCY_SYMBOL);
+  insert('timezone', DEFAULT_TIMEZONE);
   insert('address', '');
   insert('phone', '');
   insert('email', '');
@@ -6119,7 +6430,7 @@ export function generateOrderNumber(): string {
   const prefix = getSettingValue('order_number_prefix') ?? 'ORD';
   const includeDate = getSettingValue('order_number_include_date') !== 'false';
   const resetDaily = getSettingValue('order_number_reset_daily') !== 'false';
-  const timezone = getSettingValue('timezone') || 'Asia/Kolkata';
+  const timezone = getSettingValue('timezone') || DEFAULT_TIMEZONE;
 
   // The sequence "bucket": a per-day counter when the series resets at store
   // midnight, or a single fixed bucket when the series is meant to keep
@@ -6381,6 +6692,12 @@ export function deriveBillPaymentDetails(billId: number | string): Array<Record<
       timestamp: p.requested_at,
     };
     if (paymentMethodId !== undefined) line.payment_method_id = paymentMethodId;
+    // Additive read fields so a client can show refund state without a second
+    // query: which payment this line is, its lifecycle state, and how much of it
+    // has been refunded. Existing receipt/bill consumers ignore unknown keys.
+    line.payment_id = p.id;
+    line.state = p.state;
+    if (p.refunded_minor > 0) line.refunded_amount = fromMinor(p.refunded_minor, exponent);
     if (p.tendered_minor != null) line.tendered_amount = fromMinor(p.tendered_minor, exponent);
     if (p.change_minor != null) line.change_amount = fromMinor(p.change_minor, exponent);
     if (p.provider_reference) line.transaction_id = p.provider_reference;

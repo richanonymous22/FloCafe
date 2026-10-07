@@ -25,7 +25,7 @@
  * the generic `storeEvent`/`pullEvents` so earlier suites are unaffected.
  */
 
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 
 export type DeviceStatus = 'active' | 'revoked';
 export type CloudEntityType =
@@ -198,6 +198,8 @@ export interface OrganizationHealth {
   by_entity: Record<string, number>;
 }
 
+import type { CloudMerchant, CloudPlan } from './commercial';
+
 export interface CloudStore {
   getDevice(deviceUid: string): CloudDevice | null;
   registerDevice(device: CloudDevice): void;
@@ -221,6 +223,8 @@ export interface CloudStore {
 
   createEnrollmentToken(token: EnrollmentToken): void;
   consumeEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null;
+  /** Read a usable token WITHOUT consuming it (so a refused enrolment does not burn the token). */
+  peekEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null;
 
   listDeficits(organizationUid: string): CloudInventoryDeficit[];
   setDeficitStatus(organizationUid: string, locationUid: string | null, productUid: string, variantUid: string | null, status: DeficitStatus, at: string): boolean;
@@ -237,6 +241,17 @@ export interface CloudStore {
   // ── Licensing (PLATFORM-HARDENING) ────────────────────────────────────────
   getLicense(organizationUid: string): CloudLicense | null;
   upsertLicense(license: CloudLicense, at: string): void;
+
+  // ── Commercial layer: plans and merchants ────────────────────────────────
+  listPlans(): CloudPlan[];
+  getPlan(planId: string): CloudPlan | null;
+  upsertPlan(plan: CloudPlan, at: string): void;
+  createMerchant(merchant: CloudMerchant): void;
+  getMerchant(merchantCode: string): CloudMerchant | null;
+  getMerchantByOrganization(organizationUid: string): CloudMerchant | null;
+  listMerchants(search?: string): CloudMerchant[];
+  updateMerchant(merchantCode: string, fields: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): CloudMerchant | null;
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean;
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void;
   observability(): { accepted: number; duplicate: number; rejected: number; authFailure: number };
@@ -258,7 +273,9 @@ export class SqliteCloudStore implements CloudStore {
   private db: Database.Database;
 
   constructor(filename = ':memory:') {
-    this.db = new Database(filename);
+    // Loaded on demand: only the dev/test store needs the SQLite driver; the production image does not ship it.
+    const SqliteDriver = require('better-sqlite3') as typeof import('better-sqlite3');
+    this.db = new SqliteDriver(filename);
     this.db.pragma('journal_mode = WAL');
     this.migrate();
   }
@@ -348,6 +365,17 @@ export class SqliteCloudStore implements CloudStore {
         device_limit     INTEGER, location_limit INTEGER,
         features         TEXT NOT NULL DEFAULT '[]', signature TEXT, updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS cloud_plans (
+        plan_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', features TEXT NOT NULL DEFAULT '[]',
+        device_limit INTEGER, location_limit INTEGER, grace_days INTEGER NOT NULL DEFAULT 7, term_days INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS cloud_merchants (
+        merchant_code TEXT PRIMARY KEY, name TEXT NOT NULL, contact_email TEXT, organization_uid TEXT NOT NULL UNIQUE,
+        plan_id TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','closed')), notes TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS cloud_rate_limits (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, hits INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_feed_sequence (organization_uid TEXT PRIMARY KEY, next_seq INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS cloud_nonces (device_uid TEXT NOT NULL, nonce TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (device_uid, nonce));
       CREATE INDEX IF NOT EXISTS idx_cloud_nonces_seen ON cloud_nonces(seen_at);
@@ -566,6 +594,10 @@ export class SqliteCloudStore implements CloudStore {
       VALUES (?, ?, ?, ?, ?, NULL, ?)
     `).run(token.token_hash, token.organization_uid, token.location_uid ?? null, token.register_uid ?? null, token.expires_at, new Date().toISOString());
   }
+  peekEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null {
+    const row = this.db.prepare('SELECT * FROM cloud_enrollment_tokens WHERE token_hash = ?').get(tokenHash) as EnrollmentToken | undefined;
+    return !row || row.consumed_at || row.expires_at < nowIso ? null : row;
+  }
   consumeEnrollmentToken(tokenHash: string, nowIso: string): EnrollmentToken | null {
     const txn = this.db.transaction((): EnrollmentToken | null => {
       const row = this.db.prepare('SELECT * FROM cloud_enrollment_tokens WHERE token_hash = ?').get(tokenHash) as EnrollmentToken | undefined;
@@ -644,6 +676,43 @@ export class SqliteCloudStore implements CloudStore {
         signature=excluded.signature, updated_at=excluded.updated_at
     `).run(license.organization_uid, license.status, license.plan, license.issued_at, license.activated_at, license.expires_at,
       license.grace_days, license.device_limit, license.location_limit, JSON.stringify(license.features ?? []), license.signature, at);
+  }
+
+  rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): boolean {
+    const windowStart = Math.floor(nowMs / windowMs) * windowMs;
+    const row = this.db.prepare(`INSERT INTO cloud_rate_limits (key, window_start, hits) VALUES (?, ?, 1)
+      ON CONFLICT(key) DO UPDATE SET hits = CASE WHEN cloud_rate_limits.window_start = excluded.window_start THEN cloud_rate_limits.hits + 1 ELSE 1 END, window_start = excluded.window_start
+      RETURNING hits`).get(key, windowStart) as { hits: number };
+    if (Math.random() < 0.01) this.db.prepare('DELETE FROM cloud_rate_limits WHERE window_start < ?').run(nowMs - 3_600_000);
+    return row.hits <= max;
+  }
+  private planOf(r: any): CloudPlan {
+    let features: string[] = []; try { features = JSON.parse(r.features); } catch { features = []; }
+    return { plan_id: r.plan_id, name: r.name, description: r.description, features, device_limit: r.device_limit, location_limit: r.location_limit, grace_days: r.grace_days, term_days: r.term_days, is_active: !!r.is_active };
+  }
+  listPlans(): CloudPlan[] { return (this.db.prepare('SELECT * FROM cloud_plans ORDER BY plan_id').all() as any[]).map((r) => this.planOf(r)); }
+  getPlan(planId: string): CloudPlan | null { const r = this.db.prepare('SELECT * FROM cloud_plans WHERE plan_id = ?').get(planId); return r ? this.planOf(r) : null; }
+  upsertPlan(p: CloudPlan, at: string): void {
+    this.db.prepare(`INSERT INTO cloud_plans (plan_id, name, description, features, device_limit, location_limit, grace_days, term_days, is_active, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(plan_id) DO UPDATE SET name=excluded.name, description=excluded.description, features=excluded.features, device_limit=excluded.device_limit,
+        location_limit=excluded.location_limit, grace_days=excluded.grace_days, term_days=excluded.term_days, is_active=excluded.is_active, updated_at=excluded.updated_at`)
+      .run(p.plan_id, p.name, p.description, JSON.stringify(p.features), p.device_limit, p.location_limit, p.grace_days, p.term_days, p.is_active ? 1 : 0, at);
+  }
+  createMerchant(m: CloudMerchant): void {
+    this.db.prepare('INSERT INTO cloud_merchants (merchant_code, name, contact_email, organization_uid, plan_id, status, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(m.merchant_code, m.name, m.contact_email, m.organization_uid, m.plan_id, m.status, m.notes, m.created_at, m.updated_at);
+  }
+  getMerchant(code: string): CloudMerchant | null { return (this.db.prepare('SELECT * FROM cloud_merchants WHERE merchant_code = ?').get(code) as CloudMerchant | undefined) ?? null; }
+  getMerchantByOrganization(org: string): CloudMerchant | null { return (this.db.prepare('SELECT * FROM cloud_merchants WHERE organization_uid = ?').get(org) as CloudMerchant | undefined) ?? null; }
+  listMerchants(search?: string): CloudMerchant[] {
+    if (search) { const q = `%${search.replace(/[%_]/g, '')}%`; return this.db.prepare('SELECT * FROM cloud_merchants WHERE name LIKE ? OR merchant_code LIKE ? OR contact_email LIKE ? ORDER BY created_at DESC LIMIT 200').all(q, q, q) as CloudMerchant[]; }
+    return this.db.prepare('SELECT * FROM cloud_merchants ORDER BY created_at DESC LIMIT 200').all() as CloudMerchant[];
+  }
+  updateMerchant(code: string, f: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): CloudMerchant | null {
+    const cur = this.getMerchant(code); if (!cur) return null;
+    const next = { ...cur, ...f, updated_at: at };
+    this.db.prepare('UPDATE cloud_merchants SET name=?, contact_email=?, plan_id=?, status=?, notes=?, updated_at=? WHERE merchant_code=?').run(next.name, next.contact_email, next.plan_id, next.status, next.notes, at, code);
+    return next;
   }
 
   logSync(kind: string, detail: { deviceUid?: string | null; organizationUid?: string | null; entityType?: string | null; message?: string }, at: string): void {

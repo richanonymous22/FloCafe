@@ -16,6 +16,7 @@
  * `pg` is loaded lazily by `connectPg()` only when a production DB URL is set.
  */
 
+import type { CloudMerchant, CloudPlan } from './commercial';
 import type {
   CloudDevice, CloudEvent, CloudPullPage, CloudFeedItem,
   StoreResult, EnrollmentToken, CloudInventoryDeficit, OrganizationHealth,
@@ -182,6 +183,45 @@ export class PostgresCloudStore {
         license.grace_days, license.device_limit, license.location_limit, JSON.stringify(license.features ?? []), license.signature, at]);
   }
 
+  async rateLimitHit(key: string, windowMs: number, max: number, nowMs: number): Promise<boolean> {
+    const windowStart = Math.floor(nowMs / windowMs) * windowMs;
+    const { rows } = await this.pg.query<{ hits: number }>(
+      `INSERT INTO cloud_rate_limits (key, window_start, hits) VALUES ($1, $2, 1)
+       ON CONFLICT (key) DO UPDATE SET hits = CASE WHEN cloud_rate_limits.window_start = EXCLUDED.window_start THEN cloud_rate_limits.hits + 1 ELSE 1 END, window_start = EXCLUDED.window_start
+       RETURNING hits`, [key, windowStart]);
+    if (Math.random() < 0.01) await this.pg.query('DELETE FROM cloud_rate_limits WHERE window_start < $1', [nowMs - 3_600_000]);
+    return Number(rows[0].hits) <= max;
+  }
+  private planOf(r: any): CloudPlan {
+    let features: string[] = []; try { features = JSON.parse(r.features); } catch { features = []; }
+    const n = (v: unknown) => (v == null ? null : Number(v));
+    return { plan_id: r.plan_id, name: r.name, description: r.description, features, device_limit: n(r.device_limit), location_limit: n(r.location_limit), grace_days: Number(r.grace_days), term_days: n(r.term_days), is_active: !!r.is_active };
+  }
+  async listPlans(): Promise<CloudPlan[]> { return (await this.pg.query('SELECT * FROM cloud_plans ORDER BY plan_id')).rows.map((r: any) => this.planOf(r)); }
+  async getPlan(planId: string): Promise<CloudPlan | null> { const r = (await this.pg.query('SELECT * FROM cloud_plans WHERE plan_id = $1', [planId])).rows[0]; return r ? this.planOf(r) : null; }
+  async upsertPlan(p: CloudPlan, at: string): Promise<void> {
+    await this.pg.query(`INSERT INTO cloud_plans (plan_id, name, description, features, device_limit, location_limit, grace_days, term_days, is_active, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (plan_id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, features=EXCLUDED.features, device_limit=EXCLUDED.device_limit,
+        location_limit=EXCLUDED.location_limit, grace_days=EXCLUDED.grace_days, term_days=EXCLUDED.term_days, is_active=EXCLUDED.is_active, updated_at=EXCLUDED.updated_at`,
+      [p.plan_id, p.name, p.description, JSON.stringify(p.features), p.device_limit, p.location_limit, p.grace_days, p.term_days, p.is_active, at]);
+  }
+  async createMerchant(m: CloudMerchant): Promise<void> {
+    await this.pg.query('INSERT INTO cloud_merchants (merchant_code, name, contact_email, organization_uid, plan_id, status, notes, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [m.merchant_code, m.name, m.contact_email, m.organization_uid, m.plan_id, m.status, m.notes, m.created_at, m.updated_at]);
+  }
+  async getMerchant(code: string): Promise<CloudMerchant | null> { return ((await this.pg.query('SELECT * FROM cloud_merchants WHERE merchant_code = $1', [code])).rows[0] as unknown as CloudMerchant | undefined) ?? null; }
+  async getMerchantByOrganization(org: string): Promise<CloudMerchant | null> { return ((await this.pg.query('SELECT * FROM cloud_merchants WHERE organization_uid = $1', [org])).rows[0] as unknown as CloudMerchant | undefined) ?? null; }
+  async listMerchants(search?: string): Promise<CloudMerchant[]> {
+    if (search) { const q = `%${search.replace(/[%_]/g, '')}%`; return (await this.pg.query('SELECT * FROM cloud_merchants WHERE name ILIKE $1 OR merchant_code ILIKE $1 OR contact_email ILIKE $1 ORDER BY created_at DESC LIMIT 200', [q])).rows as unknown as CloudMerchant[]; }
+    return (await this.pg.query('SELECT * FROM cloud_merchants ORDER BY created_at DESC LIMIT 200')).rows as unknown as CloudMerchant[];
+  }
+  async updateMerchant(code: string, f: Partial<Pick<CloudMerchant, 'name' | 'contact_email' | 'plan_id' | 'status' | 'notes'>>, at: string): Promise<CloudMerchant | null> {
+    const cur = await this.getMerchant(code); if (!cur) return null;
+    const next = { ...cur, ...f, updated_at: at };
+    await this.pg.query('UPDATE cloud_merchants SET name=$1, contact_email=$2, plan_id=$3, status=$4, notes=$5, updated_at=$6 WHERE merchant_code=$7', [next.name, next.contact_email, next.plan_id, next.status, next.notes, at, code]);
+    return next;
+  }
+
   private inventoryFields(evt: CloudEvent): InventoryFields | null {
     try {
       const p = JSON.parse(evt.payload) as Record<string, unknown>;
@@ -279,6 +319,10 @@ export class PostgresCloudStore {
        VALUES ($1,$2,$3,$4,$5, NULL, now())`,
       [token.token_hash, token.organization_uid, token.location_uid ?? null, token.register_uid ?? null, token.expires_at],
     );
+  }
+  async peekEnrollmentToken(tokenHash: string, nowIso: string): Promise<EnrollmentToken | null> {
+    const { rows } = await this.pg.query<EnrollmentToken>('SELECT * FROM cloud_enrollment_tokens WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at >= $2', [tokenHash, nowIso]);
+    return rows[0] ?? null;
   }
   async consumeEnrollmentToken(tokenHash: string, nowIso: string): Promise<EnrollmentToken | null> {
     const { rows } = await this.pg.query<EnrollmentToken>(

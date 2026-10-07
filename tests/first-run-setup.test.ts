@@ -89,17 +89,17 @@ assert.equal(getCurrentSchemaVersion(), MIGRATIONS[MIGRATIONS.length - 1].versio
   assert.equal(count('products'), 0, 'fresh install starts with no sample products');
   assert.equal(count('tables'), 0, 'fresh install starts with no sample tables');
   assert.equal(count('printers'), 0, 'fresh install starts with no default printer');
-  assert.equal(setting('cloud_server_url'), 'https://blue.flopos.com/', 'cloud server URL is seeded');
+  assert.equal(setting('cloud_server_url'), '', 'no third-party cloud server URL is seeded by default (never FloPOS)');
   assert.match(setting('cloud_pos_hash') || '', /^pos_[a-f0-9]{40}$/, 'fresh install has a POS hash');
   assert.ok((setting('cloud_device_secret') || '').length >= 32, 'fresh install has a local cloud secret');
   assert.equal(count('cloud_sync_outbox'), 0, 'fresh install starts with an empty cloud outbox');
-  assert.equal(count('country_packs'), 1, 'fresh install registers only the generic tax pack');
+  assert.equal(count('country_packs'), 2, 'fresh install registers exactly the bundled packs: the generic no-tax pack and the UK VAT pack');
   assert.deepEqual(
     getDatabase().prepare(
       'SELECT id, country, status FROM country_packs ORDER BY id'
     ).all(),
-    [{ id: 'local-generic', country: '*', status: 'active' }],
-    'fresh setup does not preinstall a country-specific tax pack',
+    [{ id: 'local-generic', country: '*', status: 'active' }, { id: 'meridian-gb-vat', country: 'GB', status: 'active' }],
+    'fresh setup preinstalls only the bundled packs: generic (any country) and the UK VAT pack (used only when the store country is GB)',
   );
   console.log('   ✓ fresh database has schema/default settings only and awaits setup');
 
@@ -211,7 +211,7 @@ assert.equal(getCurrentSchemaVersion(), MIGRATIONS[MIGRATIONS.length - 1].versio
     // '0', not 'false' — cloud-sync.ts reads this key with a strict '1' check
     // everywhere, so '0' is the off value.
     assert.equal(setting('cloud_sync_enabled'), '0', 'PLEMMO: cloud coordination is OFF by default; no third-party auto-registration');
-    assert.equal(setting('cloud_server_url'), 'https://blue.flopos.com', 'cloud server URL constant is left intact (inert while sync is off)');
+    assert.equal(setting('cloud_server_url'), '', 'no FloPOS/third-party cloud URL is persisted by setup (empty until an operator configures Plemmo Cloud)');
     console.log('   ✓ setup endpoint leaves cloud coordination disabled');
   } finally {
     cloudSync.refreshRegistrationProfile = originalRefreshRegistrationProfile;

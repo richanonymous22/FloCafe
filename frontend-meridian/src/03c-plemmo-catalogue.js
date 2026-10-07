@@ -63,6 +63,7 @@
       desc: p.description || '',
       sku: p.sku || '',
       barcode: p.barcode || '',
+      taxCat: p.tax_category_id || null,
       available: p.is_active == null ? true : !!p.is_active,
       kiosk: true
     };
@@ -119,10 +120,25 @@
       customers = (custRes && (custRes.data || custRes.customers)) || [];
     } catch (e) { /* customers optional for catalogue hydration */ }
 
+    // Variants (sizes, colours …) with their own price and stock; only products that have some get a list.
+    const variantsByProduct = {};
+    try {
+      const vr = await api.get('/retail/variants?all=1');
+      ((vr && vr.variants) || []).forEach((v) => {
+        (variantsByProduct[v.product_id] = variantsByProduct[v.product_id] || []).push({
+          id: v.id, name: v.name || 'Option', price: Number(v.price) || 0, cost: Number(v.cost) || 0,
+          sku: v.sku || '', barcode: v.barcode || '', stock: v.stock == null ? null : Number(v.stock)
+        });
+      });
+    } catch (e) { /* a till without variants (or a role that cannot list them) sells plain items */ }
+
     if (S) {
       S.categories = cats.map(mapCategory);
       S.modGroups = groups.map(mapModGroup);
       S.products = prods.map(mapProduct);
+      S.products.forEach((p) => { if (variantsByProduct[p.id]) p.variants = variantsByProduct[p.id]; });
+      // The server keeps no per-item picture symbol; an item is shown with its category's.
+      S.products.forEach((p) => { const c = S.categories.find((x) => x.id === p.cat); if (c) p.emoji = c.emoji; });
       S.customers = customers.map(mapCustomer);
       S._plemmoAddons = buildAddonIndex(groups);
     }

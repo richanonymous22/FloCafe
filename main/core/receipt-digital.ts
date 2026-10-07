@@ -4,6 +4,7 @@
  * version for display, QR or email. Delivery requests are recorded (auditable);
  * the desktop build has no mail transport, so nothing is silently "sent".
  */
+import { DEFAULT_CURRENCY } from './defaults';
 import { getDatabase, now, getSettingValue } from '../db';
 import { ulid } from './ids';
 import { recordAuditEvent } from './audit';
@@ -41,7 +42,7 @@ export function buildDigitalReceipt(billId: number | string): DigitalReceipt {
   const itemRows = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY id').all(bill.order_id) as any[];
 
   const s = (k: string, d = '') => getSettingValue(k) || d;
-  const currency = s('currency', 'INR');
+  const currency = s('currency', DEFAULT_CURRENCY);
   const items: DigitalReceiptLine[] = itemRows.map((i) => {
     const addons = parseJson<any[]>(i.addons, []).map((a) => a && (a.name || a)).filter(Boolean);
     return { name: i.product_name, quantity: i.quantity, unit_price: i.unit_price, total: i.total,

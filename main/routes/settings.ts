@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY, DEFAULT_CURRENCY, DEFAULT_TIMEZONE } from '../core/defaults';
 import { Router, Request, Response } from 'express';
 import { getDatabase, now } from '../db';
 import { cloudSync, DEFAULT_CLOUD_SERVER_URL, normalizeCloudServerUrl } from '../services/cloud-sync';
@@ -53,6 +54,8 @@ const OPTIONAL_SETTING_DEFAULTS: Record<string, string> = {
   bill_footer_message: '',
   printer_trim_decimals: 'false',
   split_checks_enabled: 'false',
+  tipping_enabled: 'false',
+  default_cash_float: '0',
 };
 
 function maskSetting(key: string, value: string): string {
@@ -92,9 +95,9 @@ function isMaskedSecret(value: unknown): boolean {
 function businessShape(s: Record<string, string>) {
   return {
     business_name: s.business_name || '',
-    timezone: s.timezone || 'Asia/Kolkata',
-    currency: s.currency || 'INR',
-    country: s.country || 'IN',
+    timezone: s.timezone || DEFAULT_TIMEZONE,
+    currency: s.currency || DEFAULT_CURRENCY,
+    country: s.country || DEFAULT_COUNTRY,
     language: s.language || 'en',
     tax_registration_number: s.tax_registration_number || '',
     state_code: s.state_code || '',
@@ -121,7 +124,7 @@ function taxShape(s: Record<string, string>) {
     tax_registration_number: s.tax_registration_number || '',
     state_code: s.state_code || '',
     tax_scheme: s.tax_scheme || 'regular',
-    country: s.country || 'IN',
+    country: s.country || DEFAULT_COUNTRY,
   };
 }
 
@@ -151,7 +154,7 @@ router.put('/business', requireRole('owner', 'manager'), (req: Request, res: Res
 
     const db = getDatabase();
     if (tax_registration_number) {
-      const effectiveCountry = country || getAllSettings(db).country || 'IN';
+      const effectiveCountry = country || getAllSettings(db).country || DEFAULT_COUNTRY;
       const { valid, format } = validateTaxRegistrationNumber(effectiveCountry, tax_registration_number);
       if (!valid && format) {
         return res.status(400).json({
@@ -196,7 +199,7 @@ router.put('/tax', requireRole('owner', 'manager'), (req: Request, res: Response
 
     const db = getDatabase();
     if (tax_registration_number) {
-      const effectiveCountry = country || getAllSettings(db).country || 'IN';
+      const effectiveCountry = country || getAllSettings(db).country || DEFAULT_COUNTRY;
       const { valid, format } = validateTaxRegistrationNumber(effectiveCountry, tax_registration_number);
       if (!valid && format) {
         return res.status(400).json({
@@ -691,6 +694,8 @@ const ALLOWED_WILDCARD_KEYS = new Set([
   'diagnostics_consent',
   'kds_enabled', 'server_app_enabled', 'kot_printing_enabled',
   'split_checks_enabled',
+  // Till behaviour shared by every terminal of the business (Meridian Settings).
+  'tipping_enabled', 'default_cash_float',
 ]);
 
 function isAllowedWildcardKey(key: string): boolean {

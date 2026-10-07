@@ -1,3 +1,4 @@
+import { DEFAULT_COUNTRY } from '../core/defaults';
 import { Express } from 'express';
 import { authRoutes } from './auth';
 import { requireRole } from '../middleware/security';
@@ -37,6 +38,11 @@ import adminReconciliationRoutes from './admin-reconciliation';
 import { getDatabase, now, parseItemJson, attachEffectiveAddons, withTxn, getSettingValue, getCachedPairingCode, setCachedPairingCode, verifyPin } from '../db';
 import { ulid } from '../core/ids';
 import { checkPinRateLimit } from './orders';
+import { getCountryByCode } from '../countries';
+import { ApprovalError, resolveApprover } from '../core/approval';
+import { restockCancelledLine } from '../core/inventory';
+import { recordAuditEvent } from '../core/audit';
+import { currencyExponent, quantiseMoney, sumMoney } from '../core/money-integrity';
 import {
   calculateConfiguredChargeTaxes,
   combineItemAndChargeTaxes,
@@ -51,6 +57,14 @@ import QRCode from 'qrcode';
 import { registerHospitalityHooks } from '../modules/hospitality/hooks';
 import { retailRoutes } from './retail';
 import { inventoryRoutes } from './inventory';
+import { stocktakeRoutes } from './stocktakes';
+import { refreshOffers } from '../core/offers';
+import { offerRoutes } from './offers';
+import { cardRoutes } from './card';
+import { kitchenQueueRoutes } from './kitchen-queue';
+import { activationRoutes } from './activation';
+import { updateRoutes } from './updates';
+import { requireTradingLicence } from '../middleware/license-gate';
 import { supplierRoutes } from './suppliers';
 import { purchaseOrderRoutes } from './purchase-orders';
 import { transferRoutes } from './transfers';
@@ -84,10 +98,27 @@ export function registerRoutes(app: Express): void {
   // time an app is built, including once per test file.
   registerHospitalityHooks();
 
+  // Trading gate: creating a sale, extending it and taking payment need a licence in force (see
+  // middleware/license-gate.ts). Registered first so it runs before the route handlers; reading, reports,
+  // refunds, voids and backups are deliberately not gated.
+  app.post('/api/orders', requireTradingLicence);
+  app.post('/api/orders/:id/items', requireTradingLicence);
+  app.post('/api/bills/generate', requireTradingLicence);
+  app.post('/api/bills/:id/payment', requireTradingLicence);
+  app.post('/api/bills/:id/payments', requireTradingLicence);
+  app.post('/api/card/attempts', requireTradingLicence);
+  app.post('/api/retail/checkout', requireTradingLicence);
+
   // Auth routes
   app.use('/api/auth', authRoutes);
   app.use('/api/retail', retailRoutes);
   app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/stocktakes', stocktakeRoutes);
+  app.use('/api/card', cardRoutes);
+  app.use('/api/offers', offerRoutes);
+  app.use('/api/kitchen-queue', kitchenQueueRoutes);
+  app.use('/api/activation', activationRoutes);
+  app.use('/api/updates', updateRoutes);
   app.use('/api/suppliers', supplierRoutes);
   app.use('/api/purchase-orders', purchaseOrderRoutes);
   app.use('/api/transfers', transferRoutes);
@@ -141,7 +172,7 @@ export function registerRoutes(app: Express): void {
   app.get('/api/tax/categories', requireRole('owner', 'manager'), async (req, res) => {
     try {
       const { getActiveCountryPack, hasConfiguredTaxCategories, previewCategoryRate } = await import('../services/tax');
-      const country = getSettingValue('country') || 'IN';
+      const country = getSettingValue('country') || DEFAULT_COUNTRY;
       const businessType = getSettingValue('business_type') || 'restaurant';
       const pack = getActiveCountryPack(country);
       const configurationReady = hasConfiguredTaxCategories(pack, businessType);
@@ -165,6 +196,8 @@ export function registerRoutes(app: Express): void {
         default_category_id: configurationReady ? pack.defaultCategories.product : null,
         configuration_ready: configurationReady,
         unclassified_category_id: pack.unclassifiedCategoryId,
+        inclusive_pricing_default: !!pack.inclusivePricingDefault,
+        tax_name: getCountryByCode(country)?.taxName || null,
       });
     } catch (error: any) {
       console.error('[API] Internal error:', error);
@@ -261,7 +294,7 @@ export function registerRoutes(app: Express): void {
       }
 
       const db = getDatabase();
-      const tenantCountry = getSettingValue('country') || 'IN';
+      const tenantCountry = getSettingValue('country') || DEFAULT_COUNTRY;
       const parsed = parsePhoneE164(String(phone).trim(), tenantCountry);
       const lookupPhone = parsed ? parsed.e164 : String(phone).trim();
       const phoneDigits = stripPhoneDigits(lookupPhone);
@@ -306,48 +339,34 @@ export function registerRoutes(app: Express): void {
 
       // #150: an item the kitchen has already started on (preparing/ready)
       // can't be silently deleted like a pending one — the ingredients are
-      // already consumed. Voiding it instead requires a manager PIN, mirrors
-      // the whole-order-cancel override pattern below (routes/orders.ts
-      // ~L580-609), and leaves a negative bill line so the removal stays
-      // visible on the bill rather than the item just vanishing.
+      // already consumed. Voiding it instead requires approval and leaves a
+      // negative bill line so the removal stays visible on the bill.
+      //
+      // Approval (both cases): an owner/manager removes an item outright; a
+      // cashier or waiter needs a manager/owner PIN. The approver is whoever the
+      // PIN belongs to — resolved here, never named by the client.
       const isInProgressVoid = ['preparing', 'ready'].includes(item.status);
-      const isPrivilegedRole = ['owner', 'manager'].includes(userRole);
-      const canUseOverride = ['cashier', 'waiter'].includes(userRole) && isInProgressVoid;
-      if (!isPrivilegedRole && !canUseOverride) {
-        return res.status(403).json({ error: 'Only owner or manager can cancel this item' });
+      const authUser = (req as any).user as { userId: string; role: string };
+      if (!['owner', 'manager', 'cashier', 'waiter'].includes(userRole)) {
+        return res.status(403).json({ error: 'Only owner, manager, cashier or waiter can cancel this item' });
       }
-      if (isInProgressVoid) {
-        if (!override_pin) {
-          return res.status(400).json({ error: 'Manager PIN required to void an item already in progress' });
-        }
-
-        const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
-        const rateLimitKey = `pin:${clientIp}:item-void:${itemId}`;
-        if (!checkPinRateLimit(rateLimitKey)) {
-          return res.status(429).json({ error: 'Too many PIN attempts. Try again in 15 minutes.' });
-        }
-
-        const managerId = req.body.manager_id || req.body.user_id;
-        let pinUser: any = null;
-        if (managerId) {
-          const candidate = db.prepare("SELECT * FROM users WHERE id = ? AND pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").get(managerId) as any;
-          if (candidate && verifyPin(candidate.pin_hash, override_pin)) {
-            pinUser = candidate;
-          }
-        }
-        if (!pinUser) {
-          const managers = db.prepare("SELECT * FROM users WHERE pin_hash IS NOT NULL AND role IN ('owner', 'manager') AND is_active = 1").all() as any[];
-          for (const u of managers) {
-            if (verifyPin(u.pin_hash, override_pin)) {
-              pinUser = u;
-              break;
-            }
-          }
-        }
-        if (!pinUser) {
-          return res.status(403).json({ error: 'Invalid manager PIN' });
-        }
+      if (['cancelled', 'voided', 'void_adjustment'].includes(item.status)) {
+        return res.status(409).json({ error: 'This item is already removed from the order' });
       }
+      let itemApprovedBy: string;
+      try {
+        itemApprovedBy = resolveApprover({
+          user: authUser, permission: 'sales.void', overridePin: override_pin,
+          rateKey: `${req.ip || req.socket.remoteAddress || 'unknown'}:item-void:${itemId}`,
+          action: isInProgressVoid ? 'void an item already in progress' : 'remove an item',
+        }).userId;
+      } catch (error: any) {
+        if (error instanceof ApprovalError) {
+          return res.status(error.statusCode).json({ error: error.message, ...(error.requiresApproval ? { requiresApproval: true } : {}) });
+        }
+        throw error;
+      }
+      const voidReason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 200) : '';
 
       // BUG #17 FIX: Wrap cancel + total recalc in transaction
       const result = withTxn(() => {
@@ -379,7 +398,12 @@ export function registerRoutes(app: Express): void {
           db.prepare("UPDATE order_items SET status = 'voided', voided_at = ?, updated_at = ? WHERE id = ?")
             .run(now(), now(), itemId);
         } else {
-          // Soft delete - mark as cancelled
+          // Soft delete - mark as cancelled, and put the stock back through the ledger
+          // (an item not yet started has consumed nothing).
+          restockCancelledLine({
+            item, reason: voidReason ? `Item removed: ${voidReason}` : 'Item removed before preparation',
+            referenceType: 'item_cancel', referenceId: String(itemId), actorUserId: authUser.userId,
+          });
           db.prepare("UPDATE order_items SET status = 'cancelled', updated_at = ? WHERE id = ?")
             .run(now(), itemId);
         }
@@ -387,16 +411,17 @@ export function registerRoutes(app: Express): void {
         // Recalculate order totals excluding cancelled items
         const activeItems = db.prepare("SELECT * FROM order_items WHERE order_id = ? AND status != 'cancelled'")
           .all(orderId) as any[];
+        const moneyExp = currencyExponent(getSettingValue('currency'));
         let subtotal = 0;
         let totalTax = 0;
         let exclusiveTax = 0;
         const allTaxBreakdowns: any[] = [];
         const allTaxSnapshots: (string | null)[] = [];
         for (const i of activeItems) {
-          subtotal += i.subtotal || 0;
-          totalTax += i.tax_amount || 0;
+          subtotal = sumMoney([subtotal, i.subtotal || 0], moneyExp);
+          totalTax = sumMoney([totalTax, i.tax_amount || 0], moneyExp);
           if (i.tax_type !== 'inclusive') {
-            exclusiveTax += i.tax_amount || 0;
+            exclusiveTax = sumMoney([exclusiveTax, i.tax_amount || 0], moneyExp);
           }
           if (i.tax_breakdown) {
             try {
@@ -412,22 +437,22 @@ export function registerRoutes(app: Express): void {
         if (existingDiscountAmount > 0 && order.subtotal > 0) {
           if (order.discount_type === 'percentage') {
             const pct = order.discount_value || 0;
-            newDiscountAmount = Math.round(subtotal * pct / 100 * 100) / 100;
+            newDiscountAmount = quantiseMoney(subtotal * pct / 100, moneyExp);
           }
           // amount type: keep same value
         }
 
-        const discountedSubtotal = Math.max(0, subtotal - newDiscountAmount);
+        const discountedSubtotal = Math.max(0, sumMoney([subtotal, -newDiscountAmount], moneyExp));
         let newTaxAmount = totalTax;
         let newExclusiveTax = exclusiveTax;
         let taxRatio = 1;
         if (newDiscountAmount > 0 && subtotal > 0) {
           taxRatio = discountedSubtotal / subtotal;
-          newTaxAmount = Math.round(totalTax * taxRatio * 100) / 100;
-          newExclusiveTax = Math.round(exclusiveTax * taxRatio * 100) / 100;
+          newTaxAmount = quantiseMoney(totalTax * taxRatio, moneyExp);
+          newExclusiveTax = quantiseMoney(exclusiveTax * taxRatio, moneyExp);
         }
         const tenantInfo = {
-          country: getSettingValue('country') || 'IN',
+          country: getSettingValue('country') || DEFAULT_COUNTRY,
           business_type: getSettingValue('business_type') || 'restaurant',
           state_code: getSettingValue('state_code') || '',
           taxes_enabled: getSettingValue('taxes_enabled') === 'true',
@@ -449,10 +474,9 @@ export function registerRoutes(app: Express): void {
         });
 
         // BUG #5 FIX: Correct round-off formula; BUG #24 FIX: include delivery_charge (was missing, causing total mismatch with bill generation)
-        const preRoundTotal = discountedSubtotal + taxRollup.exclusiveTaxAmount
-          + (order.delivery_charge || 0) + (order.packaging_charge || 0);
         const roundOff = 0;
-        const total = Number(preRoundTotal.toFixed(2));
+        const total = sumMoney([discountedSubtotal, taxRollup.exclusiveTaxAmount,
+          order.delivery_charge || 0, order.packaging_charge || 0], moneyExp);
 
         // #132 FIX: cancelling the last active item leaves nothing to serve or
         // bill — treat it as the whole order being cancelled, the same way the
@@ -463,14 +487,8 @@ export function registerRoutes(app: Express): void {
         const orderCancelled = activeItems.length === 0 && order.status !== 'cancelled';
 
         if (orderCancelled) {
-          const allItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId) as any[];
-          for (const i of allItems) {
-            const product = db.prepare('SELECT * FROM products WHERE id = ?').get(i.product_id) as any;
-            if (product?.track_inventory) {
-              db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = ? WHERE id = ?')
-                .run(i.quantity, now(), product.id);
-            }
-          }
+          // Every line was already handled when it was removed (pending lines went back to
+          // stock then; voided in-progress lines are deliberately not restocked).
           db.prepare(`
             UPDATE orders SET subtotal = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, total = ?, round_off = ?,
               status = 'cancelled', cancelled_at = ?, cancellation_reason = ?, updated_at = ? WHERE id = ?
@@ -490,16 +508,27 @@ export function registerRoutes(app: Express): void {
         if (existingBill) {
           const pack = getActiveCountryPack(tenantInfo.country);
           const { total: billTotal, adjustment: billRoundOff } = applyPayableRounding(total, pack);
-          const newBillBalance = Math.max(0, billTotal - (existingBill.paid_amount || 0));
+          const newBillBalance = Math.max(0, sumMoney([billTotal, -(existingBill.paid_amount || 0)], moneyExp));
           db.prepare(`UPDATE bills SET total = ?, balance = ?, tax_amount = ?, tax_breakdown = ?, tax_snapshot = ?, discount_amount = ?, round_off = ?, updated_at = ? WHERE id = ?`)
             .run(billTotal, newBillBalance, taxRollup.taxAmount, JSON.stringify(taxRollup.breakdowns), taxRollup.snapshotJson, newDiscountAmount, billRoundOff, now(), existingBill.id);
         }
 
+        if (!orderCancelled) refreshOffers(orderId); // a removed item can change which offers apply
         const updatedOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
         const items = attachEffectiveAddons(db, db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId).map(parseItemJson) as any[]);
         return { updatedOrder, items, orderCancelled };
       });
 
+      recordAuditEvent({
+        type: 'sale.item_voided',
+        actor: { userId: authUser.userId, role: authUser.role },
+        entity: { type: 'order_item', id: String(itemId) },
+        summary: `${isInProgressVoid ? 'In-progress item voided' : 'Item removed'} on order ${order.order_number ?? orderId}: ${item.product_name}`,
+        metadata: {
+          order_id: Number(orderId), item_id: Number(itemId), product_id: item.product_id, quantity: item.quantity,
+          in_progress: isInProgressVoid, reason: voidReason || null, requested_by: authUser.userId, approved_by: itemApprovedBy,
+        },
+      });
       cloudSync.recordOrderChanged(
         orderId,
         result.orderCancelled ? 'order.cancelled' : (isInProgressVoid ? 'order.item_voided' : 'order.item_cancelled'),
@@ -593,7 +622,7 @@ export function registerRoutes(app: Express): void {
           newExclusiveTax = Math.round(exclusiveTax * taxRatio * 100) / 100;
         }
         const tenantInfo = {
-          country: getSettingValue('country') || 'IN',
+          country: getSettingValue('country') || DEFAULT_COUNTRY,
           business_type: getSettingValue('business_type') || 'restaurant',
           state_code: getSettingValue('state_code') || '',
           taxes_enabled: getSettingValue('taxes_enabled') === 'true',

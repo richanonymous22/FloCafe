@@ -24,7 +24,7 @@ function tierOf(c){const sp=c.spend||0;return sp>=300?{k:'gold',name:'Gold'}:sp>
 const tierBadge=c=>{const t=tierOf(c);return`<span class="tier ${t.k}">${t.name}</span>`;};
 const typeLabel=t=>({takeaway:'Takeaway',dine:'Dine in',delivery:'Delivery',instore:'In store'})[t]||t;
 const typeIcon=t=>({takeaway:'bag',dine:'dine',delivery:'truck',instore:'bag'})[t]||'bag';
-const payLabel=o=>{if(o.status==='open')return'Unpaid';const ms=[...new Set(o.payments.map(p=>p.m))];return ms.length>1?'Split':ms[0]==='cash'?'Cash':'Card';};
+const payLabel=o=>{if(o.status==='open')return'Unpaid';const ms=[...new Set(o.payments.map(p=>p.m))];return ms.length>1?'Split':ms[0]==='cash'?'Cash':ms[0]==='wallet'?'Wallet':'Card';};
 function hospitality(){return S.settings.type!=='retail';}
 
 /* ---------- Toasts & tooltips ---------- */
@@ -123,6 +123,29 @@ function approve(perm,what){
   return pinPrompt({title:'Manager approval',text:`${esc(what)} needs someone who can ${esc(permLabel(perm).toLowerCase())}. Hand over the till and ask them to enter their PIN.`,check:e=>can(perm,e)});
 }
 
+// Approval for an action the BACKEND enforces (refund, void, price override).
+// Meridian cannot check a manager's PIN — staff PINs are hashed server-side — so
+// when the signed-in user lacks the permission this only COLLECTS the PIN; the
+// backend validates it on the action itself and refuses a wrong one. The result
+// is { id, name, pin }: `pin` is null when the user approved for themselves.
+function pinCollect({title,text}){
+  return new Promise(res=>{let pin='',done=false;
+    const L=modal({title:esc(title),cls:'narrow',body:`<p class="muted pin-txt">${text}</p><div class="pin-dots">${dotsHTML(0)}</div><p class="pin-err" aria-live="assertive"></p>${keypadHTML('pin')}`,onClose:()=>{if(!done)res(null);}});
+    const dots=L.el.querySelector('.pin-dots');
+    bindPad(L.el,k=>{
+      if(done)return;
+      if(k==='back')pin=pin.slice(0,-1);else if(k==='clear')pin='';else if(/^\d$/.test(k)&&pin.length<4)pin+=k;
+      dots.innerHTML=dotsHTML(pin.length);
+      if(pin.length===4){done=true;setTimeout(()=>{L.close();res({id:null,name:'Manager',pin});},140);}
+    });
+  });
+}
+function approveServer(perm,what){
+  if(!(window.PlemmoAPI&&PlemmoAPI.isAuthenticated()))return approve(perm,what);
+  if(can(perm))return Promise.resolve({id:me().id,name:me().name,pin:null});
+  return pinCollect({title:'Manager approval',text:`${esc(what)} needs a manager. Hand over the till and ask them to enter their PIN.`});
+}
+
 /* ---------- Theme ---------- */
 function applyTheme(st){
   st=st||(S&&S.settings)||{};
@@ -153,8 +176,19 @@ const NAV=[
 const TITLES={home:'Home',pos:'Register',tables:'Tables',kitchen:'Kitchen',orders:'Orders',items:'Items & stock',customers:'Customers',team:'Team',cash:'Cash drawer',reports:'Reports',assistant:'Assistant',settings:'Settings'};
 const navVisible=n=>!n.sep&&(!n.when||n.when())&&(!n.perm||can(n.perm));
 function render(){if(!U.user||!S)return;renderRail();renderTopbar();renderView();}
+// Orders waiting on the kitchen. On a connected till the tickets live on the kitchen display, so the count is the
+// server's (refreshKitchenQueue); local tickets only exist when no server is reachable.
+function kitchenQueue(){
+  if(typeof live==='function'&&live())return(U.kq&&U.kq.open)||0;
+  return S.tickets.filter(t=>t.status==='new'||t.status==='prep').length;
+}
+async function refreshKitchenQueue(){
+  if(typeof live!=='function'||!live())return;
+  try{const q=await PlemmoAPI.get('/kitchen-queue');const changed=!U.kq||U.kq.open!==q.open||U.kq.late!==q.late;U.kq=q;if(changed){renderRail();if(U.view==='home')renderView();}}catch(e){/* keep the last count */}
+}
+setTimeout(refreshKitchenQueue,1500);setInterval(refreshKitchenQueue,30000);
 function renderRail(){
-  const kq=S.tickets.filter(t=>t.status==='new'||t.status==='prep').length;
+  const kq=kitchenQueue();
   const low=lowStock().length;
   const badges={kitchen:kq?[kq,'']:null,items:low?[low,'warn']:null};
   let html=`<div class="mark" aria-hidden="true">M</div>`,lastSep=true;
@@ -258,12 +292,12 @@ function renderLock(){
   const onNow=staff.filter(e=>onShift(e.id));
   el.innerHTML=`<div class="lock">
    <section class="lock-l" aria-hidden="true">
-     <div class="brand"><div class="mark sm">M</div><span>Meridian</span></div>
+     <div class="brand"><div class="mark sm" data-brand="mark">${esc(BRAND().markLetter)}</div><span data-brand="short">${esc(BRAND().shortName)}</span></div>
      <div class="lock-tape"><div class="paper"><div class="p-h"><b>${esc(S.settings.name)}</b><span class="pm">Latest sales</span></div><div class="rule"></div>${recent.map(o=>`<div class="kv"><span>${o.no}</span><span class="pm">${fmtT(o.ts)}</span><span>${money(o.total)}</span></div>`).join('')||'<div class="pm">No sales yet today</div>'}</div></div>
      <div class="lock-time num" id="lockTime">${fmtT(now)}</div>
      <div class="lock-date">${fmtDL(now)}</div>
      <div class="lock-biz">${esc(S.settings.name)}</div>
-     <div class="lock-meta"><span><b>${todays.length}</b> orders today</span><span><b>${onNow.length}</b> on shift</span>${S.tickets.filter(t=>t.status==='new'||t.status==='prep').length?`<span><b>${S.tickets.filter(t=>t.status==='new'||t.status==='prep').length}</b> in the kitchen</span>`:''}</div>
+     <div class="lock-meta"><span><b>${todays.length}</b> orders today</span><span><b>${onNow.length}</b> on shift</span>${kitchenQueue()?`<span><b>${kitchenQueue()}</b> in the kitchen</span>`:''}</div>
    </section>
    <section class="lock-r">
      <div class="seg" role="tablist"><button class="${LK.mode==='signin'?'on':''}" data-act="lkMode" data-m="signin">Sign in</button><button class="${LK.mode==='clock'?'on':''}" data-act="lkMode" data-m="clock">Clock in or out</button></div>
@@ -328,7 +362,7 @@ function showOnboarding(){
 }
 const OBV={
  welcome:()=>`<h1 class="hero">Set up your till in two minutes.</h1>
-   <p class="lede">Meridian runs your counter, kitchen, kiosk, stock, team and reports from one screen. Tell it about your business and it builds the rest.</p>
+   <p class="lede">${esc(BRAND().shortName)} runs your counter, kitchen, kiosk, stock, team and reports from one screen. Tell it about your business and it builds the rest.</p>
    <div class="row"><button class="btn btn-primary btn-lg" data-act="obNext">Set up my business ${ic('chevR',18)}</button></div>
    <div class="demo-card"><div><b>Just looking?</b><p class="muted" style="margin-top:2px">Open a demo café with nine weeks of sales, a live kitchen and a team of five.</p></div><button class="btn" data-act="obDemo">${ic('play',16)} Open the demo café</button></div>`,
  business:()=>`<h1>What’s your business called?</h1>
@@ -369,13 +403,13 @@ const OBV={
     ${!r?`<div><i>${ic('check',16)}</i>Floor plan with 12 tables, kitchen display and a customer kiosk</div>`:`<div><i>${ic('check',16)}</i>Customer kiosk for self-checkout</div>`}
     ${d.catalog==='sample'&&d.history?`<div><i>${ic('check',16)}</i>Nine weeks of sample sales for reports and the assistant</div>`:''}
    </div>
-   <div class="row"><button class="btn btn-primary btn-lg" data-act="obFinish" id="obGo">Open Meridian ${ic('chevR',18)}</button></div>`;},
+   <div class="row"><button class="btn btn-primary btn-lg" data-act="obFinish" id="obGo">Open ${esc(BRAND().shortName)} ${ic('chevR',18)}</button></div>`;},
 };
 function renderOB(){
   const st=OB_STEPS[OB.step],mid=OB.step>0&&OB.step<6;
   $('#onboard').innerHTML=`<div class="ob">
    <section class="ob-l">
-    <header class="ob-top"><div class="brand"><div class="mark sm">M</div><span>Meridian</span></div>${mid?`<span class="ob-count">Step ${OB.step} of 5</span>`:''}</header>
+    <header class="ob-top"><div class="brand"><div class="mark sm" data-brand="mark">${esc(BRAND().markLetter)}</div><span data-brand="short">${esc(BRAND().shortName)}</span></div>${mid?`<span class="ob-count">Step ${OB.step} of 5</span>`:''}</header>
     ${mid?`<div class="ob-prog" role="progressbar" aria-valuemin="0" aria-valuemax="5" aria-valuenow="${OB.step}"><i style="width:${OB.step/5*100}%"></i></div>`:''}
     <div class="ob-body">${OBV[st]()}<p class="err" id="obErr" aria-live="assertive">${esc(OB.err)}</p></div>
     ${mid?`<div class="ob-nav"><button class="btn btn-ghost" data-act="obBack">${ic('chevL',18)} Back</button><button class="btn btn-primary btn-lg" data-act="obNext">Continue ${ic('chevR',18)}</button></div>`:''}

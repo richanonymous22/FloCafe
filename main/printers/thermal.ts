@@ -1,3 +1,4 @@
+import { DEFAULT_CURRENCY_SYMBOL } from '../core/defaults';
 import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -586,6 +587,40 @@ export async function printKOT(order: any, items: any[], stationName: string, us
 }
 
 /**
+ * Print a prepared list of line tokens (a report, a label …) on the default printer, with the printer's own
+ * column count and cut mode. `build` receives the column count and returns the lines.
+ */
+export async function printTextLines(build: (cols: number, prefix: (symbol: string) => string) => string[], useUnicode: boolean = false, targetPrinter?: any): Promise<DispatchResult> {
+  try {
+    const printer = targetPrinter || getPrinterConfig();
+    if (!printer) return { ok: false, detail: 'No printer configured' };
+    const profile = resolvePrinterProfile(printer);
+    const cols = getColumnsForPrinter(printer, profile);
+    const warnings: PrintWarning[] = [];
+    const lines = build(cols, (symbol: string) => resolveCurrencyPrefix(symbol, useUnicode));
+    const data = buildEscPos(lines, useUnicode, { cutMode: profile.cutMode }, warnings);
+    const dispatch = await dispatchPrint(printer, data);
+    return warnings.length > 0 ? { ...dispatch, warnings } : dispatch;
+  } catch (error: any) {
+    console.error('[Printer] Text print error:', error);
+    return { ok: false, detail: error?.message };
+  }
+}
+
+export async function printTextLinesDetailed(...args: Parameters<typeof printTextLines>): Promise<PrintResult> {
+  const id = correlationId();
+  const dispatch = await printTextLines(...args);
+  if (dispatch.ok) return { ok: true, correlationId: id, stage: 'dispatch', warnings: dispatch.warnings };
+  const result: PrintResult = {
+    ok: false, code: 'print.report.failed', correlationId: id, stage: 'dispatch', detail: dispatch.detail,
+    failureClass: dispatch.failureClass || classifyPrintFailure(dispatch.detail), platformErrorCode: dispatch.platformErrorCode || extractPlatformErrorCode(dispatch.detail),
+    jobId: dispatch.jobId, driverName: dispatch.driverName, printerStatus: dispatch.printerStatus, warnings: dispatch.warnings,
+  };
+  reportPrintFailure('receipt', result);
+  return result;
+}
+
+/**
  * Standard ESC/POS cash-drawer kick pulse (`ESC p m t1 t2`). `pin` selects
  * which of the two drawer-kick connector pins is pulsed — 0 (pin 2) is the
  * near-universal default wiring; 1 (pin 5) exists for the rarer alternate
@@ -842,7 +877,7 @@ function formatCompactReceipt(order: any, bill: any, biz: any, cols: number = 48
 
   const amtLen = 10;
   const itemNameLen = itemNameWidth(cols, amtLen);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxIdLabel = getCountryByCode(biz.country)?.taxIdLabel || 'Tax ID';
@@ -933,7 +968,7 @@ function formatClassicReceipt(order: any, bill: any, biz: any, cols: number = 48
 
   const amtLen = 10;
   const itemNameLen = itemNameWidth(cols, amtLen);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxComponents = resolveTaxComponents({ ...bill, items: order.items });
@@ -1050,7 +1085,7 @@ function formatDetailedReceipt(order: any, bill: any, biz: any, cols: number = 4
   const dash = '-'.repeat(cols);
 
   const itemNameLen = itemNameWidth(cols, 10);
-  const prefix = resolveCurrencyPrefix(biz.currency_symbol || '₹', useUnicode);
+  const prefix = resolveCurrencyPrefix(biz.currency_symbol || DEFAULT_CURRENCY_SYMBOL, useUnicode);
   const trimDecimals = biz.trim_decimals === true;
   const locale = getCountryByCode(biz.country)?.locale ?? 'en-US';
   const taxIdLabel = getCountryByCode(biz.country)?.taxIdLabel || 'Tax ID';
@@ -1661,7 +1696,7 @@ public static class FloRawPrinter {
             EnsureReady(hPrinter);
 
             DOCINFO docInfo = new DOCINFO();
-            docInfo.pDocName = "FloCafe Receipt";
+            docInfo.pDocName = "POS Receipt";
             docInfo.pDataType = "RAW";
 
             uint jobId = StartDocPrinter(hPrinter, 1, docInfo);

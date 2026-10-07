@@ -67,6 +67,8 @@ function main() {
 
   initDatabase();
   const db = getDatabase();
+  // The simulated old install is an India-era store (that is what the +91 backfill under test is for).
+  db.prepare("UPDATE settings SET value = 'IN' WHERE key = 'country'").run();
   assertEqual(getCurrentSchemaVersion(), 22, 'setup: ran only through v22 for real');
 
   // Simulate an old install: a customers table from before both columns existed.

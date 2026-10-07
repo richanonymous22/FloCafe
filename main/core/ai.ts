@@ -13,6 +13,7 @@
  *     authoritative snapshot as grounding and can only produce text — it has
  *     no tools and cannot act. Falls back to `local` on any error.
  */
+import { DEFAULT_CURRENCY } from './defaults';
 import { getDatabase, now, getSettingValue, utcDayBounds } from '../db';
 import { recordAuditEvent } from './audit';
 import { listLowStock } from './inventory';
@@ -35,7 +36,7 @@ export function buildSnapshot(): AiSnapshot {
   const db = getDatabase();
   // Match the storage format of created_at (YYYY-MM-DD HH:MM:SS, UTC).
   const [start] = utcDayBounds(new Date().toISOString().slice(0, 10));
-  const currency = getSettingValue('currency') || 'INR';
+  const currency = getSettingValue('currency') || DEFAULT_CURRENCY;
   const business = getSettingValue('business_name') || 'Store';
 
   const today = db.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue FROM orders WHERE created_at >= ?`).get(start) as { orders: number; revenue: number };

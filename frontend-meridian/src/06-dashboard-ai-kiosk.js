@@ -9,7 +9,7 @@ function stats(a,b){
   const gross=sum(paid,o=>o.total),tax=sum(paid,o=>o.tax),net=gross-tax,cost=sum(paid,o=>sum(o.items,l=>(l.cost||0)*l.qty));
   const pm=m=>sum(paid,o=>sum(o.payments.filter(p=>p.m===m),p=>p.a));
   return{paid,count:paid.length,gross,tax,net,cost,profit:net-cost,margin:net?(net-cost)/net:0,tips:sum(paid,o=>o.tip||0),disc:sum(paid,o=>o.discAmt||0),
-    refunds:sum(ref,o=>o.total),refCount:ref.length,avg:paid.length?gross/paid.length:0,items:sum(paid,o=>sum(o.items,l=>l.qty)),card:pm('card'),cash:pm('cash'),members:paid.filter(o=>o.custId).length};
+    refunds:sum(ref,o=>o.total),refCount:ref.length,avg:paid.length?gross/paid.length:0,items:sum(paid,o=>sum(o.items,l=>l.qty)),card:pm('card'),cash:pm('cash'),wallet:pm('wallet'),members:paid.filter(o=>o.custId).length};
 }
 function itemStatsFrom(orders){
   const m={};
@@ -77,7 +77,8 @@ VIEWS.home=()=>{
   // needs attention
   const att=[];
   lowStock().forEach(p=>att.push({sev:p.stock<=0?'bad':'warn',t:`${p.name}: ${p.stock<=0?'sold out':p.stock+' left'}`,s:'Reorder or mark it sold out',act:'goLow'}));
-  const late=S.tickets.filter(t=>t.status!=='ready'&&t.status!=='done'&&now-t.ts>=10*MIN);
+  if(live()&&U.kq&&U.kq.late>0)att.unshift({sev:'bad',t:`${U.kq.late} order${U.kq.late>1?'s':''} waiting over ${U.kq.late_after_minutes} minutes in the kitchen`,s:`The oldest has waited ${U.kq.oldest_minutes} minutes`,act:'nav',v:'kitchen'});
+  const late=live()?[]:S.tickets.filter(t=>t.status!=='ready'&&t.status!=='done'&&now-t.ts>=10*MIN);
   if(late.length)att.unshift({sev:'bad',t:`${late.length} kitchen ticket${late.length>1?'s':''} over 10 minutes`,s:'Oldest is order '+late.sort((a,b)=>a.ts-b.ts)[0].no,act:'nav',v:'kitchen'});
   S.orders.filter(o=>o.status==='open'&&o.table&&now-o.opened>=60*MIN).forEach(o=>att.push({sev:'warn',t:`Table ${(tableOf(o.table)||{}).name} seated over an hour`,s:`${money(o.total)} not paid yet`,act:'nav',v:'tables'}));
   if(!S.drawer.open&&can('cash')&&new Date().getHours()>=s.openHour&&new Date().getHours()<s.closeHour)att.push({sev:'info',t:'The cash drawer isn’t open',s:'Open it with a float before taking cash',act:'nav',v:'cash'});
@@ -119,7 +120,7 @@ VIEWS.home=()=>{
 };
 const insHTML=x=>`<div class="ins-card ${x.k}"><span class="ins-ic">${ic(x.icon,18)}</span><div><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div></div>`;
 A.goLow=()=>{U.items.tab='items';U.items.cat='low';go('items');};
-A.eod=()=>showZ(dayStart(0));
+A.eod=()=>live()?showTradingReport():showZ(dayStart(0));
 
 /* =====================================================================
    REPORTS
@@ -212,7 +213,113 @@ VIEWS.reports=()=>{
     </tbody><tfoot><tr><td>Card ${money(X.card,0)}, cash ${money(X.cash,0)}</td><td class="r num">${money(X.card+X.cash)}</td></tr></tfoot></table></div></div></section>
    </div></div>`;
 };
-A.repRange=d=>{U.reports.range=d.r;renderView();};
+/* ---------- Reports from the till server ----------
+ * On a connected till the whole Reports screen is the server's period report: figures from the payments
+ * ledger, net of refunds, with VAT per rate, and the same CSVs an accountant would ask for. Nothing on it is
+ * recomputed in the browser from local orders. */
+const localReports=VIEWS.reports;
+VIEWS.reports=()=>live()?liveReports():localReports();
+const utcStamp=ms=>new Date(ms).toISOString().slice(0,19).replace('T',' ');
+const LR_TZ=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(e){return'UTC';}})();
+const lrKey=(ms,hourly)=>{const d=new Date(ms),p=n=>String(n).padStart(2,'0'),day=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;return hourly?`${day} ${p(d.getHours())}:00`:day;};
+const lrQuery=(a,b,hourly)=>`from=${encodeURIComponent(utcStamp(a-1000))}&to=${encodeURIComponent(utcStamp(b))}&tz=${encodeURIComponent(LR_TZ)}&bucket=${hourly?'hour':'day'}`;
+const lrTime=s=>fmtDT(Date.parse(String(s).replace(' ','T')+'Z'));
+let LR_BUSY=false;
+async function loadLiveReports(){
+  if(LR_BUSY)return;
+  const key=U.reports.range,R=rangeOf(key);LR_BUSY=true;U.reports.key=key;U.reports.err=null;
+  try{
+    const [cur,prev]=await Promise.all([
+      PlemmoAPI.get('/reports/period?'+lrQuery(R.a,R.b,R.hourly)),
+      PlemmoAPI.get('/reports/period?'+lrQuery(R.a-R.shift,R.b-R.shift,R.hourly)),
+    ]);
+    if(U.reports.range===key)U.reports.data={cur:cur.report,prev:prev.report,R};
+  }catch(e){if(U.reports.range===key)U.reports.err=(e&&e.status===403)?'You don’t have permission to see reports.':'The reports could not be read from the till server. '+((e&&e.message)||'');}
+  finally{LR_BUSY=false;}
+  if(U.view==='reports')renderView();
+}
+AFTER.reports=()=>{if(live()&&(U.reports.key!==U.reports.range||(!U.reports.data&&!U.reports.err)))loadLiveReports();};
+function liveReports(){
+  const R=rangeOf(U.reports.range),d=U.reports.data,tab=U.reports.tab||'discounts';
+  const head=`<div class="page-head"><div><h2>Reports</h2><p class="sub">${R.label}, compared with ${R.prev}. From the till server, after refunds.</p></div>
+    <div class="ph-actions"><div class="seg" role="tablist">${[['today','Today'],['yesterday','Yesterday'],['7d','7 days'],['30d','30 days']].map(([k,l])=>`<button class="${U.reports.range===k?'on':''}" data-act="repRange" data-r="${k}" role="tab" aria-selected="${U.reports.range===k}">${l}</button>`).join('')}</div>
+    <button class="btn btn-dark" data-act="eod">${ic('receipt',16)} End of day</button></div></div>`;
+  if(U.reports.err)return`<div class="page">${head}<div class="panel"><div class="panel-b"><div class="empty"><h3>Reports unavailable</h3><p>${esc(U.reports.err)}</p><button class="btn" data-act="repReload">Try again</button></div></div></div></div>`;
+  if(!d)return`<div class="page">${head}<div class="panel"><div class="panel-b"><p class="muted">Loading reports from the till…</p></div></div></div>`;
+  const C=d.cur,P=d.prev,sn=C.snapshot,e=sn.exponent,tm=m=>tmoney(m,e),major=m=>m/Math.pow(10,e);
+  const takings=sn.sales.net_minor,pTakings=P.snapshot.sales.net_minor;
+  const profit=C.products.reduce((s,p)=>s+p.profit_minor,0),pProfit=P.products.reduce((s,p)=>s+p.profit_minor,0);
+  const netAfter=C.products.reduce((s,p)=>s+p.net_after_refunds_minor,0);
+  const avg=sn.transactions.average_minor,pAvg=P.snapshot.transactions.average_minor;
+  const kpi=(l,v,dl,sub,spark)=>`<div><div class="k-l"><span>${l}</span>${dl}</div><div class="k-v num">${v}</div><div class="k-s">${sub}</div>${spark||''}</div>`;
+  // chart: every bucket in the range, the previous period lined up by shifting the clock
+  const hourly=R.hourly,bks=[];
+  if(hourly){for(let t=R.a;t<R.b;t+=HOUR)bks.push(t);}
+  else for(let i=0;i<R.days;i++)bks.push(R.a+i*DAY);
+  const cm=new Map(C.series.map(s=>[s.bucket,s])),pm=new Map(P.series.map(s=>[s.bucket,s]));
+  let first=0,last=bks.length-1;
+  if(hourly){
+    const act=bks.map((t,i)=>cm.has(lrKey(t,true))||pm.has(lrKey(t-R.shift,true))?i:-1).filter(i=>i>=0);
+    if(act.length){first=Math.max(0,act[0]-1);last=Math.min(bks.length-1,act[act.length-1]+1);}else{first=0;last=Math.min(bks.length-1,11);}
+  }
+  const view=bks.slice(first,last+1),now=Date.now();
+  const net=(m,t)=>((m.get(lrKey(t,hourly))||{}).net_minor||0);
+  const vals=view.map(t=>t>now?0:major(net(cm,t))),prevv=view.map(t=>major(net(pm,t-R.shift)));
+  const lbl=view.map(t=>hourly?String(new Date(t).getHours()).padStart(2,'0'):(R.days>7?String(new Date(t).getDate()):new Date(t).toLocaleDateString('en-GB',{weekday:'short'})));
+  const tips=view.map((t,i)=>`${hourly?lbl[i]+':00':fmtD(t)}\n${t>now?'Not yet':money(vals[i])+' after refunds, '+((cm.get(lrKey(t,hourly))||{}).sales||0)+' sales'}\nBefore: ${money(prevv[i])}`);
+  const curIdx=view.findIndex(t=>now>=t&&now<t+(hourly?HOUR:DAY));
+  const palette=['var(--accent)','var(--info)','var(--ok)','#b0701f','#7b5ea7','#2f8f9d','#c2576b'];
+  const cats=C.categories.filter(c=>c.net_after_refunds_minor>0).map((c,i)=>({label:c.category,value:c.net_after_refunds_minor,color:palette[i%palette.length]}));
+  const catTot=sum(cats,c=>c.value)||1;
+  const mixParts=sn.tenders.filter(t=>t.net_minor>0).map((t,i)=>[t.method[0].toUpperCase()+t.method.slice(1),t.net_minor,palette[i%palette.length]]);
+  const mixTot=sum(mixParts,p=>p[1])||1;
+  const unver=sum(sn.tenders,t=>t.unverified_card_minor||0);
+  const topP=C.products.slice(0,10);
+  const csvBtn=s=>`<button class="btn btn-sm" data-act="repCsv" data-s="${s}">${ic('download',14)} CSV</button>`;
+  const events=tab==='refunds'?C.refunds.map(r=>`<tr><td class="num">${esc(lrTime(r.at))}</td><td>${esc(r.bill_number)}</td><td class="r num">${tm(r.amount_minor)}</td><td>${esc(r.method)}</td><td>${esc(r.staff)}</td><td>${esc(r.reason||'')}</td></tr>`)
+    :tab==='voids'?C.voids.map(v=>`<tr><td class="num">${esc(lrTime(v.at))}</td><td>${v.kind==='order'?'Order cancelled':'Item removed'}</td><td>${esc(v.description)}</td><td class="r num">${v.amount_minor==null?'':tm(v.amount_minor)}</td><td>${esc(v.staff)}</td><td>${esc(v.reason||'')}</td></tr>`)
+    :C.discounts.map(x=>`<tr><td class="num">${esc(lrTime(x.at))}</td><td>${esc(x.order_number||'')}</td><td class="r num">${tm(x.amount_minor)}</td><td>${esc(x.staff)}</td><td>${esc(x.approved_by||'')}</td><td>${esc(x.reason||'')}</td></tr>`);
+  const evHead=tab==='refunds'?'<th>Time</th><th>Bill</th><th class="r">Refunded</th><th>Back to</th><th>By</th><th>Reason</th>':tab==='voids'?'<th>Time</th><th>What</th><th>Detail</th><th class="r">Value</th><th>By</th><th>Reason</th>':'<th>Time</th><th>Order</th><th class="r">Discount</th><th>Given by</th><th>Approved by</th><th>Reason</th>';
+  const vt=sn.vat_total,tn=esc(S.settings.taxName);
+  return`<div class="page">${head}
+   <div class="strip" style="--n:4">
+    ${kpi('Takings after refunds',tm(takings),deltaHTML(takings,pTakings),`${tm(sn.sales.gross_minor)} sold, ${tm(sn.sales.refunds_minor)} refunded`,sparkHTML(vals))}
+    ${kpi('Sales',sn.transactions.count.toLocaleString('en-GB'),deltaHTML(sn.transactions.count,P.snapshot.transactions.count),`${sn.transactions.items_sold.toLocaleString('en-GB')} items sold`,'')}
+    ${kpi('Average sale',tm(avg),deltaHTML(avg,pAvg),`${(sn.transactions.items_sold/Math.max(1,sn.transactions.count)).toFixed(1)} items per sale`,'')}
+    ${kpi('Gross profit',tm(profit),deltaHTML(profit,pProfit),netAfter>0?`${(profit/netAfter*100).toFixed(1)}% margin after cost, excl. ${tn}`:'No sales yet','')}
+   </div>
+   <div class="grid g-73 mt">
+    <section class="panel"><div class="panel-h"><h3>Takings ${hourly?'by hour':'by day'}</h3><div class="chart-key"><span><i></i>${R.label}</span><span><i class="prev"></i>${R.prev.replace(/^the /,'').replace(/^./,c=>c.toUpperCase())}</span></div></div><div class="panel-b">${barsHTML({vals,prev:prevv,labels:lbl,tips,h:200,now:curIdx,every:Math.max(1,Math.ceil(view.length/12))})}</div></section>
+    <section class="panel"><div class="panel-h"><h3>Sales by category</h3></div><div class="panel-b">${cats.length?`<div class="donut-wrap">${donutHTML(cats)}<div class="leg">${cats.map(c=>`<div><i style="background:${c.color}"></i><span>${esc(c.label)}</span><em class="num">${Math.round(c.value/catTot*100)}%</em></div>`).join('')}</div></div>`:'<p class="muted">No sales in this period.</p>'}</div></section>
+   </div>
+   <div class="grid g2 mt">
+    <section class="panel"><div class="panel-h"><h3>How people paid</h3></div><div class="panel-b">
+     ${mixParts.length?`<div class="mixrow"><div class="stackbar">${mixParts.map(p=>`<i style="width:${p[1]/mixTot*100}%;background:${p[2]}" data-tip="${esc(p[0])}: ${tm(p[1])}"></i>`).join('')}</div></div>`:'<p class="muted">No takings in this period.</p>'}
+     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tender</th><th class="r">Taken</th><th class="r">Refunded</th><th class="r">Net</th><th class="r">Tips</th></tr></thead><tbody>${sn.tenders.map(t=>`<tr><td>${esc(t.method)}</td><td class="r num">${tm(t.taken_minor)}</td><td class="r num">${tm(t.refunded_minor)}</td><td class="r num">${tm(t.net_minor)}</td><td class="r num">${tm(t.tips_minor)}</td></tr>`).join('')||'<tr><td colspan="5" class="muted">Nothing taken</td></tr>'}</tbody></table></div>
+     ${unver?`<p class="hint" style="margin-top:8px">${tm(unver)} of the card takings was recorded by staff, not confirmed by a card provider.</p>`:''}
+    </div></section>
+    <section class="panel"><div class="panel-h"><h3>${tn} summary</h3><span class="ph-sub">Per rate, after credit notes</span>${csvBtn('vat')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Rate</th><th class="r">Gross</th><th class="r">Net</th><th class="r">${tn}</th><th class="r">Credit notes</th><th class="r">Due</th></tr></thead><tbody>
+     ${sn.vat.map(v=>`<tr><td>${esc(v.label)}</td><td class="r num">${tm(v.gross_minor)}</td><td class="r num">${tm(v.net_minor)}</td><td class="r num">${tm(v.vat_minor)}</td><td class="r num">${tm(v.refund_vat_minor)}</td><td class="r num">${tm(v.vat_minor-v.refund_vat_minor)}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No sales</td></tr>'}
+    </tbody><tfoot><tr><td>Total</td><td class="r num">${tm(sum(sn.vat,v=>v.gross_minor))}</td><td class="r num">${tm(sum(sn.vat,v=>v.net_minor))}</td><td class="r num">${tm(vt.vat_minor)}</td><td class="r num">${tm(vt.refund_vat_minor)}</td><td class="r num">${tm(vt.net_vat_minor)}</td></tr></tfoot></table></div></div></section>
+   </div>
+   <section class="panel mt"><div class="panel-h"><h3>Top items</h3><span class="ph-sub">By sales after refunds, margin after cost</span>${csvBtn('products')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Item</th><th>Category</th><th class="r">Sold</th><th class="r">Returned</th><th class="r">Net sales</th><th class="r">Profit</th><th class="r">Margin</th></tr></thead><tbody>
+    ${topP.map((x,i)=>`<tr><td class="num faint">${i+1}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.category)}</td><td class="r num">${x.units_sold}</td><td class="r num">${x.units_returned||''}</td><td class="r num">${tm(x.net_after_refunds_minor)}</td><td class="r num">${tm(x.profit_minor)}</td><td class="r num">${x.margin_percent==null?'–':x.margin_percent.toFixed(1)+'%'}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">No sales in this period</td></tr>'}
+   </tbody></table></div></div></section>
+   <div class="grid g2 mt">
+    <section class="panel"><div class="panel-h"><h3>Categories</h3>${csvBtn('categories')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Category</th><th class="r">Units</th><th class="r">Net sales</th><th class="r">Profit</th></tr></thead><tbody>${C.categories.map(c=>`<tr><td>${esc(c.category)}</td><td class="r num">${c.units}</td><td class="r num">${tm(c.net_after_refunds_minor)}</td><td class="r num">${tm(c.profit_minor)}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">No sales</td></tr>'}</tbody></table></div></div></section>
+    <section class="panel"><div class="panel-h"><h3>Team</h3>${csvBtn('staff')}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th class="r">Sales</th><th class="r">Takings</th><th class="r">Discounts</th><th class="r">Refunds</th><th class="r">Items removed</th></tr></thead><tbody>${C.staff.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td class="r num">${s.sales}</td><td class="r num">${tm(s.gross_minor)}</td><td class="r num">${tm(s.discounts_minor)}</td><td class="r num">${s.refunds?s.refunds+' ('+tm(s.refunds_minor)+')':''}</td><td class="r num">${s.lines_removed||''}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No activity</td></tr>'}</tbody></table></div></div></section>
+   </div>
+   <section class="panel mt"><div class="panel-h"><div class="seg" role="tablist">${[['discounts','Discounts ('+C.discounts.length+')'],['refunds','Refunds ('+C.refunds.length+')'],['voids','Voids ('+C.voids.length+')']].map(([k,l])=>`<button class="${tab===k?'on':''}" data-act="repTab" data-t="${k}" role="tab" aria-selected="${tab===k}">${l}</button>`).join('')}</div><span class="spacer"></span>${csvBtn(tab)}</div><div class="panel-b flush"><div class="tbl-wrap"><table class="tbl"><thead><tr>${evHead}</tr></thead><tbody>${events.join('')||'<tr><td colspan="6" class="muted">Nothing in this period</td></tr>'}</tbody></table></div></div></section>
+  </div>`;
+}
+A.repReload=()=>{U.reports.key=null;U.reports.err=null;U.reports.data=null;renderView();};
+A.repTab=d=>{U.reports.tab=d.t;renderView();};
+A.repCsv=async d=>{
+  const R=rangeOf(U.reports.range);
+  try{const text=await PlemmoAPI.get('/reports/period/csv?section='+encodeURIComponent(d.s)+'&'+lrQuery(R.a,R.b,R.hourly));offerDownload(`${d.s}-${lrKey(R.a,false)}_${lrKey(R.b-1,false)}.csv`,text);}
+  catch(e){toast('The CSV could not be downloaded','warn');}
+};
+A.repRange=d=>{U.reports.range=d.r;U.reports.data=null;U.reports.err=null;renderView();};
 A.repExport=d=>{
   const R=rangeOf(U.reports.range),tag=U.reports.range+'-'+new Date().toISOString().slice(0,10);
   if(d.k==='orders'){const os=S.orders.filter(o=>o.ts>=R.a&&o.ts<R.b&&o.status!=='open').sort((a,b)=>a.ts-b.ts);offerDownload(`orders-${tag}.csv`,ordersCSV(os));}
@@ -256,6 +363,100 @@ function showZ(day){
   </div>`;
   modal({title:isToday?'Day so far':'End of day',sub:fmtDL(day),cls:'rc-modal',body,foot:`<button class="btn" data-act="printRc">${ic('printer',18)} Print</button><button class="btn" data-act="zCsv" data-t="${day}">${ic('download',18)} Orders CSV</button><span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
 }
+/* ---------- Trading reports from the till server (X / Z) ----------
+ * Connected tills show the SERVER's X and Z reports: figures from the payments ledger, sealed and numbered
+ * when the day is closed, and never regenerated. The old client-side "Z" (below, offline only) was computed
+ * per calendar day from this device's copy, with one flat tax rate, and could be re-run with different numbers.
+ */
+const tmoney=(minor,exp)=>money((minor||0)/Math.pow(10,exp==null?2:exp));
+function tradingReceiptHTML(r,z){
+  const s=S.settings,e=r.exponent,m=v=>tmoney(v,e);
+  const kv=(k,v,cls='')=>`<div class="kv ${cls}"><span>${k}</span><span>${v}</span></div>`;
+  const title=z?`Z REPORT ${String(z.number).padStart(4,'0')}`:'X REPORT, TRADING SO FAR';
+  const failed=Object.entries(r.checks).filter(([k,v])=>k!=='open_cash_session'&&v!==true).map(([k])=>k.replace(/_/g,' '));
+  const unver=r.tenders.reduce((n,t)=>n+(t.unverified_card_minor||0),0);
+  return`<div class="paper receipt rc-print">
+   <div class="p-h"><b>${esc(s.name)}</b>${s.address?`<span class="pm">${esc(s.address)}</span>`:''}${s.vatNo?`<span class="pm">${esc(s.taxName)} no. ${esc(s.vatNo)}</span>`:''}</div>
+   <div class="rule"></div>
+   <div class="p-h"><b>${title}</b><span class="pm">${esc(r.period_start)} to ${esc(r.period_end)} (UTC)</span></div>
+   <div class="rule"></div><div class="p-sec">SALES</div>
+   ${kv('Sales',r.transactions.count)}${kv('Items sold',r.transactions.items_sold)}${kv('Average sale',m(r.transactions.average_minor))}
+   ${kv('Gross sales',m(r.sales.gross_minor),'b')}${kv(`Refunds (${r.refunds.count})`,'−'+m(r.sales.refunds_minor))}${kv('Net sales',m(r.sales.net_minor),'b')}
+   ${r.discounts.count?kv(`Discounts given (${r.discounts.count})`,m(r.discounts.amount_minor),'pm'):''}
+   <div class="rule"></div><div class="p-sec">TAKINGS BY TENDER</div>
+   ${r.tenders.map(t=>kv(esc(t.method[0].toUpperCase()+t.method.slice(1))+(t.payments?` (${t.payments})`:''),m(t.taken_minor))+(t.refunded_minor?kv('  refunded','−'+m(t.refunded_minor),'pm'):'')+(t.tips_minor?kv('  tips',m(t.tips_minor),'pm'):'')).join('')||'<div class="pm">No takings</div>'}
+   ${unver?`<div class="pm" style="margin-top:6px">${m(unver)} of card takings were taken on a separate terminal and are not confirmed by a card provider.</div>`:''}
+   ${r.vat.length?`<div class="rule"></div><div class="p-sec">${esc(s.taxName)} BY RATE</div>
+   ${r.vat.map(v=>kv(esc(v.label)+` · gross ${m(v.gross_minor)}`,`${m(v.vat_minor)}`)+(v.refund_gross_minor?kv('  credit notes',`−${m(v.refund_vat_minor)}`,'pm'):'')).join('')}
+   ${kv(`${esc(s.taxName)} collected`,m(r.vat_total.vat_minor))}${kv('Credit notes','−'+m(r.vat_total.refund_vat_minor))}${kv(`${esc(s.taxName)} due`,m(r.vat_total.net_vat_minor),'b')}`:''}
+   <div class="rule"></div><div class="p-sec">OTHER</div>
+   ${kv('Voided orders',`${r.voids.orders} (${m(r.voids.orders_value_minor)})`)}${kv('Items removed after sending',r.voids.lines_removed)}${kv('Price changes',r.voids.price_overrides)}
+   <div class="rule"></div><div class="p-sec">CASH DRAWER</div>
+   ${kv('Float',m(r.cash.opening_float_minor))}${kv('Cash sales',m(r.cash.sales_minor))}${kv('Cash refunds','−'+m(r.cash.refunds_minor))}${kv('Paid in',m(r.cash.pay_in_minor))}${kv('Paid out','−'+m(r.cash.pay_out_minor))}
+   ${r.cash.sessions_closed?kv('Expected',m(r.cash.expected_minor_at_close))+kv('Counted',m(r.cash.counted_minor))+kv('Difference',(r.cash.variance_minor>0?'+':'')+m(r.cash.variance_minor),r.cash.variance_minor?'b':''):(r.checks.open_cash_session?'<div class="pm">The drawer is still open.</div>':'')}
+   <div class="rule"></div>
+   ${failed.length?`<div class="pm" style="color:var(--bad,#c0392b)"><b>Check failed:</b> ${esc(failed.join(', '))}. Do not rely on these figures until this is looked into.</div>`:'<div class="pm">All totals agree (takings, tax, drawer).</div>'}
+   <div class="p-h pm">${z?`Closed ${esc(z.generated_at)} UTC · ${esc(z.digest.slice(0,12))}`:'Not closed. This is a read-only look.'}</div>
+  </div>`;
+}
+async function showTradingReport(){
+  let x;
+  try{x=(await PlemmoAPI.get('/reports/x')).report;}
+  catch(e){toast(`The report could not be read: ${window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it'}`,'warn');return;}
+  U.trade={r:x,z:null};
+  const canZ=can('reports');
+  const open=!!(x.checks&&x.checks.open_cash_session),owner=(me()&&me().plemmoRole)==='owner',lb=U.lastBackup;
+  const step=(ok,t,sub,btn)=>`<div class="row" style="gap:10px;align-items:flex-start;padding:6px 0"><span class="badge ${ok?'ok':'warn'}" aria-hidden="true">${ok?'Done':'To do'}</span><div style="flex:1;min-width:0"><b>${t}</b><div class="muted" style="font-size:12.5px">${sub}</div></div>${btn||''}</div>`;
+  const steps=canZ?`<div class="panel" style="margin-bottom:12px"><div class="panel-b">
+    ${step(!open,'1. Count and close the cash drawer',open?'The drawer is still open, so the cash figures are not final. The day cannot be closed until it is counted.':'No drawer is open.',open?`<button class="btn btn-sm" data-act="eodDrawer">Go to cash drawer</button>`:'')}
+    ${step(false,'2. Close the day','Creates the numbered Z report below. It cannot be changed or run again.','')}
+    ${step(!!(lb&&lb.at>=dayStart(0)),'3. Back up the database',lb&&lb.at>=dayStart(0)?`Backed up at ${fmtT(lb.at)}.`:(owner?'Make a safe copy of today’s data after the Z report.':'Only the owner can make a backup.'),owner&&!(lb&&lb.at>=dayStart(0))?`<button class="btn btn-sm" data-act="backup">Back up now</button>`:'')}
+   </div></div>`:'';
+  modal({title:'Trading so far',sub:'X report',cls:'rc-modal',body:steps+tradingReceiptHTML(x,null),
+    foot:`<button class="btn" data-act="tradePrint" data-k="x">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="x">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>${canZ?`<button class="btn btn-primary" data-act="zClose">${ic('lock',16)} Close the day (Z report)</button>`:''}`});
+}
+A.eodDrawer=()=>{closeAll();go('cash');};
+A.zClose=async()=>{
+  if(!await confirmBox({title:'Close the day?',text:'This ends today’s trading period and creates a numbered Z report. It is a permanent record and cannot be changed or run again. The cash drawer must be closed first.',ok:'Close the day',danger:true}))return;
+  try{
+    const z=(await PlemmoAPI.post('/reports/z',{},{idempotent:false})).report;
+    closeAll();
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:'The day is closed',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-id="${esc(z.id)}">${ic('printer',16)} Print</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button>${(me()&&me().plemmoRole)==='owner'?`<button class="btn" data-act="backup">Back up now</button>`:''}<span class="spacer"></span><button class="btn btn-primary" data-act="closeTop">Done</button>`});
+    if((me()&&me().plemmoRole)==='owner')toast('The day is closed. Back up the database before you leave.','info',{ms:5200});
+  }catch(e){
+    const code=e&&e.data&&e.data.code,msg=window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):'the till server refused it';
+    toast(code==='cash_session_open'?'Close the cash drawer first (Cash screen), then run the Z report.':msg,'warn',{ms:5200});
+  }
+};
+A.zList=async()=>{
+  let list;
+  try{list=(await PlemmoAPI.get('/reports/z')).reports;}
+  catch(e){toast('The Z reports could not be read','warn');return;}
+  closeAll();
+  modal({title:'Z reports',cls:'rc-modal',body:list.length?`<div class="panel"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>No.</th><th>Closed</th><th class="r">Sales</th><th class="r">Net</th><th></th></tr></thead><tbody>${list.map(z=>`<tr><td>Z${String(z.number).padStart(4,'0')}</td><td>${esc(z.period_end)}</td><td class="r num">${z.transactions}</td><td class="r num">${tmoney(z.net_minor,z.exponent)}</td><td>${z.ok?'':'<span class="badge warn">check failed</span> '}<button class="btn btn-sm" data-act="zOpen" data-id="${esc(z.id)}">Open</button></td></tr>`).join('')}</tbody></table></div></div>`:'<p class="muted">No Z reports yet. Close the day to create the first one.</p>',foot:'<button class="btn" data-act="closeTop">Close</button>'});
+};
+A.zOpen=async d=>{
+  try{
+    const r=await PlemmoAPI.get('/reports/z/'+encodeURIComponent(d.id));const z=r.report;
+    closeAll();
+    modal({title:`Z report ${String(z.number).padStart(4,'0')}`,sub:r.verified?'Stored report, seal checked':'WARNING: the stored report does not match its seal',cls:'rc-modal',body:tradingReceiptHTML(z.snapshot,z),foot:`<button class="btn" data-act="tradePrint" data-k="z" data-re="1" data-id="${esc(z.id)}">${ic('printer',16)} Reprint</button><button class="btn" data-act="tradeCsv" data-k="z" data-id="${esc(z.id)}" data-n="${z.number}">${ic('download',16)} CSV</button><button class="btn" data-act="zList">Past Z reports</button><span class="spacer"></span><button class="btn" data-act="closeTop">Close</button>`});
+  }catch(e){toast('That Z report could not be opened','warn');}
+};
+// Print on the till's receipt printer. A report is only ever sent from the server's stored figures.
+A.tradePrint=async d=>{
+  try{
+    if(d.k==='x')await PlemmoAPI.post('/reports/x/print',{},{idempotent:false});
+    else await PlemmoAPI.post('/reports/z/'+encodeURIComponent(d.id)+'/print',{reprint:d.re==='1'},{idempotent:false});
+    toast('Sent to the printer');
+  }catch(e){toast(`Not printed: ${typeof tillError==='function'?tillError(e,'the printer did not respond'):'the printer did not respond'}`,'warn',{ms:5200});}
+};
+// The server's own CSV of the report (exact amounts in major and minor units), for the accountant.
+A.tradeCsv=async d=>{
+  try{
+    const text=await PlemmoAPI.get(d.k==='x'?'/reports/x/csv':'/reports/z/'+encodeURIComponent(d.id)+'/csv');
+    offerDownload(d.k==='x'?`x-report-${new Date().toISOString().slice(0,10)}.csv`:`z-report-${String(d.n).padStart(4,'0')}.csv`,String(text));
+  }catch(e){toast('The CSV could not be created','warn');}
+};
 A.zCsv=d=>{const a=+d.t;offerDownload(`orders-${new Date(a).toISOString().slice(0,10)}.csv`,ordersCSV(S.orders.filter(o=>o.ts>=a&&o.ts<a+DAY&&o.status!=='open').sort((p,q)=>p.ts-q.ts)));};
 
 /* =====================================================================
@@ -470,7 +671,7 @@ function updateBubble(m){
 function setSendBtn(){const b=$('#aiSend');if(!b)return;b.dataset.act=AI_CTL?'aiStop':'aiSend';b.className='btn '+(AI_CTL?'btn-dark':'btn-primary');b.setAttribute('aria-label',AI_CTL?'Stop':'Send');b.innerHTML=ic(AI_CTL?'stop':'send',20);}
 function buildTurns(q,tools){
   const e=me(),s=S.settings;
-  const rules=`You are the assistant built into Meridian, the point-of-sale system at ${s.name}, a ${s.type} at ${s.address||'an unlisted address'}. You're talking with ${e.name}, the ${roleLabel(e.role).toLowerCase()}. It is ${fmtDL(Date.now())}, ${fmtT(Date.now())}.
+  const rules=`You are the assistant built into ${BRAND().shortName}, the point-of-sale system at ${s.name}, a ${s.type} at ${s.address||'an unlisted address'}. You're talking with ${e.name}, the ${roleLabel(e.role).toLowerCase()}. It is ${fmtDL(Date.now())}, ${fmtT(Date.now())}.
 Answer only from the live till data in the JSON below. If the data doesn't cover the question, say what's missing instead of guessing.
 How to answer: lead with the answer in one sentence. Then a few short lines or a short list. Use a Markdown table only when comparing three or more rows. Write money with the ${s.currency.trim()} symbol. Keep it under 170 words unless asked for detail. End with one practical next step when it helps.
 ${tools?'You can change menu items with the update_item tool: price, stock count, or whether an item is on sale. Only use it when the user clearly asks for a change, then confirm exactly what changed. The user sees an Undo button for each change.':'You cannot change anything in the till. If asked, say where to do it: prices and stock are on the Items page, staff on the Team page.'}
@@ -560,13 +761,11 @@ function renderKiosk(){
      <div class="k-review"><div class="kr-l">${K.items.map(l=>{const p=prod(l.pid),c=p?catOf(p.cat):null;return`<div class="k-line" style="--c:${c?c.color:'#999'}"><span class="e" aria-hidden="true">${p?p.emoji:'•'}</span><div><b>${esc(l.name)}</b><small>${l.mods.map(m=>esc(m.n)).join(', ')||'&nbsp;'}</small><div class="num" style="font-weight:800;font-size:17px;margin-top:4px">${money(lineTotal(l))}</div></div><div class="k-step"><button data-act="kLine" data-id="${l.uid}" data-d="-1" aria-label="${l.qty===1?'Remove':'One fewer'} ${esc(l.name)}">${ic(l.qty===1?'trash':'minus',22)}</button><b class="num">${l.qty}</b><button data-act="kLine" data-id="${l.uid}" data-d="1" aria-label="One more ${esc(l.name)}">${ic('plus',22)}</button></div></div>`;}).join('')}
       ${ups.length?`<h3 style="font-size:19px;margin:28px 0 12px">Goes well with</h3><div class="k-up">${ups.map(p=>`<button data-act="kUp" data-id="${p.id}"><span aria-hidden="true">${p.emoji}</span><b>${esc(p.name)}</b><em class="num">+ ${money(p.price)}</em></button>`).join('')}</div>`:''}</div>
       <div class="kr-r"><div class="k-tot"><span>Items</span><span class="num">${t.count}</span></div><div class="k-tot"><span>${esc(s.taxName)} ${s.taxInclusive?'included':''}</span><span class="num">${money(t.tax)}</span></div><div class="k-tot big"><span>Total</span><span class="num">${money(t.total)}</span></div><div class="spacer"></div>
-       <button class="k-btn" data-act="kPay" style="width:100%">${ic('contactless',24)} Pay ${money(t.total)}</button><button class="k-btn ghost" data-act="kCancel" style="width:100%">Cancel order</button></div></div></div>`;
+       <button class="k-btn" data-act="kPay" style="width:100%">${ic('check',24)} Place order · ${money(t.total)}</button><button class="k-btn ghost" data-act="kCancel" style="width:100%">Cancel order</button></div></div></div>`;
   }else if(K.screen==='pay'){
-    h=`<div class="k-center"><div><h1>${K.pay==='ok'?'Payment approved':'Tap, insert or swipe'}</h1><p>${K.pay==='ok'?'Printing your receipt…':'Use the card reader below the screen.'}</p>
-     <div class="k-term"><div class="scr">${K.pay==='ok'?`<span style="color:var(--accent)">${ic('check',44)}</span><b>Approved</b>`:`<small>${esc(s.name)}</small><b class="num">${money(t.total)}</b><small>Contactless or card</small>`}</div><div class="cl" aria-hidden="true">${ic('contactless',46)}</div><div class="keys" aria-hidden="true">${'<i></i>'.repeat(9)}</div></div>
-     ${K.pay!=='ok'?`<button class="k-btn ghost" style="margin-top:30px" data-act="kPayCancel">Cancel payment</button>`:''}</div></div>`;
+    h=`<div class="k-center"><div><h1>Sending your order…</h1><p>One moment please.</p></div></div>`;
   }else if(K.screen==='done'){
-    h=`<div class="k-center"><div><p style="margin:0;font-size:22px;font-weight:700;color:var(--k-ink)">Thank you! Your order number is</p><div class="k-no num">${K.order.no}</div><p>${hospitality()?'Watch the screen by the counter. We’ll call your number when it’s ready.':'Your receipt is printing below.'}</p><button class="k-btn dark" style="margin-top:28px" data-act="kNew">Start a new order</button><div class="k-count"><i style="animation-duration:12s"></i></div></div></div>`;
+    h=`<div class="k-center"><div><p style="margin:0;font-size:22px;font-weight:700;color:var(--k-ink)">Thank you! Your order number is</p><div class="k-no num">${K.order.no}</div><p>${hospitality()?'Please pay at the counter with this number. We’ll call it when your order is ready.':'Please take this number to the counter to pay.'}</p><button class="k-btn dark" style="margin-top:28px" data-act="kNew">Start a new order</button><div class="k-count"><i style="animation-duration:12s"></i></div></div></div>`;
   }
   if(K.sheet){
     const sh=K.sheet,p=sh.p,c=catOf(p.cat)||{color:'#999'},unit=r2(p.price+sum(kSheetMods(),m=>m.p));
@@ -603,38 +802,33 @@ A.kBack=()=>{K.screen='menu';renderKiosk();};
 A.kLine=d=>{const l=K.items.find(x=>x.uid===d.id);if(!l)return;const p=prod(l.pid);if(+d.d>0&&p&&kOut(p)){toast(`That’s all the ${p.name} we have`,'warn',{ms:1800});return;}l.qty+=+d.d;if(l.qty<=0)K.items=K.items.filter(x=>x!==l);if(!K.items.length)K.screen='menu';renderKiosk();};
 A.kUp=d=>{const p=prod(d.id);if(!p)return;const groups=(p.mods||[]).map(id=>S.modGroups.find(g=>g.id===id)).filter(Boolean);if(groups.length){A.kItem({id:p.id});return;}kAdd(p,[],1);renderKiosk();};
 A.kCancel=async()=>{if(K.items.length&&!await confirmBox({title:'Start over?',text:'Your order will be cleared.',ok:'Clear my order',danger:true}))return;kReset();};
+// The kiosk places the order and the customer pays at the counter: the till has no
+// integrated card terminal, so the kiosk must not fake an approval. The order is a
+// real backend sale (kitchen, stock, numbering) left OPEN for the register to collect.
 A.kPay=async()=>{
-  K.screen='pay';K.pay='wait';renderKiosk();const token=K.payToken=uid('kp');
-  await sleep(2600);if(K.payToken!==token||K.screen!=='pay')return;
-  K.pay='ok';renderKiosk();await sleep(1100);if(K.payToken!==token)return;
-  kFinish();
+  if(!K.items.length||K.placing)return;
+  K.placing=true;K.screen='pay';K.pay='wait';renderKiosk();
+  try{await kFinish();}finally{K.placing=false;}
 };
-A.kPayCancel=()=>{K.payToken=null;K.screen='review';renderKiosk();};
+A.kPayCancel=()=>{K.screen='review';renderKiosk();};
 async function kFinish(){
-  const t=kTotals();
-  // Kiosk orders are authoritative Plemmo sales (never local-only). Commit
-  // through the same order+bill+payment path used at the register; on failure
-  // fall back to a local order so the customer still gets their receipt.
-  if(window.PlemmoKiosk&&window.PlemmoPayments&&PlemmoAPI.isAuthenticated()){
-    try{
-      const order=await PlemmoKiosk.submitOrder({type:K.type||'takeaway',items:K.items});
-      let bill;try{const gen=await PlemmoAPI.post('/bills/generate',{order_id:order.id},{idempotent:true});bill=gen&&gen.bill;}catch(e){}
-      if(!bill){const b=await PlemmoAPI.get('/bills/order/'+encodeURIComponent(order.id));bill=b&&b.bill;}
-      if(!bill)throw new Error('No bill');
-      await PlemmoPayments.pay(bill.id,{method:'card',amount:r2(Number(bill.total)||t.total)});
-      const o={id:uid('o'),no:bill.bill_number||order.order_number||order.id,plemmoOrderId:order.id,plemmoBillId:bill.id,ts:Date.now(),opened:Date.now(),
-        items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:Number(bill.discount_amount)||0,
-        subtotal:Number(bill.subtotal)||t.subtotal,tax:Number(bill.tax_amount)||0,total:Number(bill.total)||t.total,tip:0,payments:[{m:'card',a:Number(bill.total)||t.total}],status:'paid',pts:0,note:''};
-      S.orders.push(o);
-      if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).catch(()=>{});
-      save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();return;
-    }catch(e){/* fall back to local so the kiosk still completes */}
+  if(!(window.PlemmoKiosk&&window.PlemmoAPI&&PlemmoAPI.isAuthenticated())){
+    K.screen='review';K.pay=null;renderKiosk();
+    toast('This kiosk is not connected to the till. Please ask a member of staff.','warn');return;
   }
-  const o={id:uid('o'),no:S.seq++,ts:Date.now(),opened:Date.now(),items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:0,subtotal:t.subtotal,tax:t.tax,total:t.total,tip:0,payments:[{m:'card',a:t.total}],status:'paid',pts:0,note:''};
-  S.orders.push(o);
-  o.items.forEach(l=>{const p=prod(l.pid);if(p&&p.stock!=null)p.stock=Math.max(0,p.stock-l.qty);});
-  if(S.settings.kitchen&&hospitality())addTicket(o,o.items);
-  save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();
+  try{
+    const t=kTotals();
+    const order=await PlemmoKiosk.submitOrder({type:K.type||'takeaway',items:K.items});
+    const o={id:uid('o'),no:order.order_number||order.id,plemmoOrderId:order.id,ts:Date.now(),opened:Date.now(),
+      items:K.items.map(l=>({...l,sent:true})),type:K.type||'takeaway',table:null,custId:null,empId:null,source:'kiosk',discount:null,discAmt:Number(order.discount_amount)||0,
+      subtotal:Number(order.subtotal)||t.subtotal,tax:Number(order.tax_amount)||0,total:Number(order.total)||t.total,tip:0,payments:[],status:'open',pts:0,note:''};
+    S.orders.push(o);
+    if(window.PlemmoCatalogue)PlemmoCatalogue.load(S).catch(()=>{});
+    save();K.order=o;K.items=[];K.screen='done';K.doneAt=Date.now();renderKiosk();
+  }catch(e){
+    K.screen='review';K.pay=null;renderKiosk();
+    toast('We couldn’t send your order. Please ask a member of staff.','warn');
+  }
 }
 A.kNew=()=>kReset();
 A.kStill=()=>{K.warn=false;K.last=Date.now();renderKiosk();};
@@ -671,10 +865,16 @@ async function plemmoClockSelf(wantIn){
   try{
     if(wantIn){const r=await PlemmoStaff.clockIn();const sh=r&&r.shift;if(sh&&!onShift(U.user))S.shifts.push({id:sh.id,emp:U.user,in:sh.clock_in?Date.parse(sh.clock_in):Date.now(),out:null});}
     else{await PlemmoStaff.clockOut();const s=onShift(U.user);if(s)s.out=Date.now();}
-    save();return true;
-  }catch(e){toast((e&&e.message)||'Could not update your shift on Plemmo','warn');return true;/* handled */}
+    save();return 'ok';
+  }catch(e){toast(`Your shift was not updated: ${(window.PlemmoAdmin?PlemmoAdmin.errorMessage(e,'the till server refused it'):(e&&e.message))||'the till server refused it'}`,'warn');return 'failed';}
 }
-A.clockInMe=async()=>{const done=await plemmoClockSelf(true);if(!done)clockIn(U.user);toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();};
+// Returns false when there is no server to ask (offline/demo), 'ok' when the server accepted it, 'failed' when it refused.
+A.clockInMe=async()=>{
+  const r=await plemmoClockSelf(true);
+  if(r==='failed')return;
+  if(r===false)clockIn(U.user);
+  toast('Clocked in');if(U.view==='team'||U.view==='home')renderView();
+};
 
 document.addEventListener('click',e=>{
   const rail=$('#rail');

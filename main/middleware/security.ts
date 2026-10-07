@@ -93,6 +93,7 @@ export function authRateLimit() {
 interface UserAuthCacheEntry {
   isActive: boolean;
   role: string;
+  supervisor: boolean;
   tokensValidAfter: string | null;
   expiresAt: number;
 }
@@ -116,7 +117,7 @@ let lastUserAuthCachePruneAt = 0;
 export function getUserAuthStatus(
   userId: string,
   options: { fresh?: boolean } = {},
-): { isActive: boolean; role: string; tokensValidAfter: string | null } | null {
+): { isActive: boolean; role: string; supervisor: boolean; tokensValidAfter: string | null } | null {
   const now = Date.now();
   if (options.fresh) userAuthCache.delete(userId);
   if (
@@ -131,12 +132,12 @@ export function getUserAuthStatus(
 
   const cached = userAuthCache.get(userId);
   if (!options.fresh && cached && cached.expiresAt > now) {
-    return { isActive: cached.isActive, role: cached.role, tokensValidAfter: cached.tokensValidAfter };
+    return { isActive: cached.isActive, role: cached.role, supervisor: cached.supervisor, tokensValidAfter: cached.tokensValidAfter };
   }
 
   const db = getDatabase();
-  const user = db.prepare('SELECT is_active, role, tokens_valid_after FROM users WHERE id = ?').get(userId) as
-    | { is_active: number; role: string; tokens_valid_after: string | null }
+  const user = db.prepare('SELECT is_active, role, is_supervisor, tokens_valid_after FROM users WHERE id = ?').get(userId) as
+    | { is_active: number; role: string; is_supervisor: number; tokens_valid_after: string | null }
     | undefined;
 
   if (!user) {
@@ -147,11 +148,12 @@ export function getUserAuthStatus(
   const entry: UserAuthCacheEntry = {
     isActive: user.is_active === 1,
     role: user.role,
+    supervisor: user.role === 'cashier' && user.is_supervisor === 1,
     tokensValidAfter: user.tokens_valid_after,
     expiresAt: now + USER_AUTH_CACHE_TTL_MS,
   };
   userAuthCache.set(userId, entry);
-  return { isActive: entry.isActive, role: entry.role, tokensValidAfter: entry.tokensValidAfter };
+  return { isActive: entry.isActive, role: entry.role, supervisor: entry.supervisor, tokensValidAfter: entry.tokensValidAfter };
 }
 
 /**

@@ -34,10 +34,125 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Upload the installer
+      # GitHub's artifact download stalled for the tester at ~96 MB, so the installer is also offered in small
+      # pieces (separate artifacts) that join back into the identical file. Check the SHA-256 after joining.
+      - name: Split the installer into small parts
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release/*.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path parts | Out-Null
+          $chunk = 20MB
+          $in = [System.IO.File]::OpenRead($exe.FullName)
+          $buf = New-Object byte[] $chunk
+          $n = 1
+          while (($read = $in.Read($buf, 0, $chunk)) -gt 0) {
+            $name = 'parts/pilot-part{0:D2}' -f $n
+            $out = [System.IO.File]::Create($name)
+            $out.Write($buf, 0, $read)
+            $out.Close()
+            $n++
+          }
+          $in.Close()
+          if ($n -gt 9) { throw "Installer needs more than 8 parts; add upload steps." }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
+          New-Item -ItemType Directory -Force -Path join | Out-Null
+          Set-Content -Path join/expected-sha256.txt -Value $hash
+          $setup = $exe.Name
+          Set-Content -Path join/JOIN-INSTALLER.cmd -Encoding ascii -Value @(
+            '@echo off',
+            'rem Put pilot-part01 ... pilot-partNN (all downloaded parts) in this folder, then double-click this file.',
+            "copy /b pilot-part* \"$setup\" >nul",
+            "echo Joined: $setup",
+            'echo Checking the file...',
+            "certutil -hashfile \"$setup\" SHA256",
+            "echo Expected: $hash",
+            'echo The two long hex lines must match. If they do, run the installer.',
+            'pause')
+
+      - name: Upload the installer (single file)
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: pilot-windows-installer
           path: release/*.exe
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the join script
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-join-script
+          path: join/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload part 1
+        if: hashFiles('parts/pilot-part01') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part01
+          path: parts/pilot-part01
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 2
+        if: hashFiles('parts/pilot-part02') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part02
+          path: parts/pilot-part02
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 3
+        if: hashFiles('parts/pilot-part03') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part03
+          path: parts/pilot-part03
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 4
+        if: hashFiles('parts/pilot-part04') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part04
+          path: parts/pilot-part04
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 5
+        if: hashFiles('parts/pilot-part05') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part05
+          path: parts/pilot-part05
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 6
+        if: hashFiles('parts/pilot-part06') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part06
+          path: parts/pilot-part06
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 7
+        if: hashFiles('parts/pilot-part07') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part07
+          path: parts/pilot-part07
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload part 8
+        if: hashFiles('parts/pilot-part08') != ''
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: pilot-part08
+          path: parts/pilot-part08
+          compression-level: 0
           retention-days: 14
